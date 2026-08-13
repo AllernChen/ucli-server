@@ -1,0 +1,42 @@
+<script setup lang="ts">
+import { ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { api } from './api'
+
+const router = useRouter()
+const route = useRoute()
+const email = ref('')
+const password = ref('')
+const error = ref('')
+const loggedIn = ref(Boolean(localStorage.getItem('ucli.accessToken')))
+const navigation = [
+  ['overview', '服务总览'], ['channels', '渠道与 Key'], ['models', '模型目录'],
+  ['usage', '使用日志'], ['skills', '技能超市'], ['reports', '运营报告']
+]
+async function login() {
+  try {
+    const result = await api('/api/v1/auth/login', { method: 'POST', body: JSON.stringify({ email: email.value, password: password.value }) })
+    localStorage.setItem('ucli.accessToken', result.accessToken)
+    loggedIn.value = true
+  } catch (value: any) { error.value = value.message }
+}
+function logout() { localStorage.removeItem('ucli.accessToken'); loggedIn.value = false }
+</script>
+
+<template>
+  <main v-if="!loggedIn" class="login-shell">
+    <form class="login-card" @submit.prevent="login">
+      <div class="brand-mark">U</div><h1>UCLI Server</h1><p>私有模型服务与技能管理平台</p>
+      <input v-model="email" type="email" placeholder="管理员邮箱" required>
+      <input v-model="password" type="password" placeholder="密码" required>
+      <button>登录</button><small v-if="error" class="error">{{ error }}</small>
+    </form>
+  </main>
+  <div v-else class="shell">
+    <aside><header><div class="brand-mark">U</div><div><strong>UCLI</strong><small>Server Console</small></div></header>
+      <nav><button v-for="item in navigation" :key="item[0]" :class="{active: route.name === item[0]}" @click="router.push(item[0] === 'overview' ? '/' : `/${item[0]}`)">{{ item[1] }}</button></nav>
+      <button class="logout" @click="logout">退出登录</button>
+    </aside>
+    <section class="content"><RouterView /></section>
+  </div>
+</template>

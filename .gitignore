@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+.env
+apps/admin/dist/
+data/
+*.log
+dev-logs/
+.playwright-cli/

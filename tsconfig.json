@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "esModuleInterop": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": { "@ucli/*": ["packages/*/src"] },
+    "types": ["node", "vitest/globals", "multer"]
+  },
+  "include": ["apps/**/*.ts", "packages/**/*.ts", "test/**/*.ts", "prisma/**/*.ts"]
+}

@@ -1,0 +1,60 @@
+# Local development infrastructure (host ports bound to 127.0.0.1 only).
+# Usage: docker compose -f docker-compose.dev.yml up -d
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ucli
+      POSTGRES_USER: ucli
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ucli-change-me}
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: [ucli-dev-postgres:/var/lib/postgresql/data]
+
+  redis:
+    image: redis:7.4-alpine
+    command: redis-server --appendonly yes
+    ports: ["127.0.0.1:6381:6379"]
+    volumes: [ucli-dev-redis:/data]
+
+  minio:
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-ucli}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-ucli-change-me-now}
+    ports: ["127.0.0.1:9002:9000", "127.0.0.1:9003:9001"]
+    volumes: [ucli-dev-minio:/data]
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    ports: ["127.0.0.1:9090:9090"]
+    volumes: ["./deploy/prometheus.dev.yml:/etc/prometheus/prometheus.yml:ro", "ucli-dev-prometheus:/prometheus"]
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-ucli-change-me}
+    ports: ["127.0.0.1:3002:3000"]
+    volumes: ["ucli-dev-grafana:/var/lib/grafana", "./deploy/grafana-datasources.dev.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro", "./deploy/grafana-dashboards.dev.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro", "./deploy/dashboards:/etc/grafana/dashboards:ro"]
+    depends_on: [prometheus, loki]
+
+  loki:
+    image: grafana/loki:3.5.3
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports: ["127.0.0.1:3100:3100"]
+    volumes: ["ucli-dev-loki:/loki"]
+
+  promtail:
+    image: grafana/promtail:2.9.14
+    command: ["-config.file=/etc/promtail/config.yml"]
+    volumes: ["./deploy/promtail.dev.yml:/etc/promtail/config.yml:ro", "./dev-logs:/var/log/ucli:ro"]
+    depends_on: [loki]
+
+volumes:
+  ucli-dev-postgres:
+  ucli-dev-redis:
+  ucli-dev-minio:
+  ucli-dev-prometheus:
+  ucli-dev-grafana:
+  ucli-dev-loki:

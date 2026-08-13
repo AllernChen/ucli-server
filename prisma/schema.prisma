@@ -1,0 +1,474 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  PLATFORM_ADMIN
+  ORG_ADMIN
+  MEMBER
+}
+
+enum AccountStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum DeviceCodeStatus {
+  PENDING
+  APPROVED
+  CONSUMED
+  EXPIRED
+}
+
+enum ChannelProtocol {
+  OPENAI
+  ANTHROPIC
+}
+
+enum HealthStatus {
+  HEALTHY
+  DEGRADED
+  UNHEALTHY
+  DISABLED
+}
+
+enum KeySelection {
+  ROUND_ROBIN
+  WEIGHTED_RANDOM
+}
+
+enum GatewayProtocol {
+  OPENAI_RESPONSES
+  OPENAI_CHAT
+  ANTHROPIC_MESSAGES
+}
+
+enum UsageSource {
+  UPSTREAM
+  ESTIMATED
+}
+
+enum SkillVersionStatus {
+  DRAFT
+  PUBLISHED
+  DEPRECATED
+  REVOKED
+}
+
+enum SkillVisibility {
+  GLOBAL
+  ORGANIZATIONS
+}
+
+enum ReportPeriod {
+  DAY
+  WEEK
+  MONTH
+  QUARTER
+  YEAR
+}
+
+enum ReportScope {
+  PLATFORM
+  ORGANIZATION
+  ACCOUNT
+  MODEL
+  CHANNEL
+}
+
+model Organization {
+  id          String              @id @default(uuid()) @db.Uuid
+  slug        String              @unique
+  name        String
+  timezone    String              @default("UTC")
+  enabled     Boolean             @default(true)
+  createdAt   DateTime            @default(now()) @map("created_at")
+  memberships Membership[]
+  devices     Device[]
+  invitations Invitation[]
+  quotas      QuotaPolicy[]
+  logs        UsageLog[]
+  skillScopes SkillOrganization[]
+
+  @@map("organizations")
+}
+
+model Account {
+  id           String                @id @default(uuid()) @db.Uuid
+  email        String                @unique
+  displayName  String                @map("display_name")
+  passwordHash String                @map("password_hash")
+  status       AccountStatus         @default(ACTIVE)
+  tokenVersion Int                   @default(1) @map("token_version")
+  createdAt    DateTime              @default(now()) @map("created_at")
+  memberships  Membership[]
+  devices      Device[]
+  invitations  Invitation[]          @relation("Inviter")
+  deviceCodes  DeviceAuthorization[]
+  quotas       QuotaPolicy[]
+  logs         UsageLog[]
+  audits       AuditLog[]
+
+  @@map("accounts")
+}
+
+model Membership {
+  organizationId String       @map("organization_id") @db.Uuid
+  accountId      String       @map("account_id") @db.Uuid
+  role           Role
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  account        Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, accountId])
+  @@map("memberships")
+}
+
+model Invitation {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  email          String
+  role           Role
+  tokenHash      String       @unique @map("token_hash")
+  expiresAt      DateTime     @map("expires_at")
+  acceptedAt     DateTime?    @map("accepted_at")
+  invitedById    String       @map("invited_by_id") @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invitedBy      Account      @relation("Inviter", fields: [invitedById], references: [id])
+
+  @@index([organizationId, email])
+  @@map("invitations")
+}
+
+model Device {
+  id               String       @id @default(uuid()) @db.Uuid
+  organizationId   String       @map("organization_id") @db.Uuid
+  accountId        String       @map("account_id") @db.Uuid
+  name             String
+  refreshTokenHash String       @unique @map("refresh_token_hash")
+  revokedAt        DateTime?    @map("revoked_at")
+  lastSeenAt       DateTime?    @map("last_seen_at")
+  createdAt        DateTime     @default(now()) @map("created_at")
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  account          Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  logs             UsageLog[]
+
+  @@index([organizationId, accountId])
+  @@map("devices")
+}
+
+model DeviceAuthorization {
+  id              String           @id @default(uuid()) @db.Uuid
+  deviceCodeHash  String           @unique @map("device_code_hash")
+  userCode        String           @unique @map("user_code")
+  status          DeviceCodeStatus @default(PENDING)
+  accountId       String?          @map("account_id") @db.Uuid
+  deviceName      String           @map("device_name")
+  expiresAt       DateTime         @map("expires_at")
+  intervalSeconds Int              @default(5) @map("interval_seconds")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  account         Account?         @relation(fields: [accountId], references: [id])
+
+  @@map("device_authorizations")
+}
+
+model Channel {
+  id               String           @id @default(uuid()) @db.Uuid
+  name             String
+  provider         String
+  protocol         ChannelProtocol
+  baseUrl          String           @map("base_url")
+  priority         Int              @default(0)
+  weight           Int              @default(1)
+  enabled          Boolean          @default(true)
+  autoDisable      Boolean          @default(true) @map("auto_disable")
+  timeoutMs        Int              @default(300000) @map("timeout_ms")
+  maxRetries       Int              @default(1) @map("max_retries")
+  keySelection     KeySelection     @default(WEIGHTED_RANDOM) @map("key_selection")
+  health           HealthStatus     @default(HEALTHY)
+  circuitOpenUntil DateTime?        @map("circuit_open_until")
+  lastTestedAt     DateTime?        @map("last_tested_at")
+  lastSuccessAt    DateTime?        @map("last_success_at")
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+  keys             ChannelKey[]
+  abilities        ChannelAbility[]
+  routes           RouteAttempt[]
+  logs             UsageLog[]
+  reports          Report[]
+
+  @@index([enabled, health, priority])
+  @@map("channels")
+}
+
+model ChannelKey {
+  id            String         @id @default(uuid()) @db.Uuid
+  channelId     String         @map("channel_id") @db.Uuid
+  ciphertext    String
+  iv            String
+  tag           String
+  suffix        String
+  priority      Int            @default(0)
+  weight        Int            @default(1)
+  enabled       Boolean        @default(true)
+  health        HealthStatus   @default(HEALTHY)
+  remainingUsd  Decimal?       @map("remaining_usd") @db.Decimal(20, 8)
+  expiresAt     DateTime?      @map("expires_at")
+  isolatedUntil DateTime?      @map("isolated_until")
+  lastUsedAt    DateTime?      @map("last_used_at")
+  channel       Channel        @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  routes        RouteAttempt[]
+
+  @@index([channelId, enabled, health])
+  @@map("channel_keys")
+}
+
+model PublicModel {
+  id          String              @id
+  displayName String              @map("display_name")
+  enabled     Boolean             @default(false)
+  contextSize Int?                @map("context_size")
+  abilities   ChannelAbility[]
+  prices      ModelPriceVersion[]
+  policies    ModelAccessPolicy[]
+  quotas      QuotaPolicy[]
+  logs        UsageLog[]
+  reports     Report[]
+
+  @@map("public_models")
+}
+
+model ChannelAbility {
+  channelId      String          @map("channel_id") @db.Uuid
+  publicModelId  String          @map("public_model_id")
+  upstreamModel  String          @map("upstream_model")
+  protocol       GatewayProtocol
+  supportsStream Boolean         @default(true) @map("supports_stream")
+  supportsTools  Boolean         @default(true) @map("supports_tools")
+  enabled        Boolean         @default(true)
+  channel        Channel         @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  publicModel    PublicModel     @relation(fields: [publicModelId], references: [id], onDelete: Cascade)
+
+  @@id([channelId, publicModelId, protocol])
+  @@index([publicModelId, protocol, enabled])
+  @@map("channel_abilities")
+}
+
+model ModelPriceVersion {
+  id                  String      @id @default(uuid()) @db.Uuid
+  publicModelId       String      @map("public_model_id")
+  inputPerMillion     Decimal     @map("input_per_million") @db.Decimal(20, 8)
+  outputPerMillion    Decimal     @map("output_per_million") @db.Decimal(20, 8)
+  cachedPerMillion    Decimal     @default(0) @map("cached_per_million") @db.Decimal(20, 8)
+  reasoningPerMillion Decimal     @default(0) @map("reasoning_per_million") @db.Decimal(20, 8)
+  currency            String      @default("USD")
+  validFrom           DateTime    @map("valid_from")
+  validUntil          DateTime?   @map("valid_until")
+  publicModel         PublicModel @relation(fields: [publicModelId], references: [id], onDelete: Cascade)
+  logs                UsageLog[]
+
+  @@index([publicModelId, validFrom])
+  @@map("model_price_versions")
+}
+
+model ModelAccessPolicy {
+  id             String      @id @default(uuid()) @db.Uuid
+  publicModelId  String      @map("public_model_id")
+  organizationId String?     @map("organization_id") @db.Uuid
+  accountId      String?     @map("account_id") @db.Uuid
+  role           Role?
+  publicModel    PublicModel @relation(fields: [publicModelId], references: [id], onDelete: Cascade)
+
+  @@index([publicModelId, organizationId, accountId])
+  @@map("model_access_policies")
+}
+
+model QuotaPolicy {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String?       @map("organization_id") @db.Uuid
+  accountId      String?       @map("account_id") @db.Uuid
+  publicModelId  String?       @map("public_model_id")
+  dailyTokens    BigInt?       @map("daily_tokens")
+  monthlyTokens  BigInt?       @map("monthly_tokens")
+  dailyCostUsd   Decimal?      @map("daily_cost_usd") @db.Decimal(20, 8)
+  monthlyCostUsd Decimal?      @map("monthly_cost_usd") @db.Decimal(20, 8)
+  qps            Int?
+  tpm            BigInt?
+  concurrency    Int?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  account        Account?      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  publicModel    PublicModel?  @relation(fields: [publicModelId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, accountId, publicModelId])
+  @@map("quota_policies")
+}
+
+model UsageLog {
+  id                String             @id @default(uuid()) @db.Uuid
+  requestId         String             @unique @map("request_id")
+  organizationId    String             @map("organization_id") @db.Uuid
+  accountId         String             @map("account_id") @db.Uuid
+  deviceId          String             @map("device_id") @db.Uuid
+  sessionId         String?            @map("session_id") @db.Uuid
+  projectId         String?            @map("project_id") @db.Uuid
+  cliType           String?            @map("cli_type")
+  clientVersion     String?            @map("client_version")
+  timezone          String?
+  protocol          GatewayProtocol
+  publicModelId     String             @map("public_model_id")
+  upstreamModel     String             @map("upstream_model")
+  channelId         String             @map("channel_id") @db.Uuid
+  priceVersionId    String?            @map("price_version_id") @db.Uuid
+  startedAt         DateTime           @map("started_at")
+  finishedAt        DateTime           @map("finished_at")
+  durationMs        Int                @map("duration_ms")
+  firstTokenMs      Int?               @map("first_token_ms")
+  inputTokens       BigInt             @default(0) @map("input_tokens")
+  outputTokens      BigInt             @default(0) @map("output_tokens")
+  cachedTokens      BigInt             @default(0) @map("cached_tokens")
+  reasoningTokens   BigInt             @default(0) @map("reasoning_tokens")
+  costUsd           Decimal            @default(0) @map("cost_usd") @db.Decimal(20, 8)
+  usageSource       UsageSource        @map("usage_source")
+  streaming         Boolean
+  statusCode        Int                @map("status_code")
+  errorCode         String?            @map("error_code")
+  providerErrorType String?            @map("provider_error_type")
+  routeAttempts     Int                @default(1) @map("route_attempts")
+  switched          Boolean            @default(false)
+  clientCancelled   Boolean            @default(false) @map("client_cancelled")
+  streamInterrupted Boolean            @default(false) @map("stream_interrupted")
+  organization      Organization       @relation(fields: [organizationId], references: [id])
+  account           Account            @relation(fields: [accountId], references: [id])
+  device            Device             @relation(fields: [deviceId], references: [id])
+  channel           Channel            @relation(fields: [channelId], references: [id])
+  publicModel       PublicModel        @relation(fields: [publicModelId], references: [id])
+  priceVersion      ModelPriceVersion? @relation(fields: [priceVersionId], references: [id])
+  routes            RouteAttempt[]
+
+  @@index([organizationId, startedAt])
+  @@index([accountId, startedAt])
+  @@index([publicModelId, startedAt])
+  @@index([channelId, startedAt])
+  @@index([sessionId, startedAt])
+  @@map("usage_logs")
+}
+
+model RouteAttempt {
+  id           String      @id @default(uuid()) @db.Uuid
+  usageLogId   String      @map("usage_log_id") @db.Uuid
+  channelId    String      @map("channel_id") @db.Uuid
+  channelKeyId String?     @map("channel_key_id") @db.Uuid
+  attempt      Int
+  startedAt    DateTime    @map("started_at")
+  durationMs   Int         @map("duration_ms")
+  statusCode   Int?        @map("status_code")
+  errorType    String?     @map("error_type")
+  usageLog     UsageLog    @relation(fields: [usageLogId], references: [id], onDelete: Cascade)
+  channel      Channel     @relation(fields: [channelId], references: [id])
+  channelKey   ChannelKey? @relation(fields: [channelKeyId], references: [id])
+
+  @@index([usageLogId, attempt])
+  @@map("route_attempts")
+}
+
+model UsageAggregate {
+  id             String   @id @default(uuid()) @db.Uuid
+  bucket         String
+  bucketStart    DateTime @map("bucket_start")
+  organizationId String?  @map("organization_id") @db.Uuid
+  accountId      String?  @map("account_id") @db.Uuid
+  publicModelId  String?  @map("public_model_id")
+  channelId      String?  @map("channel_id") @db.Uuid
+  requests       BigInt
+  successes      BigInt
+  inputTokens    BigInt   @map("input_tokens")
+  outputTokens   BigInt   @map("output_tokens")
+  costUsd        Decimal  @map("cost_usd") @db.Decimal(20, 8)
+  avgDurationMs  Int      @map("avg_duration_ms")
+
+  @@unique([bucket, bucketStart, organizationId, accountId, publicModelId, channelId])
+  @@index([bucket, bucketStart])
+  @@map("usage_aggregates")
+}
+
+model Skill {
+  id          String         @id @default(uuid()) @db.Uuid
+  slug        String         @unique
+  name        String
+  description String
+  createdAt   DateTime       @default(now()) @map("created_at")
+  versions    SkillVersion[]
+
+  @@map("skills")
+}
+
+model SkillVersion {
+  id            String              @id @default(uuid()) @db.Uuid
+  skillId       String              @map("skill_id") @db.Uuid
+  version       String
+  status        SkillVersionStatus  @default(DRAFT)
+  visibility    SkillVisibility     @default(GLOBAL)
+  objectKey     String              @map("object_key")
+  sha256        String
+  sizeBytes     BigInt              @map("size_bytes")
+  manifest      Json
+  fileManifest  Json                @map("file_manifest")
+  scanResult    Json                @map("scan_result")
+  publishedAt   DateTime?           @map("published_at")
+  createdAt     DateTime            @default(now()) @map("created_at")
+  skill         Skill               @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  organizations SkillOrganization[]
+
+  @@unique([skillId, version])
+  @@map("skill_versions")
+}
+
+model SkillOrganization {
+  skillVersionId String       @map("skill_version_id") @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  skillVersion   SkillVersion @relation(fields: [skillVersionId], references: [id], onDelete: Cascade)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([skillVersionId, organizationId])
+  @@map("skill_organizations")
+}
+
+model Report {
+  id             String       @id @default(uuid()) @db.Uuid
+  period         ReportPeriod
+  scope          ReportScope
+  scopeId        String?      @map("scope_id")
+  organizationId String?      @map("organization_id") @db.Uuid
+  accountId      String?      @map("account_id") @db.Uuid
+  publicModelId  String?      @map("public_model_id")
+  channelId      String?      @map("channel_id") @db.Uuid
+  rangeStart     DateTime     @map("range_start")
+  rangeEnd       DateTime     @map("range_end")
+  markdown       String
+  metrics        Json
+  createdAt      DateTime     @default(now()) @map("created_at")
+  publicModel    PublicModel? @relation(fields: [publicModelId], references: [id])
+  channel        Channel?     @relation(fields: [channelId], references: [id])
+
+  @@index([scope, scopeId, rangeStart])
+  @@map("reports")
+}
+
+model AuditLog {
+  id             String   @id @default(uuid()) @db.Uuid
+  actorAccountId String?  @map("actor_account_id") @db.Uuid
+  organizationId String?  @map("organization_id") @db.Uuid
+  action         String
+  resourceType   String   @map("resource_type")
+  resourceId     String?  @map("resource_id")
+  metadata       Json
+  occurredAt     DateTime @default(now()) @map("occurred_at")
+  actor          Account? @relation(fields: [actorAccountId], references: [id])
+
+  @@index([organizationId, occurredAt])
+  @@map("audit_logs")
+}
