@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common'
+import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { randomBytes } from 'node:crypto'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
@@ -31,6 +31,13 @@ export class GovernanceController {
   }
   @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Get('quotas') quotas(@Req() request: any) {
     return this.prisma.quotaPolicy.findMany({ where: request.principal.role === 'PLATFORM_ADMIN' ? {} : { organizationId: request.principal.organizationId } })
+  }
+  @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Get('audit') audit(@Req() request: any, @Query('limit') limit?: string) {
+    const where = request.principal.role === 'PLATFORM_ADMIN' ? {} : { organizationId: request.principal.organizationId }
+    return this.prisma.auditLog.findMany({
+      where, orderBy: { occurredAt: 'desc' }, take: Math.min(Number(limit) || 50, 200),
+      include: { actor: { select: { email: true, displayName: true } } }
+    })
   }
   @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Post('quotas') quota(@Req() request: any, @Body() body: any) {
     const organizationId = request.principal.role === 'PLATFORM_ADMIN' && body.organizationId

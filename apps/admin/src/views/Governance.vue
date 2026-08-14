@@ -10,14 +10,15 @@ const tab = ref('members')
 const members = ref<any[]>([])
 const devices = ref<any[]>([])
 const quotas = ref<any[]>([])
+const audit = ref<any[]>([])
 const inviteForm = ref({ email: '', role: 'MEMBER' })
 const quotaForm = ref({ accountId: '', publicModelId: '', dailyTokens: '', monthlyTokens: '', dailyCostUsd: '', monthlyCostUsd: '', qps: '', concurrency: '' })
 
 async function load() {
   loading.value = true; error.value = ''
   try {
-    [members.value, devices.value, quotas.value] = await Promise.all([
-      api('/api/v1/admin/members'), api('/api/v1/admin/devices'), api('/api/v1/admin/quotas')
+    [members.value, devices.value, quotas.value, audit.value] = await Promise.all([
+      api('/api/v1/admin/members'), api('/api/v1/admin/devices'), api('/api/v1/admin/quotas'), api('/api/v1/admin/audit')
     ])
   } catch (value: any) { error.value = value.message } finally { loading.value = false }
 }
@@ -61,6 +62,7 @@ onMounted(load)
       <button :class="{active: tab === 'members'}" @click="tab = 'members'">成员</button>
       <button :class="{active: tab === 'devices'}" @click="tab = 'devices'">设备</button>
       <button :class="{active: tab === 'quotas'}" @click="tab = 'quotas'">配额</button>
+      <button :class="{active: tab === 'audit'}" @click="tab = 'audit'">审计</button>
     </div>
 
     <template v-if="tab === 'members'">
@@ -94,7 +96,7 @@ onMounted(load)
       </section>
     </template>
 
-    <template v-else>
+    <template v-else-if="tab === 'quotas'">
       <section class="panel form-panel">
         <h2>新建配额</h2>
         <div class="form-row">
@@ -116,6 +118,17 @@ onMounted(load)
           <tbody><tr v-for="q in quotas" :key="q.id"><td>{{ q.accountId?.slice(0, 8) || '组织级' }}</td><td>{{ q.publicModelId || '全部' }}</td><td>{{ q.dailyTokens || '—' }} / {{ q.monthlyTokens || '—' }}</td><td>${{ q.dailyCostUsd || '—' }} / ${{ q.monthlyCostUsd || '—' }}</td><td>{{ q.qps || '—' }}</td><td>{{ q.concurrency || '—' }}</td></tr></tbody>
         </table>
         <p v-else class="empty">暂无配额</p>
+      </section>
+    </template>
+
+    <template v-else>
+      <section class="panel">
+        <h2>审计日志</h2>
+        <table v-if="audit.length">
+          <thead><tr><th>时间</th><th>操作</th><th>账号</th><th>资源</th><th>详情</th></tr></thead>
+          <tbody><tr v-for="a in audit" :key="a.id"><td>{{ a.occurredAt?.slice(0, 19).replace('T', ' ') }}</td><td>{{ a.action }}</td><td>{{ a.actor?.email || '—' }}</td><td>{{ a.resourceType }}</td><td class="mono">{{ JSON.stringify(a.metadata) }}</td></tr></tbody>
+        </table>
+        <p v-else class="empty">暂无审计记录</p>
       </section>
     </template>
   </template>
