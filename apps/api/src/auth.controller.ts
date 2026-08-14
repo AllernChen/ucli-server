@@ -16,4 +16,10 @@ export class AuthController {
   @Post('token/refresh') refresh(@Body() body: any) { return this.auth.refresh(String(body.refreshToken || '')) }
   @ApiBearerAuth() @UseGuards(AuthGuard) @Post('device/approve')
   approve(@Body() body: any, @Req() request: any) { return this.auth.approveDevice(String(body.userCode || ''), request.principal.sub) }
+  @ApiBearerAuth() @UseGuards(AuthGuard) @Post('password')
+  changePassword(@Body() body: any, @Req() request: any) {
+    return this.auth.changePassword(request.principal.sub, {
+      currentPassword: String(body.currentPassword || ''), newPassword: String(body.newPassword || '')
+    })
+  }
 }

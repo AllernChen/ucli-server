@@ -44,6 +44,17 @@ export class AuthService {
     return { accessToken: signAccessToken({ sub: account.id, organizationId: membership.organizationId, role: membership.role, tokenVersion: account.tokenVersion }) }
   }
 
+  async changePassword(accountId: string, input: { currentPassword: string; newPassword: string }) {
+    const account = await this.prisma.account.findUnique({ where: { id: accountId } })
+    if (!account || account.status !== 'ACTIVE' || !await argon2.verify(account.passwordHash, input.currentPassword)) {
+      throw new UnauthorizedException('Current password is incorrect')
+    }
+    if (input.newPassword.length < 8) throw new BadRequestException('New password must be at least 8 characters')
+    const passwordHash = await argon2.hash(input.newPassword)
+    await this.prisma.account.update({ where: { id: accountId }, data: { passwordHash, tokenVersion: { increment: 1 } } })
+    return { message: 'Password changed' }
+  }
+
   async acceptInvitation(input: { token: string; password?: string; currentPassword?: string; displayName: string }) {
     const invitation = await this.prisma.invitation.findUnique({ where: { tokenHash: hashOpaqueToken(input.token) } })
     if (!invitation || invitation.acceptedAt || invitation.expiresAt <= new Date()) throw new BadRequestException('Invitation is invalid')
