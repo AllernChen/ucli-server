@@ -15,4 +15,9 @@ describe('jsonSafe', () => {
     expect(jsonSafe(null)).toBeNull()
     expect(jsonSafe(true)).toBe(true)
   })
+  it('preserves Date objects (so JSON serializes them as ISO strings)', () => {
+    const date = new Date('2026-08-13T12:00:00.000Z')
+    expect(jsonSafe(date)).toBe(date)
+    expect(JSON.stringify(jsonSafe({ at: date }))).toBe('{"at":"2026-08-13T12:00:00.000Z"}')
+  })
 })

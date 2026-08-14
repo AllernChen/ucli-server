@@ -8,6 +8,7 @@ import Channels from './views/Channels.vue'
 import Models from './views/Models.vue'
 import Skills from './views/Skills.vue'
 import Reports from './views/Reports.vue'
+import Governance from './views/Governance.vue'
 
 const routes = [
   { path: '/', name: 'overview', component: Dashboard },
@@ -15,6 +16,7 @@ const routes = [
   { path: '/channels', name: 'channels', component: Channels },
   { path: '/models', name: 'models', component: Models },
   { path: '/skills', name: 'skills', component: Skills },
-  { path: '/reports', name: 'reports', component: Reports }
+  { path: '/reports', name: 'reports', component: Reports },
+  { path: '/governance', name: 'governance', component: Governance }
 ]
 createApp(App).use(createRouter({ history: createWebHistory(), routes })).mount('#app')
