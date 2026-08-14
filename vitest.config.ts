@@ -12,7 +12,9 @@ export default defineConfig({
         'packages/quota/src/**/*.ts',
         'packages/skills/src/**/*.ts',
         'packages/reports/src/**/*.ts',
-        'packages/usage/src/**/*.ts'
+        'packages/usage/src/**/*.ts',
+        'packages/http/src/**/*.ts',
+        'packages/monitoring/src/**/*.ts'
       ],
       reporter: ['text', 'json-summary'],
       thresholds: { lines: 80, statements: 80, functions: 75, branches: 75 }
