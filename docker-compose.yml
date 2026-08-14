@@ -79,8 +79,14 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-ucli-change-me}
     ports: ["${GRAFANA_PORT:-3002}:3000"]
-    volumes: [grafana-data:/var/lib/grafana, "./deploy/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro"]
+    volumes: [grafana-data:/var/lib/grafana, "./deploy/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro", "./deploy/grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro", "./deploy/dashboards:/etc/grafana/dashboards:ro"]
     depends_on: [prometheus, loki]
+
+  promtail:
+    image: grafana/promtail:2.9.14
+    command: ["-config.file=/etc/promtail/config.yml"]
+    volumes: ["./deploy/promtail.yml:/etc/promtail/config.yml:ro", "/var/run/docker.sock:/var/run/docker.sock:ro"]
+    depends_on: [loki]
 
 volumes:
   postgres-data:
