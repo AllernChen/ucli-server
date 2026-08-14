@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
+import { HttpException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
 import type { GatewayProtocol as PrismaProtocol } from '@prisma/client'
 import { Response as ExpressResponse } from 'express'
 import { Readable, Transform } from 'node:stream'
@@ -12,6 +12,7 @@ import { parseUcliContext } from '../../../packages/gateway-core/src/ucli-contex
 import { decryptSecret } from '../../../packages/security/src/envelope-crypto.js'
 import { loadMasterKey } from '../../../packages/security/src/master-key.js'
 import { RedisQuotaService } from '../../../packages/quota/src/redis-quota.js'
+import { recordQuotaRejection } from '../../../packages/monitoring/src/quota-metrics.js'
 import { StreamUsageCollector } from '../../../packages/gateway-core/src/stream-usage.js'
 import { canAccessModel, type ModelAccessPrincipal } from '../../../packages/gateway-core/src/access-policy.js'
 
@@ -126,6 +127,15 @@ export class GatewayService {
       }
     } catch (error) {
       await Promise.all(reservations.map(reservation => this.quota.release(reservation)))
+      if (error instanceof HttpException && error.getStatus() === 429) {
+        const code = String(error.getResponse())
+        recordQuotaRejection(code)
+        await this.prisma.auditLog.create({ data: {
+          actorAccountId: principal.sub, organizationId: principal.organizationId,
+          action: 'QUOTA_REJECTED', resourceType: 'model_request', resourceId: null,
+          metadata: { publicModelId, code }
+        } }).catch(logError => console.error('quota-rejection-audit-failed', { error: logError.message }))
+      }
       throw error
     }
     const anthropicVersion = headers['anthropic-version']
