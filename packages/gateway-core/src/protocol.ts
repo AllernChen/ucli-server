@@ -10,6 +10,12 @@ export function endpointFor(protocol: GatewayProtocol): string {
   return ENDPOINTS[protocol]
 }
 
+// 把 endpoint 追加到 baseUrl 的路径下（而非 new URL 的绝对路径替换，后者会丢弃 base 的 path，如 /anthropic）
+export function upstreamUrl(baseUrl: string, protocol: GatewayProtocol): string {
+  const base = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`
+  return new URL(ENDPOINTS[protocol].replace(/^\//, ''), base).href
+}
+
 export interface NormalizedUsage {
   inputTokens: number
   outputTokens: number

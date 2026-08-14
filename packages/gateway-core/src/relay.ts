@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { GatewayProtocol, NormalizedUsage } from './protocol.js'
-import { endpointFor, normalizeUsage, retryableBeforeResponse } from './protocol.js'
+import { normalizeUsage, retryableBeforeResponse, upstreamUrl } from './protocol.js'
 
 export interface RelayCandidate {
   channelId: string
@@ -44,7 +44,7 @@ export async function relayRequest({ candidates, body, incomingHeaders, fetcher 
       if (candidate.protocol === 'openai_chat' && body.stream === true) {
         outgoingBody.stream_options = { ...(body.stream_options as object || {}), include_usage: true }
       }
-      const response = await fetcher(new URL(endpointFor(candidate.protocol), candidate.baseUrl), {
+      const response = await fetcher(upstreamUrl(candidate.baseUrl, candidate.protocol), {
         method: 'POST', headers, body: JSON.stringify(outgoingBody), signal: controller.signal
       })
       attempts.push({ channelId: candidate.channelId, keyId: candidate.keyId, status: response.status, durationMs: Date.now() - started })

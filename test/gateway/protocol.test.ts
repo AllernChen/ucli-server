@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { endpointFor, normalizeUsage, retryableBeforeResponse } from '../../packages/gateway-core/src/protocol.js'
+import { endpointFor, normalizeUsage, retryableBeforeResponse, upstreamUrl } from '../../packages/gateway-core/src/protocol.js'
 
 describe('gateway protocol handling', () => {
   it('maps supported public protocols to upstream endpoints', () => {
     expect(endpointFor('openai_responses')).toBe('/v1/responses')
     expect(endpointFor('openai_chat')).toBe('/v1/chat/completions')
     expect(endpointFor('anthropic_messages')).toBe('/v1/messages')
+  })
+
+  it('appends endpoints under a base URL with a path (does not drop it)', () => {
+    expect(upstreamUrl('https://api.deepseek.com/anthropic', 'anthropic_messages')).toBe('https://api.deepseek.com/anthropic/v1/messages')
+    expect(upstreamUrl('https://api.deepseek.com', 'openai_chat')).toBe('https://api.deepseek.com/v1/chat/completions')
+    expect(upstreamUrl('https://example.com/base/', 'openai_responses')).toBe('https://example.com/base/v1/responses')
   })
 
   it('normalizes OpenAI and Anthropic usage shapes', () => {
