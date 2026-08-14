@@ -43,14 +43,14 @@ services:
     environment: *app-env
     command: node dist/apps/api/src/main.js
     depends_on: { migrate: { condition: service_completed_successfully }, redis: { condition: service_healthy } }
-    healthcheck: { test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:3000/healthz"], interval: 10s, timeout: 5s, retries: 12 }
+    healthcheck: { test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:3000/healthz"], interval: 10s, timeout: 5s, retries: 12 }
 
   gateway:
     build: { context: ., target: runtime }
     environment: *app-env
     command: node dist/apps/gateway/src/main.js
     depends_on: { migrate: { condition: service_completed_successfully }, redis: { condition: service_healthy } }
-    healthcheck: { test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:3001/healthz"], interval: 10s, timeout: 5s, retries: 12 }
+    healthcheck: { test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:3001/healthz"], interval: 10s, timeout: 5s, retries: 12 }
 
   worker:
     build: { context: ., target: runtime }
