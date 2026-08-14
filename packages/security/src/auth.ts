@@ -25,10 +25,12 @@ export class AuthGuard implements CanActivate {
   constructor(private readonly reflector: Reflector, private readonly prisma: PrismaService) {}
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest()
-    const value = String(request.headers.authorization || '')
-    if (!value.startsWith('Bearer ')) throw new UnauthorizedException('Bearer token required')
+    const bearer = String(request.headers.authorization || '')
+    // 网关 Anthropic 协议客户端（Claude Code）用 x-api-key 而非 Bearer
+    const token = bearer.startsWith('Bearer ') ? bearer.slice(7) : String(request.headers['x-api-key'] || '')
+    if (!token) throw new UnauthorizedException('Bearer token required')
     try {
-      request.principal = jwt.verify(value.slice(7), process.env.JWT_SECRET!, {
+      request.principal = jwt.verify(token, process.env.JWT_SECRET!, {
         issuer: 'ucli-server', audience: 'ucli'
       }) as AuthPrincipal
     } catch { throw new UnauthorizedException('Invalid access token') }
