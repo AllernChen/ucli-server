@@ -19,6 +19,9 @@ export class SkillsController {
       OR: [{ visibility: 'GLOBAL' }, { organizations: { some: { organizationId: request.principal.organizationId } } }]
     }, include: { skill: true }, orderBy: { createdAt: 'asc' }, take: 100 })
   }
+  @Roles('PLATFORM_ADMIN') @Get('admin') list() {
+    return this.prisma.skill.findMany({ include: { versions: true }, orderBy: { createdAt: 'desc' } })
+  }
   @Roles('PLATFORM_ADMIN') @Post('admin') create(@Body() body: any) {
     return this.prisma.skill.create({ data: { slug: body.slug, name: body.name, description: body.description } })
   }
