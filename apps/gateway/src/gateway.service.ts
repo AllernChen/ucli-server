@@ -12,7 +12,7 @@ import { parseUcliContext } from '../../../packages/gateway-core/src/ucli-contex
 import { decryptSecret } from '../../../packages/security/src/envelope-crypto.js'
 import { loadMasterKey } from '../../../packages/security/src/master-key.js'
 import { RedisQuotaService } from '../../../packages/quota/src/redis-quota.js'
-import { recordQuotaRejection } from '../../../packages/monitoring/src/quota-metrics.js'
+import { recordQuotaRejection, recordQuotaSettlement } from '../../../packages/monitoring/src/quota-metrics.js'
 import { StreamUsageCollector } from '../../../packages/gateway-core/src/stream-usage.js'
 import { canAccessModel, type ModelAccessPrincipal } from '../../../packages/gateway-core/src/access-policy.js'
 
@@ -202,6 +202,9 @@ export class GatewayService {
           action: 'QUOTA_HARD_LIMIT_EXCEEDED_ON_SETTLEMENT', resourceType: 'model_request',
           resourceId: result.requestId, metadata: { publicModelId }
         } }).catch(error => console.error('quota-settlement-audit-failed', { requestId: result.requestId, error: error.message }))
+      }
+      if (reservations.length && statusCode < 400) {
+        recordQuotaSettlement(finalUsage.inputTokens + finalUsage.outputTokens, Math.round(Number(costUsd) * 1_000_000))
       }
       const finishedAt = new Date()
       await this.prisma.usageLog.create({ data: {
