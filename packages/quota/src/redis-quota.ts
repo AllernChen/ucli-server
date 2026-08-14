@@ -1,4 +1,4 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common'
+import { HttpException, Injectable, OnModuleDestroy } from '@nestjs/common'
 import Redis from 'ioredis'
 
 export interface QuotaIdentity { organizationId: string; accountId: string; model: string; now?: Date }
@@ -85,7 +85,7 @@ export class RedisQuotaService implements OnModuleDestroy {
     const args = [estimate.tokens, estimate.costMicroUsd, Number(limits.dailyTokens || 0), Number(limits.monthlyTokens || 0),
       micro(limits.dailyCostUsd), micro(limits.monthlyCostUsd), limits.qps || 0, Number(limits.tpm || 0), limits.concurrency || 0]
     const result = await this.redis.eval(reserveQuotaLua, 7, ...Object.values(keys), ...args) as [number, string, string]
-    if (Number(result[0]) !== 1) throw Object.assign(new Error(result[1]), { code: result[1], status: 429 })
+    if (Number(result[0]) !== 1) throw new HttpException(result[1], 429)
     const thresholds = String(result[2] || '').split(',').filter(Boolean).map(Number)
     return { keys, estimate, thresholds, limits: {
       dailyTokens: Number(limits.dailyTokens || 0), monthlyTokens: Number(limits.monthlyTokens || 0),
