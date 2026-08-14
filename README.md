@@ -6,26 +6,51 @@ UCLI Server 是面向私有部署的 UCLI 控制面、模型网关、使用分�
 
 ## 开发
 
+### 基础设施（Docker）
+
+PostgreSQL/Redis/MinIO 与监控栈（Prometheus/Grafana/Loki）由 `docker-compose.dev.yml` 编排（端口仅绑定 127.0.0.1，避开本机其它项目占用）：
+
 ```powershell
 Copy-Item .env.example .env
 npm install
 npm run db:generate
-npm test
-npm run typecheck
-npm run build
-npm run admin:build
+docker compose -f docker-compose.dev.yml up -d
+npm run db:migrate
 ```
 
-本地服务需要 PostgreSQL、Redis 和 MinIO。分别运行（`start:*` 与 `dev:*` 均运行 `tsc` 编译产物 `dist/`，非 `tsx`——tsx 不生成 decorator metadata，会破坏 NestJS 依赖注入）：
+### 启动服务
 
 ```powershell
-npm run start:api
-npm run start:gateway
-npm run start:worker
-npm run admin:dev
+npm run build          # tsc 编译到 dist/
+npm run start:api      # 控制面   http://localhost:3000  (/docs Swagger, /healthz)
+npm run start:gateway  # 模型网关  http://localhost:3001  (/healthz)
+npm run start:worker   # 定时任务/聚合 Worker（无 HTTP）
+npm run admin:dev      # 管理后台  http://localhost:5174
 ```
 
-热重载开发：一个终端跑 `npm run build:watch`（tsc 监听重编译），另开终端跑 `npm run dev:api` / `dev:gateway` / `dev:worker`（node --watch 重启）。
+> `start:*` 与 `dev:*` 运行的是 `tsc` 编译产物 `dist/`，不要用 `tsx` 跑应用——tsx 不生成 decorator metadata，会静默破坏 NestJS 依赖注入。
+
+热重载：一个终端 `npm run build:watch`（tsc 监听重编译），另开 `npm run dev:api` / `dev:gateway` / `dev:worker`（node --watch 重启）。
+
+`.env` 已含 `NO_COLOR=1`，让 NestJS 日志不带 ANSI 颜色，供 Loki 干净采集。
+
+### 首次初始化与后台配置
+
+先初始化平台管理员（`X-UCLI-Setup-Secret` 值来自 `.env` 的 `SETUP_SECRET`），再用该账号登录后台：
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/v1/auth/setup `
+  -Headers @{ "X-UCLI-Setup-Secret" = "<SETUP_SECRET>" } -ContentType "application/json" `
+  -Body '{"email":"admin@example.com","password":"...","displayName":"Admin","organizationName":"MyOrg"}'
+```
+
+后台配置顺序：**渠道与 Key**（新建渠道 → 添加上游 API Key → 测试）→ **模型目录**（新建模型 → 加能力[渠道/上游模型/协议] → 加定价 → 发布）→ 网关即可转发，用量见 **使用日志** 与 **运营报告**。
+
+### 本地监控
+
+- Prometheus：http://localhost:9090 —— 抓取 api/gateway `/metrics`（含 `ucli_http_requests_total` 请求级指标）
+- Grafana：http://localhost:3002 —— `admin` / `.env` 的 `GRAFANA_ADMIN_PASSWORD`，预置「UCLI 请求监控」面板（QPS / P95 延迟 / 5xx / 按路由）
+- Loki：http://localhost:3100 —— promtail 采集 `dev-logs/*.log`，Grafana Explore 用 `{job="ucli-dev"}` 查询
 
 API 文档位于 `/docs`，桌面端接入说明见 [docs/ucli-client-protocol.md](docs/ucli-client-protocol.md)。
 
