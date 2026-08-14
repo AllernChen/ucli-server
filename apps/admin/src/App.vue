@@ -19,7 +19,7 @@ const currentPassword = ref('')
 const newPassword = ref('')
 const confirmPassword = ref('')
 const passwordError = ref('')
-const passwordMessage = ref('')
+const passwordChanged = ref(false)
 
 async function login() {
   try {
@@ -31,26 +31,33 @@ async function login() {
 function logout() { localStorage.removeItem('ucli.accessToken'); loggedIn.value = false }
 function openPasswordModal() {
   currentPassword.value = ''; newPassword.value = ''; confirmPassword.value = ''
-  passwordError.value = ''; passwordMessage.value = ''
+  passwordError.value = ''
   showPasswordModal.value = true
 }
 async function changePassword() {
-  passwordError.value = ''; passwordMessage.value = ''
+  passwordError.value = ''
   if (!currentPassword.value || !newPassword.value || !confirmPassword.value) return passwordError.value = '请填写完整'
   if (newPassword.value !== confirmPassword.value) return passwordError.value = '两次新密码不一致'
   if (newPassword.value.length < 8) return passwordError.value = '新密码至少 8 位'
   try {
     await api('/api/v1/auth/password', { method: 'POST', body: JSON.stringify({ currentPassword: currentPassword.value, newPassword: newPassword.value }) })
-    passwordMessage.value = '密码已修改，正在重新登录…'
-    setTimeout(() => {
-      localStorage.removeItem('ucli.accessToken'); loggedIn.value = false; showPasswordModal.value = false
-    }, 1000)
+    localStorage.removeItem('ucli.accessToken')
+    loggedIn.value = false
+    showPasswordModal.value = false
+    passwordChanged.value = true
   } catch (value: any) { passwordError.value = value.message }
 }
 </script>
 
 <template>
-  <main v-if="!loggedIn" class="login-shell">
+  <main v-if="passwordChanged" class="login-shell">
+    <div class="login-card">
+      <div class="brand-mark">U</div><h1>密码修改成功</h1>
+      <p>密码已更新，旧会话已失效，请使用新密码重新登录。</p>
+      <button @click="passwordChanged = false">去登录</button>
+    </div>
+  </main>
+  <main v-else-if="!loggedIn" class="login-shell">
     <form class="login-card" @submit.prevent="login">
       <div class="brand-mark">U</div><h1>UCLI Server</h1><p>私有模型服务与技能管理平台</p>
       <input v-model="email" type="email" placeholder="管理员邮箱" required>
@@ -66,20 +73,17 @@ async function changePassword() {
     </aside>
     <section class="content"><RouterView /></section>
 
-    <div v-if="showPasswordModal" class="modal-backdrop" @click.self="!passwordMessage && (showPasswordModal = false)">
+    <div v-if="showPasswordModal" class="modal-backdrop" @click.self="showPasswordModal = false">
       <div class="modal">
         <h2>修改密码</h2>
-        <p v-if="passwordMessage" class="state">{{ passwordMessage }}</p>
-        <template v-else>
-          <input v-model="currentPassword" type="password" placeholder="当前密码">
-          <input v-model="newPassword" type="password" placeholder="新密码（至少 8 位）">
-          <input v-model="confirmPassword" type="password" placeholder="确认新密码">
-          <p v-if="passwordError" class="state error">{{ passwordError }}</p>
-          <div class="modal-actions">
-            <button class="primary" @click="changePassword">确认修改</button>
-            <button @click="showPasswordModal = false">取消</button>
-          </div>
-        </template>
+        <input v-model="currentPassword" type="password" placeholder="当前密码">
+        <input v-model="newPassword" type="password" placeholder="新密码（至少 8 位）">
+        <input v-model="confirmPassword" type="password" placeholder="确认新密码">
+        <p v-if="passwordError" class="state error">{{ passwordError }}</p>
+        <div class="modal-actions">
+          <button class="primary" @click="changePassword">确认修改</button>
+          <button @click="showPasswordModal = false">取消</button>
+        </div>
       </div>
     </div>
   </div>
