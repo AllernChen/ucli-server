@@ -11,7 +11,8 @@ const error = ref('')
 const loggedIn = ref(Boolean(localStorage.getItem('ucli.accessToken')))
 const navigation = [
   ['overview', '服务总览'], ['channels', '渠道与 Key'], ['models', '模型目录'],
-  ['usage', '使用日志'], ['skills', '技能超市'], ['reports', '运营报告'], ['governance', '治理']
+  ['usage', '使用日志'], ['skills', '技能超市'], ['reports', '运营报告'],
+  ['governance', '治理'], ['organizations', '组织']
 ]
 
 const showPasswordModal = ref(false)
