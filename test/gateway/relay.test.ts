@@ -49,4 +49,36 @@ describe('upstream relay', () => {
     expect(calls).toBe(3)
     expect(result.attempts).toHaveLength(3)
   })
+
+  it('uses x-api-key and forwards anthropic-version for the Anthropic protocol', async () => {
+    let captured: { url: string; headers: Record<string, string> } = { url: '', headers: {} }
+    const fetcher = async (input: URL | RequestInfo, init?: RequestInit) => {
+      captured = { url: String(input), headers: init?.headers as Record<string, string> }
+      return new Response('{}', { status: 200 })
+    }
+    await relayRequest({
+      candidates: [{ channelId: 'c', keyId: 'k', baseUrl: 'https://up.example', upstreamModel: 'claude-sonnet',
+        apiKey: 'sk-ant', protocol: 'anthropic_messages', maxRetries: 0, timeoutMs: 1000 }],
+      body: { model: 'public', max_tokens: 16 },
+      incomingHeaders: { 'anthropic-version': '2023-06-01' },
+      fetcher: fetcher as typeof fetch
+    })
+    expect(captured.url).toBe('https://up.example/v1/messages')
+    expect(captured.headers['x-api-key']).toBe('sk-ant')
+    expect(captured.headers['anthropic-version']).toBe('2023-06-01')
+    expect(captured.headers['authorization']).toBeUndefined()
+  })
+
+  it('does not retry a non-retryable 4xx and returns it as the result', async () => {
+    let calls = 0
+    const fetcher = async () => { calls += 1; return new Response('{"error":"bad"}', { status: 400 }) }
+    const result = await relayRequest({
+      candidates: [{ channelId: 'c', keyId: 'k', baseUrl: 'https://up.example', upstreamModel: 'm',
+        apiKey: 'k', protocol: 'openai_chat', maxRetries: 2, timeoutMs: 1000 }],
+      body: { model: 'public', messages: [] }, fetcher: fetcher as typeof fetch
+    })
+    expect(calls).toBe(1)
+    expect(result.attempts).toHaveLength(1)
+    expect(result.response.status).toBe(400)
+  })
 })
