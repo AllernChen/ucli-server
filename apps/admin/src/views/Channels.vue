@@ -92,7 +92,7 @@ onMounted(load)
         <input v-model="form.name" placeholder="名称（如 OpenAI）">
         <input v-model="form.provider" placeholder="供应商（如 openai）">
         <select v-model="form.protocol"><option value="OPENAI">OPENAI</option><option value="ANTHROPIC">ANTHROPIC</option></select>
-        <input v-model="form.baseUrl" placeholder="baseUrl（如 https://api.openai.com）">
+        <input v-model="form.baseUrl" placeholder="baseUrl（OpenAI 兼容端点，如 https://api.deepseek.com）">
         <select v-model="form.keySelection"><option value="WEIGHTED_RANDOM">加权随机</option><option value="ROUND_ROBIN">轮询</option></select>
         <input v-model="form.priority" type="number" placeholder="优先级">
         <input v-model="form.weight" type="number" placeholder="权重">

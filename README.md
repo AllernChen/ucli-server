@@ -52,7 +52,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/v1/auth/setup `
 - Grafana：http://localhost:3002 —— `admin` / `.env` 的 `GRAFANA_ADMIN_PASSWORD`，预置「UCLI 请求监控」面板（QPS / P95 延迟 / 5xx / 按路由）
 - Loki：http://localhost:3100 —— promtail 采集 `dev-logs/*.log`，Grafana Explore 用 `{job="ucli-dev"}` 查询
 
-API 文档位于 `/docs`，桌面端接入说明见 [docs/ucli-client-protocol.md](docs/ucli-client-protocol.md)。
+API 文档位于 `/docs`，桌面端接入说明见 [docs/ucli-client-protocol.md](docs/ucli-client-protocol.md)，供应商接入示例见 [docs/providers.md](docs/providers.md)。
 
 ## 私有化部署
 
