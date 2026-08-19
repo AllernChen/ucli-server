@@ -173,7 +173,7 @@ export class GatewayService {
         .map(channelId => this.prisma.channel.update({ where: { id: channelId }, data: {
           health: 'DEGRADED', circuitOpenUntil: new Date(Date.now() + 60_000)
         } })))
-      throw error
+      throw new ServiceUnavailableException(`No upstream channel succeeded (request: ${failure.requestId})`)
     }
     const priceSnapshot = price ? {
       inputPerMillion: price.inputPerMillion.toString(), outputPerMillion: price.outputPerMillion.toString(),

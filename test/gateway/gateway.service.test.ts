@@ -93,7 +93,7 @@ describe('gateway service orchestration', () => {
     const { service, prisma } = makeHarness()
     vi.stubGlobal('fetch', async () => new Response('{"error":"down"}', { status: 503 }))
     await expect(service.relay({ protocol: 'openai_chat', body: { model: 'gpt-4o', messages: [] }, headers: {}, principal, response: makeResponse() as any }))
-      .rejects.toThrow()
+      .rejects.toMatchObject({ status: 503 })
     const data = prisma.usageLog.create.mock.calls[0][0].data
     expect(data.statusCode).toBe(503)
     expect(data.routeAttempts).toBe(1)
