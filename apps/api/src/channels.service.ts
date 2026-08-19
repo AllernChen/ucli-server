@@ -37,8 +37,11 @@ export class ChannelsService {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), Math.min(channel.timeoutMs, 30_000))
     try {
-      const response = await fetch(new URL('v1/models', channel.baseUrl.endsWith('/') ? channel.baseUrl : `${channel.baseUrl}/`), { headers: channel.protocol === 'ANTHROPIC'
-        ? { 'x-api-key': plaintext, 'anthropic-version': '2023-06-01' } : { authorization: `Bearer ${plaintext}` }, signal: controller.signal })
+      const base = channel.baseUrl.endsWith('/') ? channel.baseUrl : `${channel.baseUrl}/`
+      const headers: Record<string, string> = channel.protocol === 'ANTHROPIC'
+        ? { 'x-api-key': plaintext, 'anthropic-version': '2023-06-01' }
+        : channel.protocol === 'GEMINI' ? { 'x-goog-api-key': plaintext } : { authorization: `Bearer ${plaintext}` }
+      const response = await fetch(channel.protocol === 'GEMINI' ? new URL('v1beta/models', base) : new URL('v1/models', base), { headers, signal: controller.signal })
       const health = response.ok ? 'HEALTHY' : response.status === 401 || response.status === 403 ? 'UNHEALTHY' : 'DEGRADED'
       await this.prisma.channel.update({ where: { id }, data: {
         health, lastTestedAt: new Date(), ...(response.ok ? { lastSuccessAt: new Date(), circuitOpenUntil: null } : {})

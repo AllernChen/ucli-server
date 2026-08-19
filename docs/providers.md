@@ -24,4 +24,4 @@
 
 ## Gemini
 
-Google Gemini 的**原生 `generateContent` 协议**（`contents`/`systemInstruction` 结构）需要请求/响应翻译层，当前尚未实现。接入 Gemini 建议作为独立特性推进：涉及 `ChannelProtocol`/`GatewayProtocol` 枚举迁移，以及 OpenAI Chat → Gemini `generateContent` 的请求与响应（含流式）翻译。
+Gemini 通过**原生 `generateContent` 协议**接入：渠道 `protocol=GEMINI`、`baseUrl=https://generativelanguage.googleapis.com`，模型能力 `protocol=GEMINI`。网关会把 OpenAI Chat 请求翻译成 `generateContent`（`contents`/`systemInstruction`），并把响应（含流式 SSE）翻译回 OpenAI Chat 格式。当前覆盖文本对话；工具调用与多模态暂未支持。

@@ -91,7 +91,7 @@ onMounted(load)
       <div class="form-row">
         <input v-model="form.name" placeholder="名称（如 OpenAI）">
         <input v-model="form.provider" placeholder="供应商（如 openai）">
-        <select v-model="form.protocol"><option value="OPENAI">OPENAI</option><option value="ANTHROPIC">ANTHROPIC</option></select>
+        <select v-model="form.protocol"><option value="OPENAI">OPENAI</option><option value="ANTHROPIC">ANTHROPIC</option><option value="GEMINI">GEMINI</option></select>
         <input v-model="form.baseUrl" placeholder="baseUrl（OpenAI 兼容端点，如 https://api.deepseek.com）">
         <select v-model="form.keySelection"><option value="WEIGHTED_RANDOM">加权随机</option><option value="ROUND_ROBIN">轮询</option></select>
         <input v-model="form.priority" type="number" placeholder="优先级">
@@ -132,7 +132,7 @@ onMounted(load)
               <div class="inline">
                 <input v-model="editForm.name" placeholder="名称">
                 <input v-model="editForm.provider" placeholder="供应商">
-                <select v-model="editForm.protocol"><option value="OPENAI">OPENAI</option><option value="ANTHROPIC">ANTHROPIC</option></select>
+                <select v-model="editForm.protocol"><option value="OPENAI">OPENAI</option><option value="ANTHROPIC">ANTHROPIC</option><option value="GEMINI">GEMINI</option></select>
                 <input v-model="editForm.baseUrl" placeholder="baseUrl">
                 <select v-model="editForm.keySelection"><option value="WEIGHTED_RANDOM">加权随机</option><option value="ROUND_ROBIN">轮询</option></select>
                 <input v-model="editForm.priority" type="number" placeholder="优先级">

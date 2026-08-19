@@ -102,7 +102,7 @@ onMounted(load)
               <div class="inline">
                 <select v-model="ability[model.id].channelId"><option v-for="channel in channels" :key="channel.id" :value="channel.id">{{ channel.name }}</option></select>
                 <input v-model="ability[model.id].upstreamModel" placeholder="上游模型名">
-                <select v-model="ability[model.id].protocol"><option value="OPENAI_CHAT">OPENAI_CHAT</option><option value="OPENAI_RESPONSES">OPENAI_RESPONSES</option><option value="ANTHROPIC_MESSAGES">ANTHROPIC_MESSAGES</option></select>
+                <select v-model="ability[model.id].protocol"><option value="OPENAI_CHAT">OPENAI_CHAT</option><option value="OPENAI_RESPONSES">OPENAI_RESPONSES</option><option value="ANTHROPIC_MESSAGES">ANTHROPIC_MESSAGES</option><option value="GEMINI">GEMINI</option></select>
                 <button @click="addAbility(model.id)">加能力</button>
               </div>
             </td>

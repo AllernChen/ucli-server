@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { Readable } from 'node:stream'
+import { geminiResponseToOpenAI, geminiUrl, GeminiStreamTranslator, toGeminiRequest } from './gemini.js'
 import type { GatewayProtocol, NormalizedUsage } from './protocol.js'
 import { normalizeUsage, retryableBeforeResponse, upstreamUrl } from './protocol.js'
 
@@ -36,21 +38,43 @@ export async function relayRequest({ candidates, body, incomingHeaders, fetcher 
       const timeout = setTimeout(() => controller.abort(), candidate.timeoutMs)
       try {
       const headers: Record<string, string> = { 'content-type': 'application/json', 'x-ucli-request-id': requestId }
-      if (candidate.protocol === 'anthropic_messages') {
-        headers['x-api-key'] = candidate.apiKey
-        headers['anthropic-version'] = incomingHeaders?.['anthropic-version'] || '2023-06-01'
-      } else headers.authorization = `Bearer ${candidate.apiKey}`
-      const outgoingBody: Record<string, unknown> = { ...body, model: candidate.upstreamModel }
-      if (candidate.protocol === 'openai_chat' && body.stream === true) {
-        outgoingBody.stream_options = { ...(body.stream_options as object || {}), include_usage: true }
+      let url: string
+      let outgoingBody: Record<string, unknown>
+      if (candidate.protocol === 'gemini') {
+        headers['x-goog-api-key'] = candidate.apiKey
+        url = geminiUrl(candidate.baseUrl, candidate.upstreamModel, body.stream === true)
+        outgoingBody = toGeminiRequest(body)
+      } else {
+        if (candidate.protocol === 'anthropic_messages') {
+          headers['x-api-key'] = candidate.apiKey
+          headers['anthropic-version'] = incomingHeaders?.['anthropic-version'] || '2023-06-01'
+        } else headers.authorization = `Bearer ${candidate.apiKey}`
+        url = upstreamUrl(candidate.baseUrl, candidate.protocol)
+        outgoingBody = { ...body, model: candidate.upstreamModel }
+        if (candidate.protocol === 'openai_chat' && body.stream === true) {
+          outgoingBody.stream_options = { ...(body.stream_options as object || {}), include_usage: true }
+        }
       }
-      const response = await fetcher(upstreamUrl(candidate.baseUrl, candidate.protocol), {
+      const response = await fetcher(url, {
         method: 'POST', headers, body: JSON.stringify(outgoingBody), signal: controller.signal
       })
       attempts.push({ channelId: candidate.channelId, keyId: candidate.keyId, status: response.status, durationMs: Date.now() - started })
       if (!response.ok && retryableBeforeResponse(response.status, false)) {
         await response.body?.cancel().catch(() => undefined)
         continue
+      }
+      if (candidate.protocol === 'gemini') {
+        if (body.stream === true) {
+          const upstream = Readable.fromWeb(response.body as any)
+          const translator = new GeminiStreamTranslator(candidate.upstreamModel)
+          const webStream = Readable.toWeb(upstream.pipe(translator)) as unknown as ReadableStream
+          return { requestId, response: new Response(webStream, { status: response.status, headers: { 'content-type': 'text/event-stream' } }), usage: normalizeUsage(undefined), candidate, attempts }
+        }
+        const raw = await response.text()
+        let translated = geminiResponseToOpenAI(null, candidate.upstreamModel)
+        try { translated = geminiResponseToOpenAI(JSON.parse(raw), candidate.upstreamModel) } catch { /* 空/异常响应回退为空消息 */ }
+        const usage = normalizeUsage((translated as any).usage)
+        return { requestId, response: new Response(JSON.stringify(translated), { status: response.status, headers: { 'content-type': 'application/json' } }), usage, candidate, attempts }
       }
       let usage = normalizeUsage(undefined)
       if (!body.stream && response.ok) {

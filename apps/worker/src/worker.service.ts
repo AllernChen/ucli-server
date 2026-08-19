@@ -21,11 +21,11 @@ export class WorkerService {
       if (!key || !ability) continue
       try {
         const plaintext = decryptSecret({ algorithm: 'aes-256-gcm', ciphertext: key.ciphertext, iv: key.iv, tag: key.tag }, loadMasterKey())
-        const response = await fetch(new URL('v1/models', channel.baseUrl.endsWith('/') ? channel.baseUrl : `${channel.baseUrl}/`), {
-          headers: channel.protocol === 'ANTHROPIC'
-            ? { 'x-api-key': plaintext, 'anthropic-version': '2023-06-01' }
-            : { authorization: `Bearer ${plaintext}` }
-        })
+        const base = channel.baseUrl.endsWith('/') ? channel.baseUrl : `${channel.baseUrl}/`
+        const headers: Record<string, string> = channel.protocol === 'ANTHROPIC'
+          ? { 'x-api-key': plaintext, 'anthropic-version': '2023-06-01' }
+          : channel.protocol === 'GEMINI' ? { 'x-goog-api-key': plaintext } : { authorization: `Bearer ${plaintext}` }
+        const response = await fetch(channel.protocol === 'GEMINI' ? new URL('v1beta/models', base) : new URL('v1/models', base), { headers })
         const health = response.ok ? 'HEALTHY' : response.status === 401 || response.status === 403 ? 'UNHEALTHY' : 'DEGRADED'
         if (response.status === 401 || response.status === 403) {
           await this.prisma.channelKey.update({ where: { id: key.id }, data: { health: 'UNHEALTHY', enabled: false } })

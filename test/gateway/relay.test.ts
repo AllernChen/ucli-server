@@ -81,4 +81,26 @@ describe('upstream relay', () => {
     expect(result.attempts).toHaveLength(1)
     expect(result.response.status).toBe(400)
   })
+
+  it('translates an OpenAI chat request to Gemini generateContent and back', async () => {
+    let captured: { url: string; headers: Record<string, string>; body: any } = { url: '', headers: {}, body: null }
+    const fetcher = async (input: any, init?: RequestInit) => {
+      captured = { url: String(input), headers: init?.headers as Record<string, string>, body: JSON.parse(String(init?.body)) }
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'hi' }] } }], usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 1, totalTokenCount: 4 } }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    const result = await relayRequest({
+      candidates: [{ channelId: 'c', keyId: 'k', baseUrl: 'https://generativelanguage.googleapis.com', upstreamModel: 'gemini-2.0-flash',
+        apiKey: 'gkey', protocol: 'gemini', maxRetries: 0, timeoutMs: 1000 }],
+      body: { model: 'public', messages: [{ role: 'user', content: 'hello' }], stream: false },
+      fetcher: fetcher as typeof fetch
+    })
+    expect(captured.url).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent')
+    expect(captured.headers['x-goog-api-key']).toBe('gkey')
+    expect(captured.headers['authorization']).toBeUndefined()
+    expect(captured.body.contents).toEqual([{ role: 'user', parts: [{ text: 'hello' }] }])
+    expect(captured.body.model).toBeUndefined()
+    const translated = await result.response.json()
+    expect(translated.choices[0].message.content).toBe('hi')
+    expect(result.usage).toMatchObject({ inputTokens: 3, outputTokens: 1 })
+  })
 })

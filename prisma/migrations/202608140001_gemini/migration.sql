@@ -1,0 +1,2 @@
+ALTER TYPE "ChannelProtocol" ADD VALUE 'GEMINI';
+ALTER TYPE "GatewayProtocol" ADD VALUE 'GEMINI';

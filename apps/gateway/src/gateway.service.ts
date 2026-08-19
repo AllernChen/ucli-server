@@ -17,7 +17,19 @@ import { StreamUsageCollector } from '../../../packages/gateway-core/src/stream-
 import { canAccessModel, type ModelAccessPrincipal } from '../../../packages/gateway-core/src/access-policy.js'
 
 const PRISMA_PROTOCOL: Record<GatewayProtocol, PrismaProtocol> = {
-  openai_responses: 'OPENAI_RESPONSES', openai_chat: 'OPENAI_CHAT', anthropic_messages: 'ANTHROPIC_MESSAGES'
+  openai_responses: 'OPENAI_RESPONSES', openai_chat: 'OPENAI_CHAT', anthropic_messages: 'ANTHROPIC_MESSAGES', gemini: 'GEMINI'
+}
+
+// 客户端协议 → 可服务的上游协议集合（openai_chat 客户端可翻译到 Gemini）。
+const CLIENT_UPSTREAMS: Record<GatewayProtocol, PrismaProtocol[]> = {
+  openai_responses: ['OPENAI_RESPONSES'],
+  openai_chat: ['OPENAI_CHAT', 'GEMINI'],
+  anthropic_messages: ['ANTHROPIC_MESSAGES'],
+  gemini: ['GEMINI']
+}
+
+const PRISMA_TO_PROTOCOL: Record<PrismaProtocol, GatewayProtocol> = {
+  OPENAI_RESPONSES: 'openai_responses', OPENAI_CHAT: 'openai_chat', ANTHROPIC_MESSAGES: 'anthropic_messages', GEMINI: 'gemini'
 }
 
 @Injectable()
@@ -33,7 +45,7 @@ export class GatewayService {
 
   private async candidates(publicModelId: string, protocol: GatewayProtocol): Promise<RelayCandidate[]> {
     const abilities = await this.prisma.channelAbility.findMany({ where: {
-      publicModelId, protocol: PRISMA_PROTOCOL[protocol], enabled: true,
+      publicModelId, protocol: { in: CLIENT_UPSTREAMS[protocol] }, enabled: true,
       channel: { enabled: true, health: { in: ['HEALTHY', 'DEGRADED'] }, OR: [{ circuitOpenUntil: null }, { circuitOpenUntil: { lt: new Date() } }] }
     }, include: { channel: { include: { keys: true } } } })
     const remaining = [...abilities]
@@ -56,7 +68,7 @@ export class GatewayService {
       const apiKey = decryptSecret({ algorithm: 'aes-256-gcm', ciphertext: key.ciphertext, iv: key.iv, tag: key.tag }, loadMasterKey())
       result.push({
         channelId: ability.channel.id, keyId: key.id, baseUrl: ability.channel.baseUrl,
-        apiKey, upstreamModel: ability.upstreamModel, protocol,
+        apiKey, upstreamModel: ability.upstreamModel, protocol: PRISMA_TO_PROTOCOL[ability.protocol],
         maxRetries: ability.channel.maxRetries, timeoutMs: ability.channel.timeoutMs
       })
     }

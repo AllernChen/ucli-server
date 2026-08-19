@@ -1,9 +1,10 @@
-export type GatewayProtocol = 'openai_responses' | 'openai_chat' | 'anthropic_messages'
+export type GatewayProtocol = 'openai_responses' | 'openai_chat' | 'anthropic_messages' | 'gemini'
 
 const ENDPOINTS: Record<GatewayProtocol, string> = {
   openai_responses: '/v1/responses',
   openai_chat: '/v1/chat/completions',
-  anthropic_messages: '/v1/messages'
+  anthropic_messages: '/v1/messages',
+  gemini: '/v1beta/models'
 }
 
 export function endpointFor(protocol: GatewayProtocol): string {
