@@ -13,11 +13,17 @@ import { ObjectStorageService } from '../../../packages/storage/src/object-stora
 @ApiTags('skills') @ApiBearerAuth() @UseGuards(AuthGuard) @Controller('api/v1/skills')
 export class SkillsController {
   constructor(private readonly prisma: PrismaService, private readonly storage: ObjectStorageService) {}
-  @Get('catalog') catalog(@Req() request: any, @Query('cursor') cursor?: string) {
-    return this.prisma.skillVersion.findMany({ where: {
+  @Get('catalog') async catalog(@Req() request: any, @Query('cursor') cursor?: string) {
+    const versions = await this.prisma.skillVersion.findMany({ where: {
       status: 'PUBLISHED', ...(cursor ? { createdAt: { gt: new Date(cursor) } } : {}),
       OR: [{ visibility: 'GLOBAL' }, { organizations: { some: { organizationId: request.principal.organizationId } } }]
     }, include: { skill: true }, orderBy: { createdAt: 'asc' }, take: 100 })
+    return versions.map(version => ({
+      id: version.id, version: version.version, sha256: version.sha256, sizeBytes: version.sizeBytes,
+      publishedAt: version.publishedAt, createdAt: version.createdAt,
+      skill: { slug: version.skill.slug, name: version.skill.name, description: version.skill.description },
+      downloadUrl: `${process.env.PUBLIC_URL || 'http://localhost:3000'}/api/v1/skills/${version.id}/download`
+    }))
   }
   @Roles('PLATFORM_ADMIN') @Get('admin') list() {
     return this.prisma.skill.findMany({ include: { versions: true }, orderBy: { createdAt: 'desc' } })

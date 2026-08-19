@@ -1,4 +1,4 @@
-import { Body, Controller, ForbiddenException, Get, Post, Req, UseGuards } from '@nestjs/common'
+import { Body, Controller, ForbiddenException, Get, Post, Query, Req, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import Decimal from 'decimal.js'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
@@ -9,11 +9,12 @@ import { estimateActiveMinutes } from '../../../packages/usage/src/analytics.js'
 @ApiTags('reports') @ApiBearerAuth() @UseGuards(AuthGuard) @Controller('api/v1/reports')
 export class ReportsController {
   constructor(private readonly prisma: PrismaService) {}
-  @Get() list(@Req() request: any) {
+  @Get() list(@Req() request: any, @Query() query: any) {
     const where = request.principal.role === 'PLATFORM_ADMIN' ? {} : request.principal.role === 'ORG_ADMIN'
       ? { organizationId: request.principal.organizationId }
       : { organizationId: request.principal.organizationId, accountId: request.principal.sub, scope: 'ACCOUNT' as const }
-    return this.prisma.report.findMany({ where, orderBy: { createdAt: 'desc' } })
+    return this.prisma.report.findMany({ where, orderBy: { createdAt: 'desc' },
+      take: Math.min(200, Math.max(1, Number(query.limit) || 50)), skip: Math.max(0, Number(query.offset) || 0) })
   }
   @Post('generate') async generate(@Req() request: any, @Body() body: any) {
     if (request.principal.role === 'MEMBER' && (body.scope !== 'ACCOUNT' || (body.scopeId && body.scopeId !== request.principal.sub))) {
@@ -22,7 +23,13 @@ export class ReportsController {
     const rangeStart = new Date(body.rangeStart)
     const rangeEnd = new Date(body.rangeEnd)
     const where: any = { startedAt: { gte: rangeStart, lt: rangeEnd } }
-    if (body.scope !== 'PLATFORM' || request.principal.role !== 'PLATFORM_ADMIN') where.organizationId = request.principal.organizationId
+    if (body.scope === 'ORGANIZATION') {
+      where.organizationId = request.principal.role === 'PLATFORM_ADMIN'
+        ? (body.scopeId || request.principal.organizationId)
+        : request.principal.organizationId
+    } else if (body.scope !== 'PLATFORM' || request.principal.role !== 'PLATFORM_ADMIN') {
+      where.organizationId = request.principal.organizationId
+    }
     if (body.scope === 'ACCOUNT') {
       const targetAccountId = body.scopeId || request.principal.sub
       if (request.principal.role !== 'PLATFORM_ADMIN') {

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { randomBytes } from 'node:crypto'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
@@ -47,6 +47,23 @@ export class GovernanceController {
       dailyTokens: body.dailyTokens ? BigInt(body.dailyTokens) : null, monthlyTokens: body.monthlyTokens ? BigInt(body.monthlyTokens) : null,
       dailyCostUsd: body.dailyCostUsd || null, monthlyCostUsd: body.monthlyCostUsd || null,
       qps: body.qps || null, tpm: body.tpm ? BigInt(body.tpm) : null, concurrency: body.concurrency || null
+    } })
+  }
+  @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Patch('quotas/:id') updateQuota(@Req() request: any, @Param('id', UuidPipe) id: string, @Body() body: any) {
+    const where: any = { id, ...(request.principal.role === 'PLATFORM_ADMIN' ? {} : { organizationId: request.principal.organizationId }) }
+    return this.prisma.quotaPolicy.updateMany({ where, data: {
+      ...(body.dailyTokens !== undefined ? { dailyTokens: body.dailyTokens ? BigInt(body.dailyTokens) : null } : {}),
+      ...(body.monthlyTokens !== undefined ? { monthlyTokens: body.monthlyTokens ? BigInt(body.monthlyTokens) : null } : {}),
+      ...(body.dailyCostUsd !== undefined ? { dailyCostUsd: body.dailyCostUsd || null } : {}),
+      ...(body.monthlyCostUsd !== undefined ? { monthlyCostUsd: body.monthlyCostUsd || null } : {}),
+      ...(body.qps !== undefined ? { qps: body.qps || null } : {}),
+      ...(body.tpm !== undefined ? { tpm: body.tpm ? BigInt(body.tpm) : null } : {}),
+      ...(body.concurrency !== undefined ? { concurrency: body.concurrency || null } : {})
+    } })
+  }
+  @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Delete('quotas/:id') deleteQuota(@Req() request: any, @Param('id', UuidPipe) id: string) {
+    return this.prisma.quotaPolicy.deleteMany({ where: {
+      id, ...(request.principal.role === 'PLATFORM_ADMIN' ? {} : { organizationId: request.principal.organizationId })
     } })
   }
 }

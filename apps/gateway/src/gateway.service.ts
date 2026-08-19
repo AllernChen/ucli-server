@@ -123,6 +123,7 @@ export class GatewayService {
             action: 'QUOTA_THRESHOLD', resourceType: 'quota_policy', resourceId: policy.id,
             metadata: { threshold, publicModelId }
           } })
+          void notifyQuotaAlert({ organizationId: principal.organizationId, accountId: principal.sub, publicModelId, threshold, policyId: policy.id })
         }
       }
     } catch (error) {
@@ -271,4 +272,13 @@ export class GatewayService {
     response.send(Buffer.from(await result.response.arrayBuffer()))
     await saveLog(result.response.status)
   }
+}
+
+async function notifyQuotaAlert(payload: Record<string, unknown>): Promise<void> {
+  const url = process.env.QUOTA_ALERT_WEBHOOK_URL
+  if (!url) return
+  try {
+    await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ event: 'quota_threshold', at: new Date().toISOString(), ...payload }) })
+  } catch (error) { console.error('quota-alert-webhook-failed', { error: (error as Error).message }) }
 }

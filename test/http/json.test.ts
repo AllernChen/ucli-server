@@ -1,5 +1,6 @@
 import 'reflect-metadata'
 import { describe, expect, it } from 'vitest'
+import Decimal from 'decimal.js'
 import { jsonSafe } from '../../packages/http/src/json.js'
 
 describe('jsonSafe', () => {
@@ -19,5 +20,8 @@ describe('jsonSafe', () => {
     const date = new Date('2026-08-13T12:00:00.000Z')
     expect(jsonSafe(date)).toBe(date)
     expect(JSON.stringify(jsonSafe({ at: date }))).toBe('{"at":"2026-08-13T12:00:00.000Z"}')
+  })
+  it('serializes Decimal.js instances to their string form (not {s,e,d})', () => {
+    expect(jsonSafe({ costUsd: new Decimal('1.5') })).toEqual({ costUsd: '1.5' })
   })
 })

@@ -13,7 +13,7 @@ export class ChannelsService {
   create(body: any) { return this.prisma.channel.create({ data: {
     name: body.name, provider: body.provider, protocol: body.protocol, baseUrl: body.baseUrl,
     priority: body.priority ?? 0, weight: body.weight ?? 1, timeoutMs: body.timeoutMs ?? 300000,
-    maxRetries: body.maxRetries ?? 1
+    maxRetries: body.maxRetries ?? 1, keySelection: body.keySelection ?? 'WEIGHTED_RANDOM'
   } }) }
   async addKey(channelId: string, body: any) {
     if (!await this.prisma.channel.findUnique({ where: { id: channelId } })) throw new NotFoundException('Channel not found')
@@ -49,5 +49,29 @@ export class ChannelsService {
       await this.prisma.channel.update({ where: { id }, data: { health: 'UNHEALTHY', lastTestedAt: new Date(), circuitOpenUntil: new Date(Date.now() + 5 * 60_000) } })
       return { ok: false, status: 0, latencyMs: Date.now() - started, health: 'UNHEALTHY', error: error.name }
     } finally { clearTimeout(timeout) }
+  }
+  update(id: string, body: any) {
+    return this.prisma.channel.update({ where: { id }, data: {
+      ...(body.name !== undefined ? { name: body.name } : {}),
+      ...(body.provider !== undefined ? { provider: body.provider } : {}),
+      ...(body.protocol !== undefined ? { protocol: body.protocol } : {}),
+      ...(body.baseUrl !== undefined ? { baseUrl: body.baseUrl } : {}),
+      ...(body.priority !== undefined ? { priority: body.priority } : {}),
+      ...(body.weight !== undefined ? { weight: body.weight } : {}),
+      ...(body.timeoutMs !== undefined ? { timeoutMs: body.timeoutMs } : {}),
+      ...(body.maxRetries !== undefined ? { maxRetries: body.maxRetries } : {}),
+      ...(body.keySelection !== undefined ? { keySelection: body.keySelection } : {}),
+      ...(body.autoDisable !== undefined ? { autoDisable: body.autoDisable } : {})
+    } })
+  }
+  async updateKey(channelId: string, keyId: string, body: any) {
+    if (!await this.prisma.channelKey.findFirst({ where: { id: keyId, channelId } })) throw new NotFoundException('Key not found')
+    return this.prisma.channelKey.update({ where: { id: keyId }, data: {
+      ...(body.enabled !== undefined ? { enabled: Boolean(body.enabled) } : {}),
+      ...(body.priority !== undefined ? { priority: body.priority } : {}),
+      ...(body.weight !== undefined ? { weight: body.weight } : {}),
+      ...(body.remainingUsd !== undefined ? { remainingUsd: body.remainingUsd } : {}),
+      ...(body.expiresAt !== undefined ? { expiresAt: body.expiresAt ? new Date(body.expiresAt) : null } : {})
+    }, select: { id: true, suffix: true, enabled: true, health: true, priority: true, weight: true, remainingUsd: true, expiresAt: true } })
   }
 }

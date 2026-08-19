@@ -13,4 +13,8 @@ export class ChannelsController {
   @Post(':id/keys') addKey(@Param('id', UuidPipe) id: string, @Body() body: any) { return this.channels.addKey(id, body) }
   @Patch(':id/enabled') enabled(@Param('id', UuidPipe) id: string, @Body() body: any) { return this.channels.setEnabled(id, Boolean(body.enabled)) }
   @Post(':id/test') test(@Param('id', UuidPipe) id: string) { return this.channels.test(id) }
+  @Patch(':id') update(@Param('id', UuidPipe) id: string, @Body() body: any) { return this.channels.update(id, body) }
+  @Patch(':id/keys/:keyId') updateKey(@Param('id', UuidPipe) id: string, @Param('keyId', UuidPipe) keyId: string, @Body() body: any) {
+    return this.channels.updateKey(id, keyId, body)
+  }
 }
