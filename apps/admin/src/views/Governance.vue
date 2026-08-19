@@ -12,6 +12,9 @@ const members = ref<any[]>([])
 const devices = ref<any[]>([])
 const quotas = ref<any[]>([])
 const audit = ref<any[]>([])
+const PAGE = 100
+const membersOffset = ref(0)
+const devicesOffset = ref(0)
 const inviteForm = ref({ email: '', role: 'MEMBER' })
 const quotaForm = ref({ accountId: '', publicModelId: '', dailyTokens: '', monthlyTokens: '', dailyCostUsd: '', monthlyCostUsd: '', qps: '', tpm: '', concurrency: '' })
 
@@ -19,7 +22,9 @@ async function load() {
   loading.value = true; error.value = ''
   try {
     [members.value, devices.value, quotas.value, audit.value] = await Promise.all([
-      api('/api/v1/admin/members'), api('/api/v1/admin/devices'), api('/api/v1/admin/quotas'), api('/api/v1/admin/audit')
+      api(`/api/v1/admin/members?limit=${PAGE}&offset=${membersOffset.value}`),
+      api(`/api/v1/admin/devices?limit=${PAGE}&offset=${devicesOffset.value}`),
+      api('/api/v1/admin/quotas'), api('/api/v1/admin/audit')
     ])
   } catch (value: any) { error.value = value.message } finally { loading.value = false }
 }
@@ -57,6 +62,10 @@ async function deleteQuota(id: string) {
   try { await api(`/api/v1/admin/quotas/${id}`, { method: 'DELETE' }); toast('配额已删除'); await load() }
   catch (value: any) { error.value = value.message }
 }
+function membersPrev() { if (membersOffset.value > 0) { membersOffset.value = Math.max(0, membersOffset.value - PAGE); load() } }
+function membersNext() { if (members.value.length === PAGE) { membersOffset.value += PAGE; load() } }
+function devicesPrev() { if (devicesOffset.value > 0) { devicesOffset.value = Math.max(0, devicesOffset.value - PAGE); load() } }
+function devicesNext() { if (devices.value.length === PAGE) { devicesOffset.value += PAGE; load() } }
 function truncate(value: any) {
   const s = JSON.stringify(value ?? '')
   return s.length > 80 ? s.slice(0, 80) + '…' : s
@@ -93,6 +102,10 @@ onMounted(load)
           <tbody><tr v-for="m in members" :key="m.accountId"><td>{{ m.account.displayName }}</td><td>{{ m.account.email }}</td><td>{{ m.role }}</td><td>{{ m.account.status }}</td><td>{{ m.account.createdAt?.slice(0, 10) }}</td></tr></tbody>
         </table>
         <p v-else class="empty">暂无成员</p>
+        <div v-if="members.length" class="actions">
+          <button @click="membersPrev">上一页</button>
+          <button @click="membersNext">下一页</button>
+        </div>
       </section>
     </template>
 
@@ -104,6 +117,10 @@ onMounted(load)
           <tbody><tr v-for="d in devices" :key="d.id"><td>{{ d.name }}</td><td>{{ d.lastSeenAt?.slice(0, 19).replace('T', ' ') }}</td><td>{{ d.createdAt?.slice(0, 10) }}</td><td>{{ d.revokedAt ? '已撤销' : '正常' }}</td><td><div class="actions"><button v-if="!d.revokedAt" @click="revoke(d.id)">撤销</button></div></td></tr></tbody>
         </table>
         <p v-else class="empty">暂无设备</p>
+        <div v-if="devices.length" class="actions">
+          <button @click="devicesPrev">上一页</button>
+          <button @click="devicesNext">下一页</button>
+        </div>
       </section>
     </template>
 

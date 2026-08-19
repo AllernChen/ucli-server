@@ -9,9 +9,10 @@ import { hashOpaqueToken } from '../../../packages/security/src/tokens.js'
 @ApiTags('governance') @ApiBearerAuth() @UseGuards(AuthGuard) @Controller('api/v1/admin')
 export class GovernanceController {
   constructor(private readonly prisma: PrismaService) {}
-  @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Get('members') members(@Req() request: any) {
+  @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Get('members') members(@Req() request: any, @Query('limit') limit?: string, @Query('offset') offset?: string) {
     return this.prisma.membership.findMany({ where: { organizationId: request.principal.organizationId },
-      include: { account: { select: { id: true, email: true, displayName: true, status: true, createdAt: true } } } })
+      include: { account: { select: { id: true, email: true, displayName: true, status: true, createdAt: true } } },
+      take: Math.min(500, Math.max(1, Number(limit) || 100)), skip: Math.max(0, Number(offset) || 0) })
   }
   @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Post('invitations') async invite(@Req() request: any, @Body() body: any) {
     const token = randomBytes(32).toString('base64url')
@@ -22,9 +23,10 @@ export class GovernanceController {
     } })
     return { id: invitation.id, token, expiresAt: invitation.expiresAt }
   }
-  @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Get('devices') devices(@Req() request: any) {
+  @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Get('devices') devices(@Req() request: any, @Query('limit') limit?: string, @Query('offset') offset?: string) {
     return this.prisma.device.findMany({ where: { organizationId: request.principal.organizationId },
-      select: { id: true, accountId: true, name: true, revokedAt: true, lastSeenAt: true, createdAt: true } })
+      select: { id: true, accountId: true, name: true, revokedAt: true, lastSeenAt: true, createdAt: true },
+      take: Math.min(500, Math.max(1, Number(limit) || 100)), skip: Math.max(0, Number(offset) || 0) })
   }
   @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Post('devices/:id/revoke') revoke(@Req() request: any, @Param('id', UuidPipe) id: string) {
     return this.prisma.device.updateMany({ where: { id, organizationId: request.principal.organizationId }, data: { revokedAt: new Date() } })
