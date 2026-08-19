@@ -37,4 +37,6 @@
 
 ## 技能目录
 
-`GET /api/v1/skills/catalog?cursor=<ISO时间>` 返回当前组织可见的不可变技能版本。客户端从对象下载地址获取 ZIP，验证 SHA-256 后，复用现有 UCLI 安装、冲突和漂移处理流程。`REVOKED` 版本禁止新下载，已安装内容由客户端显示风险提示但不自动删除。
+`GET /api/v1/skills/catalog?cursor=<ISO时间>` 返回当前组织可见的不可变技能版本。客户端从对象下载地址获取 ZIP，验证 SHA-256 后，复用现有 UCLI 安装、冲突和漂移处理流程。
+
+`GET /api/v1/skills/revocations` 返回当前组织可见的已撤销/已弃用技能版本（`id`/`version`/`status`），客户端据此对已安装版本显示风险提示；`REVOKED` 版本禁止新下载，已安装内容不自动删除。

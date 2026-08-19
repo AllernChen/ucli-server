@@ -25,6 +25,16 @@ export class SkillsController {
       downloadUrl: `${process.env.PUBLIC_URL || 'http://localhost:3000'}/api/v1/skills/${version.id}/download`
     }))
   }
+  @Get('revocations') revocations(@Req() request: any) {
+    return this.prisma.skillVersion.findMany({
+      where: {
+        status: { in: ['REVOKED', 'DEPRECATED'] },
+        OR: [{ visibility: 'GLOBAL' }, { organizations: { some: { organizationId: request.principal.organizationId } } }]
+      },
+      select: { id: true, version: true, status: true, skill: { select: { slug: true, name: true } } },
+      orderBy: { createdAt: 'desc' }
+    })
+  }
   @Roles('PLATFORM_ADMIN') @Get('admin') list() {
     return this.prisma.skill.findMany({ include: { versions: true }, orderBy: { createdAt: 'desc' } })
   }
