@@ -21,7 +21,7 @@ export class WorkerService {
       if (!key || !ability) continue
       try {
         const plaintext = decryptSecret({ algorithm: 'aes-256-gcm', ciphertext: key.ciphertext, iv: key.iv, tag: key.tag }, loadMasterKey())
-        const response = await fetch(new URL('/v1/models', channel.baseUrl), {
+        const response = await fetch(new URL('v1/models', channel.baseUrl.endsWith('/') ? channel.baseUrl : `${channel.baseUrl}/`), {
           headers: channel.protocol === 'ANTHROPIC'
             ? { 'x-api-key': plaintext, 'anthropic-version': '2023-06-01' }
             : { authorization: `Bearer ${plaintext}` }
