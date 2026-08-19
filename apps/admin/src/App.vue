@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from './api'
+import { toasts } from './toast'
 
 const router = useRouter()
 const route = useRoute()
@@ -58,6 +59,7 @@ async function changePassword() {
       <button @click="passwordChanged = false">去登录</button>
     </div>
   </main>
+  <main v-else-if="route.name === 'invite'" class="login-shell"><RouterView /></main>
   <main v-else-if="!loggedIn" class="login-shell">
     <form class="login-card" @submit.prevent="login">
       <div class="brand-mark">U</div><h1>UCLI Server</h1><p>私有模型服务与技能管理平台</p>
@@ -88,4 +90,10 @@ async function changePassword() {
       </div>
     </div>
   </div>
+  <div class="toasts" aria-live="polite"><div v-for="t in toasts" :key="t.id" class="toast">{{ t.message }}</div></div>
 </template>
+
+<style>
+.toasts{position:fixed;bottom:24px;right:24px;display:grid;gap:10px;z-index:1000}
+.toast{background:#133b35;border:1px solid #2d977f;color:#76e6c8;border-radius:8px;padding:12px 16px;font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.35)}
+</style>

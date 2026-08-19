@@ -14,3 +14,9 @@ export async function api(path: string, init: RequestInit = {}) {
   }
   return response.json()
 }
+export async function optional(path: string) {
+  try {
+    const response = await fetch(`${BASE}${path}`, { headers: { authorization: `Bearer ${token()}` } })
+    return response.ok ? await response.json() : []
+  } catch { return [] }
+}

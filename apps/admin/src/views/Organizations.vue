@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { api } from '../api'
+import { toast } from '../toast'
 
 const loading = ref(true)
 const error = ref('')
@@ -17,11 +18,12 @@ async function create() {
   try {
     await api('/api/v1/admin/organizations', { method: 'POST', body: JSON.stringify({ name: form.value.name, slug: form.value.slug, timezone: form.value.timezone || 'UTC' }) })
     form.value = { name: '', slug: '', timezone: '' }
+    toast('组织已创建')
     await load()
   } catch (value: any) { error.value = value.message }
 }
 async function toggle(org: any) {
-  try { await api(`/api/v1/admin/organizations/${org.id}`, { method: 'PATCH', body: JSON.stringify({ enabled: !org.enabled }) }); await load() }
+  try { await api(`/api/v1/admin/organizations/${org.id}`, { method: 'PATCH', body: JSON.stringify({ enabled: !org.enabled }) }); toast('组织已更新'); await load() }
   catch (value: any) { error.value = value.message }
 }
 onMounted(load)

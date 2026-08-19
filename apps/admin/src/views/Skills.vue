@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { api } from '../api'
+import { toast } from '../toast'
 
 const loading = ref(true)
 const error = ref('')
@@ -20,6 +21,7 @@ async function create() {
   try {
     await api('/api/v1/skills/admin', { method: 'POST', body: JSON.stringify(form.value) })
     form.value = { slug: '', name: '', description: '' }
+    toast('技能已创建')
     await load()
   } catch (value: any) { error.value = value.message }
 }
@@ -36,15 +38,16 @@ async function upload(skillId: string) {
   try {
     await api(`/api/v1/skills/admin/${skillId}/versions`, { method: 'POST', body: data })
     delete uploads.value[skillId]
+    toast('版本已上传')
     await load()
   } catch (value: any) { error.value = value.message }
 }
 async function publish(versionId: string) {
-  try { await api(`/api/v1/skills/admin/${versionId}/publish`, { method: 'POST' }); await load() }
+  try { await api(`/api/v1/skills/admin/${versionId}/publish`, { method: 'POST' }); toast('技能已发布'); await load() }
   catch (value: any) { error.value = value.message }
 }
 async function revoke(versionId: string) {
-  try { await api(`/api/v1/skills/admin/${versionId}/revoke`, { method: 'POST' }); await load() }
+  try { await api(`/api/v1/skills/admin/${versionId}/revoke`, { method: 'POST' }); toast('技能已撤销'); await load() }
   catch (value: any) { error.value = value.message }
 }
 onMounted(load)

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { api } from '../api'
+import { toast } from '../toast'
 
 const loading = ref(true)
 const error = ref('')
@@ -27,6 +28,7 @@ async function create() {
   try {
     await api('/api/v1/admin/models', { method: 'POST', body: JSON.stringify({ id: form.value.id, displayName: form.value.displayName, contextSize: Number(form.value.contextSize) || null }) })
     form.value = { id: '', displayName: '', contextSize: '' }
+    toast('模型已创建')
     await load()
   } catch (value: any) { error.value = value.message }
 }
@@ -36,6 +38,7 @@ async function addAbility(id: string) {
   try {
     await api(`/api/v1/admin/models/${id}/abilities`, { method: 'POST', body: JSON.stringify({ channelId: a.channelId, upstreamModel: a.upstreamModel, protocol: a.protocol, supportsStream: a.supportsStream !== false, supportsTools: a.supportsTools !== false }) })
     delete ability.value[id]
+    toast('能力已添加')
     await load()
   } catch (value: any) { error.value = value.message }
 }
@@ -45,13 +48,27 @@ async function addPrice(id: string) {
   try {
     await api(`/api/v1/admin/models/${id}/prices`, { method: 'POST', body: JSON.stringify({ inputPerMillion: Number(p.inputPerMillion), outputPerMillion: Number(p.outputPerMillion), cachedPerMillion: Number(p.cachedPerMillion) || 0, reasoningPerMillion: Number(p.reasoningPerMillion) || 0 }) })
     delete price.value[id]
+    toast('定价已添加')
     await load()
   } catch (value: any) { error.value = value.message }
 }
 async function publish(id: string) {
-  try { await api(`/api/v1/admin/models/${id}/publish`, { method: 'POST' }); await load() }
+  try { await api(`/api/v1/admin/models/${id}/publish`, { method: 'POST' }); toast('模型已发布'); await load() }
   catch (value: any) { error.value = value.message }
 }
+async function unpublish(id: string) {
+  try { await api(`/api/v1/admin/models/${id}/unpublish`, { method: 'POST' }); toast('模型已下线'); await load() }
+  catch (value: any) { error.value = value.message }
+}
+async function removeAbility(id: string, a: any) {
+  try { await api(`/api/v1/admin/models/${id}/abilities`, { method: 'DELETE', body: JSON.stringify({ channelId: a.channelId, protocol: a.protocol }) }); toast('能力已删除'); await load() }
+  catch (value: any) { error.value = value.message }
+}
+async function removePrice(id: string, priceId: string) {
+  try { await api(`/api/v1/admin/models/${id}/prices/${priceId}`, { method: 'DELETE' }); toast('定价已删除'); await load() }
+  catch (value: any) { error.value = value.message }
+}
+function channelName(id: string) { return channels.value.find(channel => channel.id === id)?.name || id }
 onMounted(load)
 </script>
 
@@ -80,7 +97,7 @@ onMounted(load)
             <td>{{ model.contextSize || '—' }}</td>
             <td>{{ model.enabled ? '已发布' : '未发布' }}</td>
             <td>
-              <div v-for="a in model.abilities" :key="a.channelId + a.protocol" class="key-chip">{{ a.channelId }} → {{ a.upstreamModel }} ({{ a.protocol }})</div>
+              <div v-for="a in model.abilities" :key="a.channelId + a.protocol" class="key-chip">{{ channelName(a.channelId) }} → {{ a.upstreamModel }} ({{ a.protocol }}) <button @click="removeAbility(model.id, a)">删</button></div>
               <div v-if="!model.abilities.length" class="mono">无</div>
               <div class="inline">
                 <select v-model="ability[model.id].channelId"><option v-for="channel in channels" :key="channel.id" :value="channel.id">{{ channel.name }}</option></select>
@@ -90,7 +107,7 @@ onMounted(load)
               </div>
             </td>
             <td>
-              <div v-for="p in model.prices" :key="p.id" class="key-chip">in ${{ p.inputPerMillion }} / out ${{ p.outputPerMillion }}</div>
+              <div v-for="p in model.prices" :key="p.id" class="key-chip">in ${{ p.inputPerMillion }} / out ${{ p.outputPerMillion }} <button @click="removePrice(model.id, p.id)">删</button></div>
               <div v-if="!model.prices.length" class="mono">无</div>
               <div class="inline">
                 <input v-model="price[model.id].inputPerMillion" placeholder="输入$/M">
@@ -101,6 +118,7 @@ onMounted(load)
             <td>
               <div class="actions">
                 <button v-if="!model.enabled" @click="publish(model.id)">发布</button>
+                <button v-else @click="unpublish(model.id)">下线</button>
               </div>
             </td>
           </tr>
