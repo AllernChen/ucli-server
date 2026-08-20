@@ -1,14 +1,15 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { AuthGuard, Roles } from '../../../packages/security/src/auth.js'
 import { UuidPipe } from '../../../packages/http/src/uuid.pipe.js'
 import { ChannelModelsService } from './channel-models.service.js'
-import { CreateChannelModelDto, CreateCostRuleDto, PageQueryDto, UpdateChannelModelDto, UpdateCostRuleDto } from './catalog.dto.js'
+import { BatchTestChannelModelsDto, CreateChannelModelDto, CreateCostRuleDto, PageQueryDto, UpdateChannelModelDto, UpdateCostRuleDto } from './catalog.dto.js'
+import { ModelTestingService } from './model-testing.service.js'
 
 @ApiTags('admin/channel-models') @ApiBearerAuth() @UseGuards(AuthGuard) @Roles('PLATFORM_ADMIN')
 @Controller('api/v1/admin')
 export class ChannelModelsController {
-  constructor(private readonly channelModels: ChannelModelsService) {}
+  constructor(private readonly channelModels: ChannelModelsService, private readonly modelTesting: ModelTestingService) {}
 
   @Get('channels/:channelId/models')
   list(@Param('channelId', UuidPipe) channelId: string, @Query() query: PageQueryDto) {
@@ -47,5 +48,15 @@ export class ChannelModelsController {
   @Get('channel-models/:id/probes')
   probes(@Param('id', UuidPipe) id: string, @Query() query: PageQueryDto) {
     return this.channelModels.listProbes(id, query)
+  }
+
+  @Post('channel-models/:id/test')
+  test(@Param('id', UuidPipe) id: string, @Req() request: any) {
+    return this.modelTesting.testChannelModel(id, {}, request.principal.sub, 'MANUAL')
+  }
+
+  @Post('channels/:channelId/models/test-batch')
+  testBatch(@Param('channelId', UuidPipe) channelId: string, @Body() body: BatchTestChannelModelsDto, @Req() request: any) {
+    return this.modelTesting.testChannelModels(channelId, body.channelModelIds, request.principal.sub)
   }
 }

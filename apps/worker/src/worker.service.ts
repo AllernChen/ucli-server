@@ -6,11 +6,25 @@ import { loadMasterKey } from '../../../packages/security/src/master-key.js'
 import { renderOperationsReport } from '../../../packages/reports/src/operations-report.js'
 import Decimal from 'decimal.js'
 import { estimateActiveMinutes } from '../../../packages/usage/src/analytics.js'
+import { ModelTestingService } from '../../api/src/model-testing.service.js'
 
 @Injectable()
 export class WorkerService {
   private readonly logger = new Logger(WorkerService.name)
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly modelTesting: ModelTestingService) {}
+
+  @Cron('0 * * * * *')
+  async probeChannelModels() {
+    const results = await this.modelTesting.testDueChannelModels()
+    if (results.length) this.logger.log({ event: 'channel-model-probes', tested: results.length, failed: results.filter(item => !item.ok).length })
+  }
+
+  @Cron('0 10 3 * * *')
+  async purgeChannelModelProbes() {
+    const cutoff = new Date(Date.now() - 30 * 86_400_000)
+    const deleted = await this.prisma.channelModelProbe.deleteMany({ where: { testedAt: { lt: cutoff } } })
+    this.logger.log({ event: 'channel-model-probe-retention', cutoff, deleted: deleted.count })
+  }
 
   @Cron('0 */5 * * * *')
   async probeChannels() {

@@ -19,9 +19,10 @@ import { OrganizationsController } from './organizations.controller.js'
 import { AuditInterceptor } from '../../../packages/http/src/audit.interceptor.js'
 import { ChannelModelsController } from './channel-models.controller.js'
 import { ChannelModelsService } from './channel-models.service.js'
+import { ModelTestingService } from './model-testing.service.js'
 
 @Module({
   controllers: [AuthController, ChannelsController, ChannelModelsController, ClientController, ModelsController, UsageController, SkillsController, ReportsController, GovernanceController, MonitoringController, MetricsController, OrganizationsController],
-  providers: [PrismaService, AuthService, ChannelsService, ChannelModelsService, AuthGuard, ObjectStorageService, AuditInterceptor]
+  providers: [PrismaService, AuthService, ChannelsService, ChannelModelsService, ModelTestingService, AuthGuard, ObjectStorageService, AuditInterceptor]
 })
 export class AppModule {}

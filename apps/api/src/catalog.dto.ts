@@ -1,7 +1,7 @@
 import { Transform, Type } from 'class-transformer'
 import {
   ArrayMaxSize, ArrayNotEmpty, IsArray, IsBoolean, IsEnum, IsIn, IsInt, IsNumberString, IsOptional,
-  IsString, IsUrl, Length, Max, Min
+  IsString, IsUrl, IsUUID, Length, Max, Min
 } from 'class-validator'
 import { ChannelProtocol, GatewayProtocol, HealthStatus, KeySelection, ModelHealthStatus } from '@prisma/client'
 
@@ -97,6 +97,10 @@ export class UpdateCostRuleDto {
 export class CostRulePreviewDto {
   @IsArray() @ArrayNotEmpty() rules!: CreateCostRuleDto[]
   @IsString() timezone!: string
+}
+
+export class BatchTestChannelModelsDto {
+  @IsArray() @ArrayNotEmpty() @ArrayMaxSize(20) @IsUUID('4', { each: true }) channelModelIds!: string[]
 }
 
 export class AnalyticsSortDto {

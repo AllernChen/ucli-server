@@ -118,3 +118,16 @@ export interface ModelProbe {
   keySuffix: string | null
   testedAt: string
 }
+
+export interface ModelTestResult {
+  channelModelId: string
+  ok: boolean
+  statusCode: number
+  latencyMs: number
+  firstTokenMs: number | null
+  inputTokens: number
+  outputTokens: number
+  keySuffix: string | null
+  errorCode: string | null
+  health: Exclude<HealthStatus, 'UNKNOWN' | 'DISABLED'>
+}
