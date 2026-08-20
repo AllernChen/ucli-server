@@ -21,9 +21,11 @@ import { ChannelModelsController } from './channel-models.controller.js'
 import { ChannelModelsService } from './channel-models.service.js'
 import { ModelTestingService } from './model-testing.service.js'
 import { ModelTestingController } from './model-testing.controller.js'
+import { AnalyticsController } from './analytics.controller.js'
+import { AnalyticsService } from './analytics.service.js'
 
 @Module({
-  controllers: [AuthController, ChannelsController, ChannelModelsController, ModelTestingController, ClientController, ModelsController, UsageController, SkillsController, ReportsController, GovernanceController, MonitoringController, MetricsController, OrganizationsController],
-  providers: [PrismaService, AuthService, ChannelsService, ChannelModelsService, ModelTestingService, AuthGuard, ObjectStorageService, AuditInterceptor]
+  controllers: [AuthController, ChannelsController, ChannelModelsController, ModelTestingController, AnalyticsController, ClientController, ModelsController, UsageController, SkillsController, ReportsController, GovernanceController, MonitoringController, MetricsController, OrganizationsController],
+  providers: [PrismaService, AuthService, ChannelsService, ChannelModelsService, ModelTestingService, AnalyticsService, AuthGuard, ObjectStorageService, AuditInterceptor]
 })
 export class AppModule {}
