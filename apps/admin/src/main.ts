@@ -13,12 +13,16 @@ import Organizations from './views/Organizations.vue'
 import DeviceApproval from './views/DeviceApproval.vue'
 import Usage from './views/Usage.vue'
 import InviteAccept from './views/InviteAccept.vue'
+import ChannelDetail from './views/ChannelDetail.vue'
+import ModelDetail from './views/ModelDetail.vue'
 
 const routes = [
   { path: '/', name: 'overview', component: Dashboard },
   { path: '/usage', name: 'usage', component: Usage },
   { path: '/channels', name: 'channels', component: Channels },
+  { path: '/channels/:id', name: 'channel-detail', component: ChannelDetail },
   { path: '/models', name: 'models', component: Models },
+  { path: '/models/:id', name: 'model-detail', component: ModelDetail },
   { path: '/skills', name: 'skills', component: Skills },
   { path: '/reports', name: 'reports', component: Reports },
   { path: '/governance', name: 'governance', component: Governance },

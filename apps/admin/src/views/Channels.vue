@@ -1,153 +1,83 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { toast } from '../toast'
+import type { ChannelProtocol, ChannelSummary, Page } from '../types/catalog'
+import Drawer from '../components/Drawer.vue'
+import Pagination from '../components/Pagination.vue'
+import StatusBadge from '../components/StatusBadge.vue'
+import ConfirmDialog from '../components/ConfirmDialog.vue'
 
+const route = useRoute()
+const router = useRouter()
 const loading = ref(true)
 const error = ref('')
-const notice = ref('')
-const channels = ref<any[]>([])
-const form = ref({ name: '', provider: '', protocol: 'OPENAI', baseUrl: '', priority: '', weight: '', timeoutMs: '', maxRetries: '', keySelection: 'WEIGHTED_RANDOM' })
-const keyInput = ref<Record<string, string>>({})
-const editing = ref<string | null>(null)
-const editForm = ref({ name: '', provider: '', protocol: 'OPENAI', baseUrl: '', priority: '', weight: '', timeoutMs: '', maxRetries: '', keySelection: 'WEIGHTED_RANDOM' })
+const result = ref<Page<ChannelSummary>>({ items: [], total: 0, limit: 20, offset: 0 })
+const createOpen = ref(false)
+const pendingToggle = ref<ChannelSummary | null>(null)
+const filters = reactive({
+  q: String(route.query.q || ''), provider: String(route.query.provider || ''), protocol: String(route.query.protocol || ''),
+  health: String(route.query.health || ''), enabled: String(route.query.enabled || ''), limit: 20, offset: Number(route.query.offset || 0)
+})
+const form = reactive({
+  name: '', provider: '', protocol: 'OPENAI' as ChannelProtocol, baseUrl: '', keySelection: 'WEIGHTED_RANDOM',
+  priority: 0, weight: 1, timeoutMs: 300000, maxRetries: 1, costTimezone: 'UTC'
+})
 
 async function load() {
   loading.value = true; error.value = ''
-  try { channels.value = await api('/api/v1/admin/channels') }
-  catch (value: any) { error.value = value.message } finally { loading.value = false }
+  const params = new URLSearchParams()
+  Object.entries(filters).forEach(([key, value]) => { if (value !== '') params.set(key, String(value)) })
+  try {
+    result.value = await api<Page<ChannelSummary>>(`/api/v1/admin/channels?${params}`)
+    await router.replace({ query: Object.fromEntries([...params].filter(([key]) => key !== 'limit')) })
+  } catch (value: any) { error.value = value.message } finally { loading.value = false }
 }
 async function create() {
-  if (!form.value.name || !form.value.provider || !form.value.baseUrl) return error.value = '请填写名称、供应商与 baseUrl'
+  error.value = ''
   try {
-    await api('/api/v1/admin/channels', { method: 'POST', body: JSON.stringify({
-      name: form.value.name, provider: form.value.provider, protocol: form.value.protocol, baseUrl: form.value.baseUrl,
-      priority: Number(form.value.priority) || 0, weight: Number(form.value.weight) || 1,
-      timeoutMs: Number(form.value.timeoutMs) || 300000, maxRetries: Number(form.value.maxRetries) || 0,
-      keySelection: form.value.keySelection
-    }) })
-    form.value = { name: '', provider: '', protocol: 'OPENAI', baseUrl: '', priority: '', weight: '', timeoutMs: '', maxRetries: '', keySelection: 'WEIGHTED_RANDOM' }
-    toast('渠道已创建')
-    await load()
+    await api('/api/v1/admin/channels', { method: 'POST', body: JSON.stringify(form) })
+    createOpen.value = false; toast('渠道已创建'); await load()
   } catch (value: any) { error.value = value.message }
 }
-async function addKey(id: string) {
-  const key = (keyInput.value[id] || '').trim()
-  if (!key) return error.value = '请输入 Key'
+async function confirmToggle() {
+  if (!pendingToggle.value) return
+  const channel = pendingToggle.value; pendingToggle.value = null
   try {
-    await api(`/api/v1/admin/channels/${id}/keys`, { method: 'POST', body: JSON.stringify({ key }) })
-    keyInput.value[id] = ''
-    toast('Key 已添加')
-    await load()
+    await api(`/api/v1/admin/channels/${channel.id}/enabled`, { method: 'PATCH', body: JSON.stringify({ enabled: !channel.enabled }) })
+    toast(channel.enabled ? '渠道已停用' : '渠道已启用'); await load()
   } catch (value: any) { error.value = value.message }
 }
-async function toggle(channel: any) {
-  try { await api(`/api/v1/admin/channels/${channel.id}/enabled`, { method: 'PATCH', body: JSON.stringify({ enabled: !channel.enabled }) }); toast('渠道已更新'); await load() }
-  catch (value: any) { error.value = value.message }
-}
-async function test(id: string) {
-  notice.value = '正在测试…'
-  try {
-    const result = await api(`/api/v1/admin/channels/${id}/test`, { method: 'POST' })
-    notice.value = `测试${result.ok ? '通过' : '失败'}：状态 ${result.status}，延迟 ${result.latencyMs}ms，健康 ${result.health}`
-  } catch (value: any) { notice.value = value.message }
-}
-async function toggleKey(channelId: string, key: any) {
-  try { await api(`/api/v1/admin/channels/${channelId}/keys/${key.id}`, { method: 'PATCH', body: JSON.stringify({ enabled: !key.enabled }) }); toast('Key 已更新'); await load() }
-  catch (value: any) { error.value = value.message }
-}
-function startEdit(channel: any) {
-  editing.value = channel.id
-  editForm.value = {
-    name: channel.name, provider: channel.provider, protocol: channel.protocol, baseUrl: channel.baseUrl,
-    priority: String(channel.priority ?? 0), weight: String(channel.weight ?? 1),
-    timeoutMs: String(channel.timeoutMs ?? 300000), maxRetries: String(channel.maxRetries ?? 1),
-    keySelection: channel.keySelection || 'WEIGHTED_RANDOM'
-  }
-}
-async function saveEdit(id: string) {
-  try {
-    await api(`/api/v1/admin/channels/${id}`, { method: 'PATCH', body: JSON.stringify({
-      name: editForm.value.name, provider: editForm.value.provider, protocol: editForm.value.protocol, baseUrl: editForm.value.baseUrl,
-      priority: Number(editForm.value.priority) || 0, weight: Number(editForm.value.weight) || 1,
-      timeoutMs: Number(editForm.value.timeoutMs) || 300000, maxRetries: Number(editForm.value.maxRetries) || 0,
-      keySelection: editForm.value.keySelection
-    }) })
-    editing.value = null
-    toast('渠道已保存')
-    await load()
-  } catch (value: any) { error.value = value.message }
-}
+function setOffset(offset: number) { filters.offset = offset; load() }
+let timer: number | undefined
+watch(() => [filters.q, filters.provider, filters.protocol, filters.health, filters.enabled], () => {
+  filters.offset = 0; window.clearTimeout(timer); timer = window.setTimeout(load, 250)
+})
 onMounted(load)
 </script>
 
 <template>
-  <header class="page-header"><div><p>UCLI CONTROL PLANE</p><h1>渠道与 Key</h1></div><button @click="load">刷新数据</button></header>
-  <p v-if="loading" class="state">正在加载…</p>
-  <p v-else-if="error" class="state error">{{ error }}</p>
-  <template v-else>
-    <section class="panel form-panel">
-      <h2>新建渠道</h2>
-      <div class="form-row">
-        <input v-model="form.name" placeholder="名称（如 OpenAI）">
-        <input v-model="form.provider" placeholder="供应商（如 openai）">
-        <select v-model="form.protocol"><option value="OPENAI">OPENAI</option><option value="ANTHROPIC">ANTHROPIC</option><option value="GEMINI">GEMINI</option></select>
-        <input v-model="form.baseUrl" placeholder="baseUrl（OpenAI 兼容端点，如 https://api.deepseek.com）">
-        <select v-model="form.keySelection"><option value="WEIGHTED_RANDOM">加权随机</option><option value="ROUND_ROBIN">轮询</option></select>
-        <input v-model="form.priority" type="number" placeholder="优先级">
-        <input v-model="form.weight" type="number" placeholder="权重">
-        <input v-model="form.timeoutMs" type="number" placeholder="超时ms">
-        <input v-model="form.maxRetries" type="number" placeholder="重试次数">
-        <button class="primary" @click="create">新建渠道</button>
-      </div>
-    </section>
-    <section class="panel">
-      <h2>渠道列表</h2>
-      <p v-if="notice" class="state">{{ notice }}</p>
-      <table v-if="channels.length">
-        <thead><tr><th>名称</th><th>供应商</th><th>协议</th><th>baseUrl</th><th>健康</th><th>状态</th><th>Keys / 添加</th><th>操作</th></tr></thead>
-        <tbody>
-          <template v-for="channel in channels" :key="channel.id">
-          <tr>
-            <td>{{ channel.name }}</td>
-            <td>{{ channel.provider }}</td>
-            <td>{{ channel.protocol }}</td>
-            <td class="mono">{{ channel.baseUrl }}</td>
-            <td><i :class="channel.health === 'HEALTHY' ? 'ok' : 'bad'"></i>{{ channel.health }}</td>
-            <td>{{ channel.enabled ? '启用' : '停用' }}</td>
-            <td>
-              <div class="keys"><span v-for="key in channel.keys" :key="key.id" class="key-chip">…{{ key.suffix }}<i :class="key.enabled ? 'ok' : 'bad'"></i><button @click="toggleKey(channel.id, key)">{{ key.enabled ? '停用' : '启用' }}</button></span><span v-if="!channel.keys.length" class="mono">无</span></div>
-              <div class="inline"><input v-model="keyInput[channel.id]" placeholder="粘贴 API Key"><button @click="addKey(channel.id)">添加</button></div>
-            </td>
-            <td>
-              <div class="actions">
-                <button @click="toggle(channel)">{{ channel.enabled ? '停用' : '启用' }}</button>
-                <button @click="test(channel.id)">测试</button>
-                <button @click="startEdit(channel)">编辑</button>
-              </div>
-            </td>
-          </tr>
-          <tr v-if="editing === channel.id">
-            <td colspan="8">
-              <div class="inline">
-                <input v-model="editForm.name" placeholder="名称">
-                <input v-model="editForm.provider" placeholder="供应商">
-                <select v-model="editForm.protocol"><option value="OPENAI">OPENAI</option><option value="ANTHROPIC">ANTHROPIC</option><option value="GEMINI">GEMINI</option></select>
-                <input v-model="editForm.baseUrl" placeholder="baseUrl">
-                <select v-model="editForm.keySelection"><option value="WEIGHTED_RANDOM">加权随机</option><option value="ROUND_ROBIN">轮询</option></select>
-                <input v-model="editForm.priority" type="number" placeholder="优先级">
-                <input v-model="editForm.weight" type="number" placeholder="权重">
-                <input v-model="editForm.timeoutMs" type="number" placeholder="超时ms">
-                <input v-model="editForm.maxRetries" type="number" placeholder="重试次数">
-                <button class="primary" @click="saveEdit(channel.id)">保存</button>
-                <button @click="editing = null">取消</button>
-              </div>
-            </td>
-          </tr>
-          </template>
-        </tbody>
-      </table>
-      <p v-else class="empty">暂无渠道，请先在上方新建</p>
-    </section>
-  </template>
+  <header class="page-header"><div><p>MODEL SUPPLY</p><h1>渠道管理</h1><span class="subtitle">维护供应商连接、渠道模型、Key 与健康状态</span></div>
+    <div class="actions"><button @click="load">刷新</button><button class="primary" @click="createOpen = true">创建渠道</button></div></header>
+  <section class="panel toolbar"><input v-model="filters.q" placeholder="搜索渠道名称或供应商"><input v-model="filters.provider" placeholder="供应商">
+    <select v-model="filters.protocol"><option value="">全部协议</option><option>OPENAI</option><option>ANTHROPIC</option><option>GEMINI</option></select>
+    <select v-model="filters.health"><option value="">全部健康状态</option><option>HEALTHY</option><option>DEGRADED</option><option>UNHEALTHY</option><option>DISABLED</option></select>
+    <select v-model="filters.enabled"><option value="">全部启停状态</option><option value="true">已启用</option><option value="false">已停用</option></select></section>
+  <p v-if="loading" class="state">正在加载渠道…</p><p v-else-if="error" class="state error">{{ error }}</p>
+  <section v-else class="panel table-panel"><table v-if="result.items.length"><thead><tr><th>渠道</th><th>协议 / 地址</th><th>健康</th><th>资源</th><th>近 24 小时</th><th>操作</th></tr></thead>
+    <tbody><tr v-for="channel in result.items" :key="channel.id" class="clickable-row" @click="router.push(`/channels/${channel.id}`)">
+      <td><strong>{{ channel.name }}</strong><small>{{ channel.provider }} · 优先级 {{ channel.priority }} / 权重 {{ channel.weight }}</small></td>
+      <td><span class="chip">{{ channel.protocol }}</span><small class="mono truncate">{{ channel.baseUrl }}</small></td>
+      <td><StatusBadge :status="channel.enabled ? channel.health : 'DISABLED'" /><small>{{ channel.lastTestedAt ? `检测于 ${new Date(channel.lastTestedAt).toLocaleString()}` : '尚未检测' }}</small></td>
+      <td><strong>{{ channel.healthyModels }}/{{ channel.modelCount }} 模型</strong><small>{{ channel.availableKeys }} 个可用 Key</small></td>
+      <td><strong>{{ channel.usage24h.requests.toLocaleString() }} 请求</strong><small>成功率 {{ (channel.usage24h.successRate * 100).toFixed(1) }}% · P95 {{ channel.usage24h.p95LatencyMs ?? '—' }}ms</small></td>
+      <td><button @click.stop="pendingToggle = channel">{{ channel.enabled ? '停用' : '启用' }}</button></td>
+    </tr></tbody></table><p v-else class="empty">没有符合条件的渠道</p><Pagination v-bind="result" @change="setOffset" /></section>
+
+  <Drawer :open="createOpen" title="创建渠道" @close="createOpen = false"><div class="stack-form"><label>渠道名称<input v-model="form.name" placeholder="例如 OpenAI 主渠道"></label><label>供应商<input v-model="form.provider" placeholder="例如 openai"></label>
+    <label>协议<select v-model="form.protocol"><option>OPENAI</option><option>ANTHROPIC</option><option>GEMINI</option></select></label><label>Base URL<input v-model="form.baseUrl" placeholder="https://api.example.com"></label>
+    <label>成本时区<input v-model="form.costTimezone" placeholder="UTC / Asia/Shanghai"></label><details><summary>高级路由设置</summary><div class="form-row"><label>优先级<input v-model.number="form.priority" type="number"></label><label>权重<input v-model.number="form.weight" type="number" min="1"></label><label>超时 ms<input v-model.number="form.timeoutMs" type="number"></label><label>重试次数<input v-model.number="form.maxRetries" type="number"></label></div></details></div>
+    <template #footer><button @click="createOpen = false">取消</button><button class="primary" @click="create">创建渠道</button></template></Drawer>
+  <ConfirmDialog :open="Boolean(pendingToggle)" :title="pendingToggle?.enabled ? '停用渠道' : '启用渠道'" :message="pendingToggle?.enabled ? '停用后该渠道不会参与新请求路由。' : '启用后健康的渠道模型可以参与路由。'" :danger="pendingToggle?.enabled" @confirm="confirmToggle" @cancel="pendingToggle = null" />
 </template>

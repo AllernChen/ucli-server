@@ -11,7 +11,7 @@ const password = ref('')
 const error = ref('')
 const loggedIn = ref(Boolean(localStorage.getItem('ucli.accessToken')))
 const navigation = [
-  ['overview', '服务总览'], ['channels', '渠道与 Key'], ['models', '模型目录'],
+  ['overview', '服务总览'], ['channels', '渠道管理'], ['models', '模型目录'],
   ['usage', '使用日志'], ['skills', '技能超市'], ['reports', '运营报告'],
   ['governance', '治理'], ['organizations', '组织']
 ]
@@ -70,7 +70,7 @@ async function changePassword() {
   </main>
   <div v-else class="shell">
     <aside><header><div class="brand-mark">U</div><div><strong>UCLI</strong><small>Server Console</small></div></header>
-      <nav><button v-for="item in navigation" :key="item[0]" :class="{active: route.name === item[0]}" @click="router.push(item[0] === 'overview' ? '/' : `/${item[0]}`)">{{ item[1] }}</button></nav>
+      <nav><button v-for="item in navigation" :key="item[0]" :class="{active: route.name === item[0] || String(route.name || '').startsWith(`${item[0].replace(/s$/, '')}-`)}" @click="router.push(item[0] === 'overview' ? '/' : `/${item[0]}`)">{{ item[1] }}</button></nav>
       <button class="logout" @click="openPasswordModal">修改密码</button>
       <button class="logout" @click="logout">退出登录</button>
     </aside>
