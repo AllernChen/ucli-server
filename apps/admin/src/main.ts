@@ -4,6 +4,7 @@ import App from './App.vue'
 import './styles.css'
 import './forms.css'
 import './model-test.css'
+import './analytics.css'
 import Dashboard from './Dashboard.vue'
 import Channels from './views/Channels.vue'
 import Models from './views/Models.vue'
@@ -26,6 +27,7 @@ const routes = [
   { path: '/models', name: 'models', component: Models },
   { path: '/models/:id', name: 'model-detail', component: ModelDetail },
   { path: '/model-test', name: 'model-test', component: ModelTest },
+  { path: '/analytics', name: 'analytics', component: () => import('./views/Analytics.vue') },
   { path: '/skills', name: 'skills', component: Skills },
   { path: '/reports', name: 'reports', component: Reports },
   { path: '/governance', name: 'governance', component: Governance },

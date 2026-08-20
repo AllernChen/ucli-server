@@ -108,7 +108,9 @@ export class AnalyticsService {
         COALESCE(SUM(u.cost_usd), 0)::numeric AS cost_usd,
         percentile_cont(0.95) WITHIN GROUP (ORDER BY u.duration_ms) AS p95_latency_ms,
         AVG(NULLIF((u.cost_snapshot->>'inputPerMillion')::numeric, 0)) AS avg_input_per_million,
-        AVG(NULLIF((u.cost_snapshot->>'outputPerMillion')::numeric, 0)) AS avg_output_per_million
+        AVG(NULLIF((u.cost_snapshot->>'outputPerMillion')::numeric, 0)) AS avg_output_per_million,
+        MAX(cr.days_of_week::text) AS schedule_days, MAX(cr.start_minute) AS schedule_start_minute,
+        MAX(cr.end_minute) AS schedule_end_minute
       FROM usage_logs u
       LEFT JOIN organizations o ON o.id = u.organization_id LEFT JOIN channels c ON c.id = u.channel_id
       LEFT JOIN public_models pm ON pm.id = u.public_model_id LEFT JOIN channel_models cm ON cm.id = u.channel_model_id
@@ -119,7 +121,9 @@ export class AnalyticsService {
       successRate: integer(row.requests) ? integer(row.successes) / integer(row.requests) : 0,
       totalTokens: String(row.total_tokens || 0), costUsd: money(row.cost_usd), p95LatencyMs: nullableInteger(row.p95_latency_ms),
       avgInputPerMillion: row.avg_input_per_million === null ? null : money(row.avg_input_per_million),
-      avgOutputPerMillion: row.avg_output_per_million === null ? null : money(row.avg_output_per_million) })), limit, offset }
+      avgOutputPerMillion: row.avg_output_per_million === null ? null : money(row.avg_output_per_million),
+      schedule: row.schedule_days ? { daysOfWeek: String(row.schedule_days).replace(/[{}]/g, '').split(',').filter(Boolean).map(Number),
+        startMinute: integer(row.schedule_start_minute), endMinute: integer(row.schedule_end_minute) } : null })), limit, offset }
   }
 
   async filterOptions(principal: AnalyticsPrincipal, query: Record<string, any>) {
