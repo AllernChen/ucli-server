@@ -4,16 +4,90 @@ import { encryptSecret, secretSuffix } from '../../../packages/security/src/enve
 import { loadMasterKey } from '../../../packages/security/src/master-key.js'
 import { decryptSecret } from '../../../packages/security/src/envelope-crypto.js'
 
+export interface ChannelListFilter {
+  limit?: number
+  offset?: number
+  q?: string
+  provider?: string
+  protocol?: 'OPENAI' | 'ANTHROPIC' | 'GEMINI'
+  health?: 'HEALTHY' | 'DEGRADED' | 'UNHEALTHY' | 'DISABLED'
+  enabled?: boolean
+}
+
 @Injectable()
 export class ChannelsService {
   constructor(private readonly prisma: PrismaService) {}
-  list() { return this.prisma.channel.findMany({ include: { channelModels: true, keys: { select: {
-    id: true, suffix: true, enabled: true, health: true, priority: true, weight: true, remainingUsd: true, expiresAt: true
-  } } }, orderBy: [{ priority: 'desc' }, { name: 'asc' }] }) }
+  async list(filter: ChannelListFilter = {}) {
+    const limit = Math.min(200, Math.max(1, filter.limit ?? 50))
+    const offset = Math.max(0, filter.offset ?? 0)
+    const where: any = {
+      ...(filter.q ? { OR: [{ name: { contains: filter.q, mode: 'insensitive' } }, { provider: { contains: filter.q, mode: 'insensitive' } }] } : {}),
+      ...(filter.provider ? { provider: filter.provider } : {}), ...(filter.protocol ? { protocol: filter.protocol } : {}),
+      ...(filter.health ? { health: filter.health } : {}), ...(filter.enabled !== undefined ? { enabled: filter.enabled } : {})
+    }
+    const [channels, total] = await Promise.all([
+      this.prisma.channel.findMany({ where, include: {
+        channelModels: { select: { id: true, health: true, enabled: true } }, keys: { select: {
+          id: true, suffix: true, enabled: true, health: true, priority: true, weight: true, remainingUsd: true, expiresAt: true
+        } }
+      }, orderBy: [{ priority: 'desc' }, { name: 'asc' }], skip: offset, take: limit }),
+      this.prisma.channel.count({ where })
+    ])
+    const ids = channels.map(channel => channel.id)
+    const logs = ids.length ? await this.prisma.usageLog.findMany({
+      where: { channelId: { in: ids }, startedAt: { gte: new Date(Date.now() - 86_400_000) } },
+      select: { channelId: true, statusCode: true, durationMs: true }
+    }) : []
+    const items = channels.map(channel => {
+      const usage = logs.filter(log => log.channelId === channel.id)
+      const durations = usage.map(log => log.durationMs).sort((left, right) => left - right)
+      const { keys, channelModels, ...summary } = channel as any
+      return {
+        ...summary, availableKeys: keys.filter((key: any) => key.enabled && key.health !== 'DISABLED').length,
+        healthyModels: channelModels.filter((model: any) => model.enabled && (model.health === 'HEALTHY' || model.health === 'DEGRADED')).length,
+        modelCount: channelModels.length,
+        usage24h: {
+          requests: usage.length, successRate: usage.length ? usage.filter(log => log.statusCode < 400).length / usage.length : 0,
+          p95LatencyMs: durations.length ? durations[Math.min(durations.length - 1, Math.ceil(durations.length * 0.95) - 1)] : null
+        }
+      }
+    })
+    return { items, total, limit, offset }
+  }
+
+  async detail(id: string) {
+    const channel = await this.prisma.channel.findUnique({ where: { id }, include: {
+      keys: { select: { id: true, suffix: true, enabled: true, health: true, priority: true, weight: true, remainingUsd: true,
+        expiresAt: true, isolatedUntil: true, lastUsedAt: true } },
+      channelModels: { include: { costRules: { where: { enabled: true }, orderBy: [{ priority: 'desc' }, { validFrom: 'desc' }] } } }
+    } })
+    if (!channel) throw new NotFoundException('Channel not found')
+    const safeKeys = (channel.keys as any[]).map(({ ciphertext: _ciphertext, iv: _iv, tag: _tag, ...key }) => key)
+    return { ...channel, keys: safeKeys }
+  }
+  async discoverModels(id: string) {
+    const channel = await this.prisma.channel.findUnique({ where: { id }, include: { keys: true, channelModels: true } })
+    if (!channel) throw new NotFoundException('Channel not found')
+    const key = channel.keys.find(item => item.enabled && item.health !== 'DISABLED')
+    if (!key) throw new BadRequestException('Channel requires an enabled key')
+    const plaintext = decryptSecret({ algorithm: 'aes-256-gcm', ciphertext: key.ciphertext, iv: key.iv, tag: key.tag }, loadMasterKey())
+    const base = channel.baseUrl.endsWith('/') ? channel.baseUrl : `${channel.baseUrl}/`
+    const headers: Record<string, string> = channel.protocol === 'ANTHROPIC'
+      ? { 'x-api-key': plaintext, 'anthropic-version': '2023-06-01' }
+      : channel.protocol === 'GEMINI' ? { 'x-goog-api-key': plaintext } : { authorization: `Bearer ${plaintext}` }
+    const response = await fetch(channel.protocol === 'GEMINI' ? new URL('v1beta/models', base) : new URL('v1/models', base), { headers })
+    if (!response.ok) throw new BadRequestException(`Upstream model discovery failed with status ${response.status}`)
+    const payload: any = await response.json()
+    const ids = channel.protocol === 'GEMINI'
+      ? (payload.models || []).map((model: any) => String(model.name || '').replace(/^models\//, ''))
+      : (payload.data || []).map((model: any) => String(model.id || ''))
+    const mapped = new Set(channel.channelModels.map(model => model.upstreamModel))
+    return [...new Set(ids.filter(Boolean) as string[])].sort().map(upstreamModel => ({ upstreamModel, alreadyMapped: mapped.has(upstreamModel) }))
+  }
   create(body: any) { return this.prisma.channel.create({ data: {
     name: body.name, provider: body.provider, protocol: body.protocol, baseUrl: body.baseUrl,
     priority: body.priority ?? 0, weight: body.weight ?? 1, timeoutMs: body.timeoutMs ?? 300000,
-    maxRetries: body.maxRetries ?? 1, keySelection: body.keySelection ?? 'WEIGHTED_RANDOM'
+    maxRetries: body.maxRetries ?? 1, keySelection: body.keySelection ?? 'WEIGHTED_RANDOM', costTimezone: body.costTimezone ?? 'UTC'
   } }) }
   async addKey(channelId: string, body: any) {
     if (!await this.prisma.channel.findUnique({ where: { id: channelId } })) throw new NotFoundException('Channel not found')
@@ -64,7 +138,8 @@ export class ChannelsService {
       ...(body.timeoutMs !== undefined ? { timeoutMs: body.timeoutMs } : {}),
       ...(body.maxRetries !== undefined ? { maxRetries: body.maxRetries } : {}),
       ...(body.keySelection !== undefined ? { keySelection: body.keySelection } : {}),
-      ...(body.autoDisable !== undefined ? { autoDisable: body.autoDisable } : {})
+      ...(body.autoDisable !== undefined ? { autoDisable: body.autoDisable } : {}),
+      ...(body.costTimezone !== undefined ? { costTimezone: body.costTimezone } : {})
     } })
   }
   async updateKey(channelId: string, keyId: string, body: any) {

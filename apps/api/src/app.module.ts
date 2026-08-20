@@ -17,9 +17,11 @@ import { ObjectStorageService } from '../../../packages/storage/src/object-stora
 import { MetricsController } from '../../../packages/monitoring/src/metrics.controller.js'
 import { OrganizationsController } from './organizations.controller.js'
 import { AuditInterceptor } from '../../../packages/http/src/audit.interceptor.js'
+import { ChannelModelsController } from './channel-models.controller.js'
+import { ChannelModelsService } from './channel-models.service.js'
 
 @Module({
-  controllers: [AuthController, ChannelsController, ClientController, ModelsController, UsageController, SkillsController, ReportsController, GovernanceController, MonitoringController, MetricsController, OrganizationsController],
-  providers: [PrismaService, AuthService, ChannelsService, AuthGuard, ObjectStorageService, AuditInterceptor]
+  controllers: [AuthController, ChannelsController, ChannelModelsController, ClientController, ModelsController, UsageController, SkillsController, ReportsController, GovernanceController, MonitoringController, MetricsController, OrganizationsController],
+  providers: [PrismaService, AuthService, ChannelsService, ChannelModelsService, AuthGuard, ObjectStorageService, AuditInterceptor]
 })
 export class AppModule {}

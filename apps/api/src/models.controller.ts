@@ -2,11 +2,12 @@ import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post,
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import { AuthGuard, Roles } from '../../../packages/security/src/auth.js'
+import { ChannelModelsService } from './channel-models.service.js'
 
 @ApiTags('admin/models') @ApiBearerAuth() @UseGuards(AuthGuard) @Roles('PLATFORM_ADMIN')
 @Controller('api/v1/admin/models')
 export class ModelsController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly channelModels: ChannelModelsService) {}
   @Get() async list() {
     const models = await this.prisma.publicModel.findMany({ include: { channelModels: true, prices: true } })
     return models.map(({ channelModels, ...model }) => ({ ...model, abilities: channelModels }))
@@ -28,12 +29,11 @@ export class ModelsController {
     } })
   }
   @Post(':id/publish') async publish(@Param('id') id: string) {
-    const healthy = await this.prisma.channelModel.count({ where: {
-      publicModelId: id, enabled: true, channel: { enabled: true, health: { in: ['HEALTHY', 'DEGRADED'] } }
-    } })
-    if (!healthy) throw new BadRequestException('Model has no healthy channel ability')
+    const check = await this.channelModels.publishCheck(id)
+    if (!check.ready) throw new BadRequestException({ message: 'Model is not ready to publish', blockers: check.blockers })
     return this.prisma.publicModel.update({ where: { id }, data: { enabled: true } })
   }
+  @Post(':id/publish-check') publishCheck(@Param('id') id: string) { return this.channelModels.publishCheck(id) }
   @Patch(':id') update(@Param('id') id: string, @Body() body: any) {
     return this.prisma.publicModel.update({ where: { id }, data: {
       ...(body.displayName !== undefined ? { displayName: body.displayName } : {}),
