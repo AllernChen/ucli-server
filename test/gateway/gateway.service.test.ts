@@ -15,12 +15,19 @@ function makeKey() {
     enabled: true, health: 'HEALTHY', remainingUsd: null, expiresAt: null, isolatedUntil: null, lastUsedAt: null }
 }
 
-function makeAbility() {
-  return { channelId: 'ch1', publicModelId: 'gpt-4o', upstreamModel: 'gpt-4o-up', protocol: 'OPENAI_CHAT',
+function makeAbility(overrides: Record<string, any> = {}) {
+  const channelId = overrides.channelId || 'ch1'
+  const inputPerMillion = overrides.inputPerMillion || '1'
+  const outputPerMillion = overrides.outputPerMillion || '2'
+  return { id: overrides.id || 'cm1', channelId, publicModelId: 'gpt-4o', upstreamModel: overrides.upstreamModel || 'gpt-4o-up', protocol: 'OPENAI_CHAT',
     supportsStream: true, supportsTools: true, enabled: true,
-    channel: { id: 'ch1', priority: 0, weight: 1, health: 'HEALTHY', enabled: true, circuitOpenUntil: null,
+    costRules: overrides.costRules ?? [{ id: overrides.costRuleId || 'cr1', priority: 0, daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+      startMinute: 0, endMinute: 0, validFrom: new Date('2026-01-01T00:00:00Z'), validUntil: null,
+      createdAt: new Date('2026-01-01T00:00:00Z'), enabled: true, currency: 'USD', inputPerMillion,
+      outputPerMillion, cachedPerMillion: '0', reasoningPerMillion: '0' }],
+    channel: { id: channelId, priority: overrides.priority ?? 0, weight: 1, health: 'HEALTHY', enabled: true, circuitOpenUntil: null,
       baseUrl: 'https://upstream.example', timeoutMs: 1000, maxRetries: 0, keySelection: 'WEIGHTED_RANDOM',
-      keys: [makeKey()] } }
+      costTimezone: 'UTC', keys: [{ ...makeKey(), id: overrides.keyId || 'k1', channelId }] }, ...overrides.model }
 }
 
 function makeHarness(overrides: { prisma?: Record<string, any>; quota?: Record<string, any> } = {}) {
@@ -51,7 +58,7 @@ function makeResponse() {
   return { status: vi.fn(), setHeader: vi.fn(), send: vi.fn(), end: vi.fn(), once: vi.fn(), writableFinished: true }
 }
 
-afterEach(() => { vi.unstubAllGlobals() })
+afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 
 describe('gateway service orchestration', () => {
   it('relays a successful request, writes usage and marks the channel healthy', async () => {
@@ -68,6 +75,11 @@ describe('gateway service orchestration', () => {
     expect(data.inputTokens).toBe(7)
     expect(data.outputTokens).toBe(2)
     expect(data.usageSource).toBe('UPSTREAM')
+    expect(data.channelModelId).toBe('cm1')
+    expect(data.channelCostRuleId).toBe('cr1')
+    expect(data.priceVersionId).toBeUndefined()
+    expect(data.costUsd).toBe('0.00001100')
+    expect(data.costSnapshot).toMatchObject({ source: 'CHANNEL_COST_RULE', inputPerMillion: '1', outputPerMillion: '2', currency: 'USD', timezone: 'UTC' })
     expect(prisma.channelKey.updateMany).toHaveBeenCalled()
     expect(prisma.channel.update).toHaveBeenCalled()
   })
@@ -97,7 +109,45 @@ describe('gateway service orchestration', () => {
     const data = prisma.usageLog.create.mock.calls[0][0].data
     expect(data.statusCode).toBe(503)
     expect(data.routeAttempts).toBe(1)
+    expect(data.channelModelId).toBe('cm1')
+    expect(data.costUsd).toBe('0')
     expect(prisma.channelKey.updateMany).toHaveBeenCalled()
     expect(prisma.channel.update).toHaveBeenCalled()
+  })
+
+  it('uses the public model price only as a compatibility fallback', async () => {
+    const { service, prisma } = makeHarness({ prisma: { channelModel: { findMany: vi.fn().mockResolvedValue([makeAbility({ costRules: [] })]) } } })
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ usage: { prompt_tokens: 1, completion_tokens: 1 } }), { status: 200 }))
+    await service.relay({ protocol: 'openai_chat', body: { model: 'gpt-4o', messages: [] }, headers: {}, principal, response: makeResponse() as any })
+    const data = prisma.usageLog.create.mock.calls[0][0].data
+    expect(data.channelCostRuleId).toBeUndefined()
+    expect(data.priceVersionId).toBe('p1')
+    expect(data.costSnapshot).toMatchObject({ source: 'PUBLIC_MODEL_FALLBACK', inputPerMillion: '1', outputPerMillion: '2' })
+  })
+
+  it('reserves the maximum candidate procurement cost but settles the actual selected candidate cost', async () => {
+    const cheap = makeAbility({ id: 'cm-cheap', costRuleId: 'cr-cheap', priority: 10, inputPerMillion: '1', outputPerMillion: '4' })
+    const expensive = makeAbility({ id: 'cm-expensive', channelId: 'ch2', keyId: 'k2', costRuleId: 'cr-expensive', inputPerMillion: '3', outputPerMillion: '2' })
+    const policy = { id: 'q1', dailyTokens: 100000n }
+    const { service, quota, prisma } = makeHarness({ prisma: {
+      channelModel: { findMany: vi.fn().mockResolvedValue([cheap, expensive]) },
+      quotaPolicy: { findMany: vi.fn().mockResolvedValue([policy]) }
+    } })
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ usage: { prompt_tokens: 10, completion_tokens: 5 } }), { status: 200 }))
+    const body = { model: 'gpt-4o', messages: [], max_tokens: 100 }
+    await service.relay({ protocol: 'openai_chat', body, headers: {}, principal, response: makeResponse() as any })
+    const estimatedInput = Buffer.byteLength(JSON.stringify(body), 'utf8')
+    expect(quota.reserve.mock.calls[0][1].costMicroUsd).toBe(Math.round((estimatedInput * 3 + 100 * 4) / 1_000_000 * 1_000_000))
+    expect(quota.settle.mock.calls[0][1].costMicroUsd).toBe(30)
+    expect(prisma.usageLog.create.mock.calls[0][0].data).toMatchObject({ channelModelId: 'cm-cheap', channelCostRuleId: 'cr-cheap', costUsd: '0.00003000' })
+  })
+
+  it('does not route a candidate when neither channel nor fallback procurement cost exists', async () => {
+    const { service } = makeHarness({ prisma: {
+      publicModel: { findFirst: vi.fn().mockResolvedValue({ id: 'gpt-4o', enabled: true, policies: [], prices: [] }) },
+      channelModel: { findMany: vi.fn().mockResolvedValue([makeAbility({ costRules: [] })]) }
+    } })
+    await expect(service.relay({ protocol: 'openai_chat', body: { model: 'gpt-4o', messages: [] }, headers: {}, principal, response: makeResponse() as any }))
+      .rejects.toBeInstanceOf(ServiceUnavailableException)
   })
 })

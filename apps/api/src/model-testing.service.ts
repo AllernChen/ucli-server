@@ -102,8 +102,12 @@ export class ModelTestingService {
       const result = await relayRequest({
         candidates: [{
           channelId: channelModel.channelId, keyId: key.id, baseUrl: channelModel.channel.baseUrl,
+          channelModelId: channelModel.id,
           apiKey, upstreamModel: channelModel.upstreamModel, protocol: PROTOCOLS[channelModel.protocol as PrismaProtocol],
-          maxRetries: channelModel.channel.maxRetries, timeoutMs: Math.min(channelModel.channel.timeoutMs, 30_000)
+          maxRetries: channelModel.channel.maxRetries, timeoutMs: Math.min(channelModel.channel.timeoutMs, 30_000),
+          cost: { id: 'health-check', source: 'PUBLIC_MODEL_FALLBACK', currency: 'USD', timezone: 'UTC',
+            resolvedAt: new Date(started).toISOString(), inputPerMillion: '0', outputPerMillion: '0',
+            cachedPerMillion: '0', reasoningPerMillion: '0' }
         }],
         body: probeBody(channelModel.protocol), fetcher: this.injectedFetcher ?? fetch
       })

@@ -3,9 +3,11 @@ import { Readable } from 'node:stream'
 import { geminiResponseToOpenAI, geminiUrl, GeminiStreamTranslator, toGeminiRequest } from './gemini.js'
 import type { GatewayProtocol, NormalizedUsage } from './protocol.js'
 import { normalizeUsage, retryableBeforeResponse, upstreamUrl } from './protocol.js'
+import type { ResolvedCost } from './cost-schedule.js'
 
 export interface RelayCandidate {
   channelId: string
+  channelModelId: string
   keyId: string
   baseUrl: string
   apiKey: string
@@ -13,6 +15,7 @@ export interface RelayCandidate {
   protocol: GatewayProtocol
   maxRetries: number
   timeoutMs: number
+  cost: ResolvedCost
 }
 
 export interface RelayResult {

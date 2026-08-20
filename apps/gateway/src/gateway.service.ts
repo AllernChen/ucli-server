@@ -15,6 +15,7 @@ import { RedisQuotaService } from '../../../packages/quota/src/redis-quota.js'
 import { recordQuotaRejection, recordQuotaSettlement } from '../../../packages/monitoring/src/quota-metrics.js'
 import { StreamUsageCollector } from '../../../packages/gateway-core/src/stream-usage.js'
 import { canAccessModel, type ModelAccessPrincipal } from '../../../packages/gateway-core/src/access-policy.js'
+import { highestReservationCost, resolveChannelCost, type ResolvedCost, type ScheduledCost } from '../../../packages/gateway-core/src/cost-schedule.js'
 
 const PRISMA_PROTOCOL: Record<GatewayProtocol, PrismaProtocol> = {
   openai_responses: 'OPENAI_RESPONSES', openai_chat: 'OPENAI_CHAT', anthropic_messages: 'ANTHROPIC_MESSAGES', gemini: 'GEMINI'
@@ -43,11 +44,11 @@ export class GatewayService {
       .map(({ id, displayName, contextSize }) => ({ id, displayName, contextSize }))
   }
 
-  private async candidates(publicModelId: string, protocol: GatewayProtocol): Promise<RelayCandidate[]> {
+  private async candidates(publicModelId: string, protocol: GatewayProtocol, at: Date, fallbackPrice?: any): Promise<RelayCandidate[]> {
     const abilities = await this.prisma.channelModel.findMany({ where: {
       publicModelId, protocol: { in: CLIENT_UPSTREAMS[protocol] }, enabled: true,
       channel: { enabled: true, health: { in: ['HEALTHY', 'DEGRADED'] }, OR: [{ circuitOpenUntil: null }, { circuitOpenUntil: { lt: new Date() } }] }
-    }, include: { channel: { include: { keys: true } } } })
+    }, include: { costRules: true, channel: { include: { keys: true } } } })
     const remaining = [...abilities]
     const result: RelayCandidate[] = []
     while (remaining.length) {
@@ -65,11 +66,23 @@ export class GatewayService {
         ? selectKeyRoundRobin(keyCandidates, Math.floor(Date.now() / 1000))
         : selectKey(keyCandidates)
       if (!key) continue
+      const rules: ScheduledCost[] = ability.costRules.map(rule => ({
+        ...rule, inputPerMillion: rule.inputPerMillion.toString(), outputPerMillion: rule.outputPerMillion.toString(),
+        cachedPerMillion: rule.cachedPerMillion.toString(), reasoningPerMillion: rule.reasoningPerMillion.toString()
+      }))
+      const scheduled = resolveChannelCost(rules, at, ability.channel.costTimezone)
+      const cost: ResolvedCost | null = scheduled || (fallbackPrice ? {
+        id: fallbackPrice.id, source: 'PUBLIC_MODEL_FALLBACK', currency: 'USD', timezone: ability.channel.costTimezone,
+        resolvedAt: at.toISOString(), inputPerMillion: fallbackPrice.inputPerMillion.toString(),
+        outputPerMillion: fallbackPrice.outputPerMillion.toString(), cachedPerMillion: fallbackPrice.cachedPerMillion.toString(),
+        reasoningPerMillion: fallbackPrice.reasoningPerMillion.toString()
+      } : null)
+      if (!cost) continue
       const apiKey = decryptSecret({ algorithm: 'aes-256-gcm', ciphertext: key.ciphertext, iv: key.iv, tag: key.tag }, loadMasterKey())
       result.push({
-        channelId: ability.channel.id, keyId: key.id, baseUrl: ability.channel.baseUrl,
+        channelId: ability.channel.id, channelModelId: ability.id, keyId: key.id, baseUrl: ability.channel.baseUrl,
         apiKey, upstreamModel: ability.upstreamModel, protocol: PRISMA_TO_PROTOCOL[ability.protocol],
-        maxRetries: ability.channel.maxRetries, timeoutMs: ability.channel.timeoutMs
+        maxRetries: ability.channel.maxRetries, timeoutMs: ability.channel.timeoutMs, cost
       })
     }
     return result
@@ -84,17 +97,18 @@ export class GatewayService {
   }): Promise<void> {
     const publicModelId = String(body?.model || '')
     if (!publicModelId) throw new NotFoundException('Model is required')
+    const startedAt = new Date()
     const model = await this.prisma.publicModel.findFirst({ where: { id: publicModelId, enabled: true }, include: {
       policies: true,
-      prices: { where: { validFrom: { lte: new Date() }, OR: [{ validUntil: null }, { validUntil: { gt: new Date() } }] }, orderBy: { validFrom: 'desc' }, take: 1 }
+      prices: { where: { validFrom: { lte: startedAt }, OR: [{ validUntil: null }, { validUntil: { gt: startedAt } }] }, orderBy: { validFrom: 'desc' }, take: 1 }
     } })
     if (!model || !canAccessModel(model.policies, { organizationId: principal.organizationId, accountId: principal.sub, role: principal.role })) {
       throw new NotFoundException('Model is unavailable')
     }
-    const candidates = await this.candidates(publicModelId, protocol)
+    const price = model.prices[0]
+    const candidates = await this.candidates(publicModelId, protocol, startedAt, price)
     if (!candidates.length) throw new ServiceUnavailableException('No healthy model channel')
     const context = parseUcliContext(headers)
-    const startedAt = new Date()
     const policies = await this.prisma.quotaPolicy.findMany({ where: {
       OR: [
         { organizationId: principal.organizationId, accountId: null, publicModelId: null },
@@ -107,13 +121,10 @@ export class GatewayService {
     const estimatedInputTokens = Math.max(1, Buffer.byteLength(JSON.stringify(body), 'utf8'))
     const estimatedOutputTokens = Math.max(1, Number(body.max_output_tokens ?? body.max_tokens ?? 4096))
     const estimateTokens = estimatedInputTokens + estimatedOutputTokens
-    const price = model.prices[0]
-    const estimatedCost = price ? calculateCost({
+    const reservationCost = highestReservationCost(candidates.map(candidate => candidate.cost))
+    const estimatedCost = reservationCost ? calculateCost({
       inputTokens: estimatedInputTokens, outputTokens: estimatedOutputTokens, cachedTokens: 0, reasoningTokens: 0, source: 'estimated'
-    }, {
-      inputPerMillion: price.inputPerMillion.toString(), outputPerMillion: price.outputPerMillion.toString(),
-      cachedPerMillion: price.cachedPerMillion.toString(), reasoningPerMillion: price.reasoningPerMillion.toString()
-    }) : '0'
+    }, reservationCost) : '0'
     const reservations: any[] = []
     try {
       for (const policy of policies) {
@@ -167,7 +178,10 @@ export class GatewayService {
         accountId: principal.sub, deviceId: principal.deviceId, sessionId: context.sessionId,
         projectId: context.projectId, cliType: context.cliType, clientVersion: context.clientVersion,
         timezone: context.timezone, protocol: PRISMA_PROTOCOL[protocol], publicModelId,
-        upstreamModel: fallback.upstreamModel, channelId: fallback.channelId, priceVersionId: price?.id,
+        upstreamModel: fallback.upstreamModel, channelId: fallback.channelId, channelModelId: fallback.channelModelId,
+        priceVersionId: fallback.cost.source === 'PUBLIC_MODEL_FALLBACK' ? fallback.cost.id : undefined,
+        channelCostRuleId: fallback.cost.source === 'CHANNEL_COST_RULE' ? fallback.cost.id : undefined,
+        costSnapshot: { ...fallback.cost }, costUsd: '0',
         startedAt, finishedAt, durationMs: finishedAt.getTime() - startedAt.getTime(),
         usageSource: 'ESTIMATED', streaming: body.stream === true, statusCode: 503,
         errorCode: failure.code || 'UPSTREAM_UNAVAILABLE', routeAttempts: failure.attempts?.length || 1,
@@ -187,10 +201,6 @@ export class GatewayService {
         } })))
       throw new ServiceUnavailableException(`No upstream channel succeeded (request: ${failure.requestId})`)
     }
-    const priceSnapshot = price ? {
-      inputPerMillion: price.inputPerMillion.toString(), outputPerMillion: price.outputPerMillion.toString(),
-      cachedPerMillion: price.cachedPerMillion.toString(), reasoningPerMillion: price.reasoningPerMillion.toString()
-    } : null
     response.status(result.response.status)
     response.setHeader('x-ucli-request-id', result.requestId)
     result.response.headers.forEach((value, name) => {
@@ -204,7 +214,7 @@ export class GatewayService {
       if (finalized) return
       finalized = true
       const finalUsage = body.stream === true ? streamUsage.usage(estimatedInputTokens) : result.usage
-      const costUsd = priceSnapshot ? calculateCost(finalUsage, priceSnapshot) : '0'
+      const costUsd = calculateCost(finalUsage, result.candidate.cost)
       const settlementResults = await Promise.all(reservations.map(reservation => this.quota.settle(reservation, {
         tokens: finalUsage.inputTokens + finalUsage.outputTokens,
         costMicroUsd: Math.round(Number(costUsd) * 1_000_000)
@@ -225,7 +235,10 @@ export class GatewayService {
         deviceId: principal.deviceId, sessionId: context.sessionId, projectId: context.projectId,
         cliType: context.cliType, clientVersion: context.clientVersion, timezone: context.timezone,
         protocol: PRISMA_PROTOCOL[protocol], publicModelId, upstreamModel: result.candidate.upstreamModel,
-        channelId: result.candidate.channelId, priceVersionId: price?.id,
+        channelId: result.candidate.channelId, channelModelId: result.candidate.channelModelId,
+        priceVersionId: result.candidate.cost.source === 'PUBLIC_MODEL_FALLBACK' ? result.candidate.cost.id : undefined,
+        channelCostRuleId: result.candidate.cost.source === 'CHANNEL_COST_RULE' ? result.candidate.cost.id : undefined,
+        costSnapshot: { ...result.candidate.cost },
         startedAt, finishedAt, durationMs: finishedAt.getTime() - startedAt.getTime(), firstTokenMs,
         inputTokens: finalUsage.inputTokens, outputTokens: finalUsage.outputTokens,
         cachedTokens: finalUsage.cachedTokens, reasoningTokens: finalUsage.reasoningTokens,

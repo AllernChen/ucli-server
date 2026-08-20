@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { relayRequest } from '../../packages/gateway-core/src/relay.js'
 
 describe('upstream relay', () => {
+  const cost = { id: 'cost', source: 'CHANNEL_COST_RULE' as const, currency: 'USD' as const, timezone: 'UTC',
+    resolvedAt: '2026-01-01T00:00:00.000Z', inputPerMillion: '1', outputPerMillion: '1', cachedPerMillion: '0', reasoningPerMillion: '0' }
   it('maps the model, hides the first failed candidate, and returns normalized usage', async () => {
     const requests: Array<{ url: string; body: any }> = []
     const fetcher = async (input: URL | RequestInfo, init?: RequestInit) => {
@@ -11,11 +13,11 @@ describe('upstream relay', () => {
         status: 200, headers: { 'content-type': 'application/json' }
       })
     }
-    const base = { apiKey: 'secret', protocol: 'openai_chat' as const, maxRetries: 0, timeoutMs: 1000 }
+    const base = { apiKey: 'secret', protocol: 'openai_chat' as const, maxRetries: 0, timeoutMs: 1000, cost }
     const result = await relayRequest({
       candidates: [
-        { ...base, channelId: 'first', keyId: 'k1', baseUrl: 'https://one.example', upstreamModel: 'm1' },
-        { ...base, channelId: 'second', keyId: 'k2', baseUrl: 'https://two.example', upstreamModel: 'm2' }
+        { ...base, channelId: 'first', channelModelId: 'cm1', keyId: 'k1', baseUrl: 'https://one.example', upstreamModel: 'm1' },
+        { ...base, channelId: 'second', channelModelId: 'cm2', keyId: 'k2', baseUrl: 'https://two.example', upstreamModel: 'm2' }
       ],
       body: { model: 'public', messages: [] }, fetcher: fetcher as typeof fetch
     })
@@ -31,8 +33,8 @@ describe('upstream relay', () => {
       return new Response('data: [DONE]\n\n', { status: 200 })
     }
     await relayRequest({
-      candidates: [{ channelId: 'c', keyId: 'k', baseUrl: 'https://one.example', upstreamModel: 'm',
-        apiKey: 'secret', protocol: 'openai_chat', maxRetries: 0, timeoutMs: 1000 }],
+      candidates: [{ channelId: 'c', channelModelId: 'cm', keyId: 'k', baseUrl: 'https://one.example', upstreamModel: 'm',
+        apiKey: 'secret', protocol: 'openai_chat', maxRetries: 0, timeoutMs: 1000, cost }],
       body: { model: 'public', messages: [], stream: true }, fetcher: fetcher as typeof fetch
     })
     expect(sent.stream_options.include_usage).toBe(true)
@@ -42,8 +44,8 @@ describe('upstream relay', () => {
     let calls = 0
     const fetcher = async () => { calls += 1; return new Response('{}', { status: calls < 3 ? 503 : 200 }) }
     const result = await relayRequest({
-      candidates: [{ channelId: 'c', keyId: 'k', baseUrl: 'https://one.example', upstreamModel: 'm',
-        apiKey: 'secret', protocol: 'openai_chat', maxRetries: 2, timeoutMs: 1000 }],
+      candidates: [{ channelId: 'c', channelModelId: 'cm', keyId: 'k', baseUrl: 'https://one.example', upstreamModel: 'm',
+        apiKey: 'secret', protocol: 'openai_chat', maxRetries: 2, timeoutMs: 1000, cost }],
       body: { model: 'public', messages: [] }, fetcher: fetcher as typeof fetch
     })
     expect(calls).toBe(3)
@@ -57,8 +59,8 @@ describe('upstream relay', () => {
       return new Response('{}', { status: 200 })
     }
     await relayRequest({
-      candidates: [{ channelId: 'c', keyId: 'k', baseUrl: 'https://up.example', upstreamModel: 'claude-sonnet',
-        apiKey: 'sk-ant', protocol: 'anthropic_messages', maxRetries: 0, timeoutMs: 1000 }],
+      candidates: [{ channelId: 'c', channelModelId: 'cm', keyId: 'k', baseUrl: 'https://up.example', upstreamModel: 'claude-sonnet',
+        apiKey: 'sk-ant', protocol: 'anthropic_messages', maxRetries: 0, timeoutMs: 1000, cost }],
       body: { model: 'public', max_tokens: 16 },
       incomingHeaders: { 'anthropic-version': '2023-06-01' },
       fetcher: fetcher as typeof fetch
@@ -73,8 +75,8 @@ describe('upstream relay', () => {
     let calls = 0
     const fetcher = async () => { calls += 1; return new Response('{"error":"bad"}', { status: 400 }) }
     const result = await relayRequest({
-      candidates: [{ channelId: 'c', keyId: 'k', baseUrl: 'https://up.example', upstreamModel: 'm',
-        apiKey: 'k', protocol: 'openai_chat', maxRetries: 2, timeoutMs: 1000 }],
+      candidates: [{ channelId: 'c', channelModelId: 'cm', keyId: 'k', baseUrl: 'https://up.example', upstreamModel: 'm',
+        apiKey: 'k', protocol: 'openai_chat', maxRetries: 2, timeoutMs: 1000, cost }],
       body: { model: 'public', messages: [] }, fetcher: fetcher as typeof fetch
     })
     expect(calls).toBe(1)
@@ -89,8 +91,8 @@ describe('upstream relay', () => {
       return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'hi' }] } }], usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 1, totalTokenCount: 4 } }), { status: 200, headers: { 'content-type': 'application/json' } })
     }
     const result = await relayRequest({
-      candidates: [{ channelId: 'c', keyId: 'k', baseUrl: 'https://generativelanguage.googleapis.com', upstreamModel: 'gemini-2.0-flash',
-        apiKey: 'gkey', protocol: 'gemini', maxRetries: 0, timeoutMs: 1000 }],
+      candidates: [{ channelId: 'c', channelModelId: 'cm', keyId: 'k', baseUrl: 'https://generativelanguage.googleapis.com', upstreamModel: 'gemini-2.0-flash',
+        apiKey: 'gkey', protocol: 'gemini', maxRetries: 0, timeoutMs: 1000, cost }],
       body: { model: 'public', messages: [{ role: 'user', content: 'hello' }], stream: false },
       fetcher: fetcher as typeof fetch
     })

@@ -17,7 +17,9 @@ export interface ScheduledCost extends PriceSnapshot {
 export interface ResolvedCost extends PriceSnapshot {
   id: string
   currency: 'USD'
-  source: 'CHANNEL_COST_RULE'
+  source: 'CHANNEL_COST_RULE' | 'PUBLIC_MODEL_FALLBACK'
+  timezone: string
+  resolvedAt: string
 }
 
 const WEEKDAYS: Record<string, number> = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 }
@@ -74,7 +76,7 @@ export function resolveChannelCost(rules: ScheduledCost[], at: Date, timezone: s
   return {
     id: rule.id, source: 'CHANNEL_COST_RULE', currency: 'USD', inputPerMillion: rule.inputPerMillion,
     outputPerMillion: rule.outputPerMillion, cachedPerMillion: rule.cachedPerMillion,
-    reasoningPerMillion: rule.reasoningPerMillion
+    reasoningPerMillion: rule.reasoningPerMillion, timezone, resolvedAt: at.toISOString()
   }
 }
 
