@@ -26,11 +26,12 @@ export interface RelayResult {
   attempts: Array<{ channelId: string; keyId: string; status: number; durationMs: number }>
 }
 
-export async function relayRequest({ candidates, body, incomingHeaders, fetcher = fetch }: {
+export async function relayRequest({ candidates, body, incomingHeaders, fetcher = fetch, signal }: {
   candidates: RelayCandidate[]
   body: Record<string, unknown>
   incomingHeaders?: Record<string, string | undefined>
   fetcher?: typeof fetch
+  signal?: AbortSignal
 }): Promise<RelayResult> {
   const requestId = randomUUID()
   const attempts: RelayResult['attempts'] = []
@@ -38,6 +39,9 @@ export async function relayRequest({ candidates, body, incomingHeaders, fetcher 
     for (let retry = 0; retry <= Math.max(0, candidate.maxRetries); retry += 1) {
       const started = Date.now()
       const controller = new AbortController()
+      const cancel = () => controller.abort()
+      if (signal?.aborted) controller.abort()
+      else signal?.addEventListener('abort', cancel, { once: true })
       const timeout = setTimeout(() => controller.abort(), candidate.timeoutMs)
       try {
       const headers: Record<string, string> = { 'content-type': 'application/json', 'x-ucli-request-id': requestId }
@@ -95,7 +99,7 @@ export async function relayRequest({ candidates, body, incomingHeaders, fetcher 
       return { requestId, response, usage, candidate, attempts }
       } catch (error) {
         attempts.push({ channelId: candidate.channelId, keyId: candidate.keyId, status: 0, durationMs: Date.now() - started })
-      } finally { clearTimeout(timeout) }
+      } finally { clearTimeout(timeout); signal?.removeEventListener('abort', cancel) }
     }
   }
   throw Object.assign(new Error('No upstream channel succeeded'), { code: 'UPSTREAM_UNAVAILABLE', requestId, attempts })

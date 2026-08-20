@@ -131,3 +131,20 @@ export interface ModelTestResult {
   errorCode: string | null
   health: Exclude<HealthStatus, 'UNKNOWN' | 'DISABLED'>
 }
+
+export interface AdminModelTestResponse extends ModelTestResult {
+  assistantMessage: string
+  rawResponse: unknown
+  appliedCost: {
+    id: string
+    source: 'CHANNEL_COST_RULE' | 'PUBLIC_MODEL_FALLBACK'
+    inputPerMillion: string
+    outputPerMillion: string
+    cachedPerMillion: string
+    reasoningPerMillion: string
+    currency: 'USD'
+    timezone: string
+    resolvedAt: string
+  }
+  estimatedProcurementCostUsd: string
+}

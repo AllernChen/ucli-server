@@ -20,9 +20,10 @@ import { AuditInterceptor } from '../../../packages/http/src/audit.interceptor.j
 import { ChannelModelsController } from './channel-models.controller.js'
 import { ChannelModelsService } from './channel-models.service.js'
 import { ModelTestingService } from './model-testing.service.js'
+import { ModelTestingController } from './model-testing.controller.js'
 
 @Module({
-  controllers: [AuthController, ChannelsController, ChannelModelsController, ClientController, ModelsController, UsageController, SkillsController, ReportsController, GovernanceController, MonitoringController, MetricsController, OrganizationsController],
+  controllers: [AuthController, ChannelsController, ChannelModelsController, ModelTestingController, ClientController, ModelsController, UsageController, SkillsController, ReportsController, GovernanceController, MonitoringController, MetricsController, OrganizationsController],
   providers: [PrismaService, AuthService, ChannelsService, ChannelModelsService, ModelTestingService, AuthGuard, ObjectStorageService, AuditInterceptor]
 })
 export class AppModule {}

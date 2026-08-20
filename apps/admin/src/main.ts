@@ -3,6 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import App from './App.vue'
 import './styles.css'
 import './forms.css'
+import './model-test.css'
 import Dashboard from './Dashboard.vue'
 import Channels from './views/Channels.vue'
 import Models from './views/Models.vue'
@@ -15,6 +16,7 @@ import Usage from './views/Usage.vue'
 import InviteAccept from './views/InviteAccept.vue'
 import ChannelDetail from './views/ChannelDetail.vue'
 import ModelDetail from './views/ModelDetail.vue'
+import ModelTest from './views/ModelTest.vue'
 
 const routes = [
   { path: '/', name: 'overview', component: Dashboard },
@@ -23,6 +25,7 @@ const routes = [
   { path: '/channels/:id', name: 'channel-detail', component: ChannelDetail },
   { path: '/models', name: 'models', component: Models },
   { path: '/models/:id', name: 'model-detail', component: ModelDetail },
+  { path: '/model-test', name: 'model-test', component: ModelTest },
   { path: '/skills', name: 'skills', component: Skills },
   { path: '/reports', name: 'reports', component: Reports },
   { path: '/governance', name: 'governance', component: Governance },
