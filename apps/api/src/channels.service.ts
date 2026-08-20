@@ -7,7 +7,7 @@ import { decryptSecret } from '../../../packages/security/src/envelope-crypto.js
 @Injectable()
 export class ChannelsService {
   constructor(private readonly prisma: PrismaService) {}
-  list() { return this.prisma.channel.findMany({ include: { abilities: true, keys: { select: {
+  list() { return this.prisma.channel.findMany({ include: { channelModels: true, keys: { select: {
     id: true, suffix: true, enabled: true, health: true, priority: true, weight: true, remainingUsd: true, expiresAt: true
   } } }, orderBy: [{ priority: 'desc' }, { name: 'asc' }] }) }
   create(body: any) { return this.prisma.channel.create({ data: {
@@ -27,10 +27,10 @@ export class ChannelsService {
   }
   setEnabled(id: string, enabled: boolean) { return this.prisma.channel.update({ where: { id }, data: { enabled } }) }
   async test(id: string) {
-    const channel = await this.prisma.channel.findUnique({ where: { id }, include: { keys: true, abilities: true } })
+    const channel = await this.prisma.channel.findUnique({ where: { id }, include: { keys: true, channelModels: true } })
     if (!channel) throw new NotFoundException('Channel not found')
     const key = channel.keys.find(item => item.enabled)
-    const ability = channel.abilities.find(item => item.enabled)
+    const ability = channel.channelModels.find(item => item.enabled)
     if (!key || !ability) throw new BadRequestException('Channel requires an enabled key and model ability')
     const plaintext = decryptSecret({ algorithm: 'aes-256-gcm', ciphertext: key.ciphertext, iv: key.iv, tag: key.tag }, loadMasterKey())
     const started = Date.now()

@@ -7,12 +7,15 @@ import { AuthGuard, Roles } from '../../../packages/security/src/auth.js'
 @Controller('api/v1/admin/models')
 export class ModelsController {
   constructor(private readonly prisma: PrismaService) {}
-  @Get() list() { return this.prisma.publicModel.findMany({ include: { abilities: true, prices: true } }) }
+  @Get() async list() {
+    const models = await this.prisma.publicModel.findMany({ include: { channelModels: true, prices: true } })
+    return models.map(({ channelModels, ...model }) => ({ ...model, abilities: channelModels }))
+  }
   @Post() create(@Body() body: any) { return this.prisma.publicModel.create({ data: {
     id: body.id, displayName: body.displayName, contextSize: body.contextSize || null, enabled: false
   } }) }
   @Post(':id/abilities') ability(@Param('id') id: string, @Body() body: any) {
-    return this.prisma.channelAbility.create({ data: {
+    return this.prisma.channelModel.create({ data: {
       publicModelId: id, channelId: body.channelId, upstreamModel: body.upstreamModel,
       protocol: body.protocol, supportsStream: body.supportsStream !== false, supportsTools: body.supportsTools !== false
     } })
@@ -25,7 +28,7 @@ export class ModelsController {
     } })
   }
   @Post(':id/publish') async publish(@Param('id') id: string) {
-    const healthy = await this.prisma.channelAbility.count({ where: {
+    const healthy = await this.prisma.channelModel.count({ where: {
       publicModelId: id, enabled: true, channel: { enabled: true, health: { in: ['HEALTHY', 'DEGRADED'] } }
     } })
     if (!healthy) throw new BadRequestException('Model has no healthy channel ability')
@@ -41,7 +44,7 @@ export class ModelsController {
     return this.prisma.publicModel.update({ where: { id }, data: { enabled: false } })
   }
   @Delete(':id/abilities') removeAbility(@Param('id') id: string, @Body() body: any) {
-    return this.prisma.channelAbility.delete({ where: { channelId_publicModelId_protocol: {
+    return this.prisma.channelModel.delete({ where: { channelId_publicModelId_protocol: {
       channelId: body.channelId, publicModelId: id, protocol: body.protocol
     } } })
   }

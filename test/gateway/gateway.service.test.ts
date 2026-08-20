@@ -29,7 +29,7 @@ function makeHarness(overrides: { prisma?: Record<string, any>; quota?: Record<s
       id: 'gpt-4o', enabled: true, policies: [],
       prices: [{ id: 'p1', inputPerMillion: '1', outputPerMillion: '2', cachedPerMillion: '0', reasoningPerMillion: '0' }]
     }) },
-    channelAbility: { findMany: vi.fn().mockResolvedValue([makeAbility()]) },
+    channelModel: { findMany: vi.fn().mockResolvedValue([makeAbility()]) },
     quotaPolicy: { findMany: vi.fn().mockResolvedValue([]) },
     usageLog: { create: vi.fn().mockResolvedValue({}) },
     auditLog: { create: vi.fn().mockResolvedValue({}) },
@@ -84,7 +84,7 @@ describe('gateway service orchestration', () => {
   })
 
   it('returns 503 when no healthy channel is available', async () => {
-    const { service } = makeHarness({ prisma: { channelAbility: { findMany: vi.fn().mockResolvedValue([]) } } })
+    const { service } = makeHarness({ prisma: { channelModel: { findMany: vi.fn().mockResolvedValue([]) } } })
     await expect(service.relay({ protocol: 'openai_chat', body: { model: 'gpt-4o', messages: [] }, headers: {}, principal, response: makeResponse() as any }))
       .rejects.toBeInstanceOf(ServiceUnavailableException)
   })

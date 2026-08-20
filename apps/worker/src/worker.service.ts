@@ -14,10 +14,10 @@ export class WorkerService {
 
   @Cron('0 */5 * * * *')
   async probeChannels() {
-    const channels = await this.prisma.channel.findMany({ where: { enabled: true }, include: { keys: true, abilities: true } })
+    const channels = await this.prisma.channel.findMany({ where: { enabled: true }, include: { keys: true, channelModels: true } })
     for (const channel of channels) {
       const key = channel.keys.find(item => item.enabled && item.health !== 'DISABLED')
-      const ability = channel.abilities.find(item => item.enabled)
+      const ability = channel.channelModels.find(item => item.enabled)
       if (!key || !ability) continue
       try {
         const plaintext = decryptSecret({ algorithm: 'aes-256-gcm', ciphertext: key.ciphertext, iv: key.iv, tag: key.tag }, loadMasterKey())

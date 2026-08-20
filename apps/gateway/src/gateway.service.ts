@@ -44,7 +44,7 @@ export class GatewayService {
   }
 
   private async candidates(publicModelId: string, protocol: GatewayProtocol): Promise<RelayCandidate[]> {
-    const abilities = await this.prisma.channelAbility.findMany({ where: {
+    const abilities = await this.prisma.channelModel.findMany({ where: {
       publicModelId, protocol: { in: CLIENT_UPSTREAMS[protocol] }, enabled: true,
       channel: { enabled: true, health: { in: ['HEALTHY', 'DEGRADED'] }, OR: [{ circuitOpenUntil: null }, { circuitOpenUntil: { lt: new Date() } }] }
     }, include: { channel: { include: { keys: true } } } })

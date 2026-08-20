@@ -38,6 +38,14 @@ enum HealthStatus {
   DISABLED
 }
 
+enum ModelHealthStatus {
+  UNKNOWN
+  HEALTHY
+  DEGRADED
+  UNHEALTHY
+  DISABLED
+}
+
 enum KeySelection {
   ROUND_ROBIN
   WEIGHTED_RANDOM
@@ -179,26 +187,27 @@ model DeviceAuthorization {
 }
 
 model Channel {
-  id               String           @id @default(uuid()) @db.Uuid
+  id               String          @id @default(uuid()) @db.Uuid
   name             String
   provider         String
   protocol         ChannelProtocol
-  baseUrl          String           @map("base_url")
-  priority         Int              @default(0)
-  weight           Int              @default(1)
-  enabled          Boolean          @default(true)
-  autoDisable      Boolean          @default(true) @map("auto_disable")
-  timeoutMs        Int              @default(300000) @map("timeout_ms")
-  maxRetries       Int              @default(1) @map("max_retries")
-  keySelection     KeySelection     @default(WEIGHTED_RANDOM) @map("key_selection")
-  health           HealthStatus     @default(HEALTHY)
-  circuitOpenUntil DateTime?        @map("circuit_open_until")
-  lastTestedAt     DateTime?        @map("last_tested_at")
-  lastSuccessAt    DateTime?        @map("last_success_at")
-  createdAt        DateTime         @default(now()) @map("created_at")
-  updatedAt        DateTime         @updatedAt @map("updated_at")
+  baseUrl          String          @map("base_url")
+  priority         Int             @default(0)
+  weight           Int             @default(1)
+  enabled          Boolean         @default(true)
+  autoDisable      Boolean         @default(true) @map("auto_disable")
+  timeoutMs        Int             @default(300000) @map("timeout_ms")
+  maxRetries       Int             @default(1) @map("max_retries")
+  keySelection     KeySelection    @default(WEIGHTED_RANDOM) @map("key_selection")
+  costTimezone     String          @default("UTC") @map("cost_timezone")
+  health           HealthStatus    @default(HEALTHY)
+  circuitOpenUntil DateTime?       @map("circuit_open_until")
+  lastTestedAt     DateTime?       @map("last_tested_at")
+  lastSuccessAt    DateTime?       @map("last_success_at")
+  createdAt        DateTime        @default(now()) @map("created_at")
+  updatedAt        DateTime        @updatedAt @map("updated_at")
   keys             ChannelKey[]
-  abilities        ChannelAbility[]
+  channelModels    ChannelModel[]
   routes           RouteAttempt[]
   logs             UsageLog[]
   reports          Report[]
@@ -230,34 +239,86 @@ model ChannelKey {
 }
 
 model PublicModel {
-  id          String              @id
-  displayName String              @map("display_name")
-  enabled     Boolean             @default(false)
-  contextSize Int?                @map("context_size")
-  abilities   ChannelAbility[]
-  prices      ModelPriceVersion[]
-  policies    ModelAccessPolicy[]
-  quotas      QuotaPolicy[]
-  logs        UsageLog[]
-  reports     Report[]
+  id            String              @id
+  displayName   String              @map("display_name")
+  enabled       Boolean             @default(false)
+  contextSize   Int?                @map("context_size")
+  channelModels ChannelModel[]
+  prices        ModelPriceVersion[]
+  policies      ModelAccessPolicy[]
+  quotas        QuotaPolicy[]
+  logs          UsageLog[]
+  reports       Report[]
 
   @@map("public_models")
 }
 
-model ChannelAbility {
-  channelId      String          @map("channel_id") @db.Uuid
-  publicModelId  String          @map("public_model_id")
-  upstreamModel  String          @map("upstream_model")
-  protocol       GatewayProtocol
-  supportsStream Boolean         @default(true) @map("supports_stream")
-  supportsTools  Boolean         @default(true) @map("supports_tools")
-  enabled        Boolean         @default(true)
-  channel        Channel         @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  publicModel    PublicModel     @relation(fields: [publicModelId], references: [id], onDelete: Cascade)
+model ChannelModel {
+  id                   String                 @id @default(uuid()) @db.Uuid
+  channelId            String                 @map("channel_id") @db.Uuid
+  publicModelId        String                 @map("public_model_id")
+  upstreamModel        String                 @map("upstream_model")
+  protocol             GatewayProtocol
+  supportsStream       Boolean                @default(true) @map("supports_stream")
+  supportsTools        Boolean                @default(true) @map("supports_tools")
+  enabled              Boolean                @default(true)
+  health               ModelHealthStatus      @default(UNKNOWN)
+  consecutiveFailures  Int                    @default(0) @map("consecutive_failures")
+  probeEnabled         Boolean                @default(true) @map("probe_enabled")
+  probeIntervalMinutes Int                    @default(15) @map("probe_interval_minutes")
+  lastTestedAt         DateTime?              @map("last_tested_at")
+  lastSuccessAt        DateTime?              @map("last_success_at")
+  lastErrorCode        String?                @map("last_error_code")
+  channel              Channel                @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  publicModel          PublicModel            @relation(fields: [publicModelId], references: [id], onDelete: Cascade)
+  costRules            ChannelModelCostRule[]
+  probes               ChannelModelProbe[]
+  logs                 UsageLog[]
 
-  @@id([channelId, publicModelId, protocol])
-  @@index([publicModelId, protocol, enabled])
-  @@map("channel_abilities")
+  @@unique([channelId, publicModelId, protocol])
+  @@index([publicModelId, protocol, enabled, health])
+  @@map("channel_models")
+}
+
+model ChannelModelCostRule {
+  id                  String       @id @default(uuid()) @db.Uuid
+  channelModelId      String       @map("channel_model_id") @db.Uuid
+  name                String
+  daysOfWeek          Int[]        @map("days_of_week")
+  startMinute         Int          @map("start_minute")
+  endMinute           Int          @map("end_minute")
+  priority            Int          @default(0)
+  inputPerMillion     Decimal      @map("input_per_million") @db.Decimal(20, 8)
+  outputPerMillion    Decimal      @map("output_per_million") @db.Decimal(20, 8)
+  cachedPerMillion    Decimal      @default(0) @map("cached_per_million") @db.Decimal(20, 8)
+  reasoningPerMillion Decimal      @default(0) @map("reasoning_per_million") @db.Decimal(20, 8)
+  currency            String       @default("USD")
+  enabled             Boolean      @default(true)
+  validFrom           DateTime     @map("valid_from")
+  validUntil          DateTime?    @map("valid_until")
+  createdAt           DateTime     @default(now()) @map("created_at")
+  channelModel        ChannelModel @relation(fields: [channelModelId], references: [id], onDelete: Cascade)
+  logs                UsageLog[]
+
+  @@index([channelModelId, enabled, validFrom])
+  @@map("channel_model_cost_rules")
+}
+
+model ChannelModelProbe {
+  id             String            @id @default(uuid()) @db.Uuid
+  channelModelId String            @map("channel_model_id") @db.Uuid
+  source         String
+  health         ModelHealthStatus
+  statusCode     Int?              @map("status_code")
+  latencyMs      Int               @map("latency_ms")
+  firstTokenMs   Int?              @map("first_token_ms")
+  errorCode      String?           @map("error_code")
+  keySuffix      String?           @map("key_suffix")
+  testedAt       DateTime          @default(now()) @map("tested_at")
+  channelModel   ChannelModel      @relation(fields: [channelModelId], references: [id], onDelete: Cascade)
+
+  @@index([channelModelId, testedAt])
+  @@map("channel_model_probes")
 }
 
 model ModelPriceVersion {
@@ -310,51 +371,60 @@ model QuotaPolicy {
 }
 
 model UsageLog {
-  id                String             @id @default(uuid()) @db.Uuid
-  requestId         String             @unique @map("request_id")
-  organizationId    String             @map("organization_id") @db.Uuid
-  accountId         String             @map("account_id") @db.Uuid
-  deviceId          String             @map("device_id") @db.Uuid
-  sessionId         String?            @map("session_id") @db.Uuid
-  projectId         String?            @map("project_id") @db.Uuid
-  cliType           String?            @map("cli_type")
-  clientVersion     String?            @map("client_version")
+  id                String                @id @default(uuid()) @db.Uuid
+  requestId         String                @unique @map("request_id")
+  organizationId    String                @map("organization_id") @db.Uuid
+  accountId         String                @map("account_id") @db.Uuid
+  deviceId          String                @map("device_id") @db.Uuid
+  sessionId         String?               @map("session_id") @db.Uuid
+  projectId         String?               @map("project_id") @db.Uuid
+  cliType           String?               @map("cli_type")
+  clientVersion     String?               @map("client_version")
   timezone          String?
   protocol          GatewayProtocol
-  publicModelId     String             @map("public_model_id")
-  upstreamModel     String             @map("upstream_model")
-  channelId         String             @map("channel_id") @db.Uuid
-  priceVersionId    String?            @map("price_version_id") @db.Uuid
-  startedAt         DateTime           @map("started_at")
-  finishedAt        DateTime           @map("finished_at")
-  durationMs        Int                @map("duration_ms")
-  firstTokenMs      Int?               @map("first_token_ms")
-  inputTokens       BigInt             @default(0) @map("input_tokens")
-  outputTokens      BigInt             @default(0) @map("output_tokens")
-  cachedTokens      BigInt             @default(0) @map("cached_tokens")
-  reasoningTokens   BigInt             @default(0) @map("reasoning_tokens")
-  costUsd           Decimal            @default(0) @map("cost_usd") @db.Decimal(20, 8)
-  usageSource       UsageSource        @map("usage_source")
+  publicModelId     String                @map("public_model_id")
+  upstreamModel     String                @map("upstream_model")
+  channelId         String                @map("channel_id") @db.Uuid
+  channelModelId    String?               @map("channel_model_id") @db.Uuid
+  priceVersionId    String?               @map("price_version_id") @db.Uuid
+  channelCostRuleId String?               @map("channel_cost_rule_id") @db.Uuid
+  costSnapshot      Json?                 @map("cost_snapshot")
+  startedAt         DateTime              @map("started_at")
+  finishedAt        DateTime              @map("finished_at")
+  durationMs        Int                   @map("duration_ms")
+  firstTokenMs      Int?                  @map("first_token_ms")
+  inputTokens       BigInt                @default(0) @map("input_tokens")
+  outputTokens      BigInt                @default(0) @map("output_tokens")
+  cachedTokens      BigInt                @default(0) @map("cached_tokens")
+  reasoningTokens   BigInt                @default(0) @map("reasoning_tokens")
+  costUsd           Decimal               @default(0) @map("cost_usd") @db.Decimal(20, 8)
+  usageSource       UsageSource           @map("usage_source")
   streaming         Boolean
-  statusCode        Int                @map("status_code")
-  errorCode         String?            @map("error_code")
-  providerErrorType String?            @map("provider_error_type")
-  routeAttempts     Int                @default(1) @map("route_attempts")
-  switched          Boolean            @default(false)
-  clientCancelled   Boolean            @default(false) @map("client_cancelled")
-  streamInterrupted Boolean            @default(false) @map("stream_interrupted")
-  organization      Organization       @relation(fields: [organizationId], references: [id])
-  account           Account            @relation(fields: [accountId], references: [id])
-  device            Device             @relation(fields: [deviceId], references: [id])
-  channel           Channel            @relation(fields: [channelId], references: [id])
-  publicModel       PublicModel        @relation(fields: [publicModelId], references: [id])
-  priceVersion      ModelPriceVersion? @relation(fields: [priceVersionId], references: [id])
+  statusCode        Int                   @map("status_code")
+  errorCode         String?               @map("error_code")
+  providerErrorType String?               @map("provider_error_type")
+  routeAttempts     Int                   @default(1) @map("route_attempts")
+  switched          Boolean               @default(false)
+  clientCancelled   Boolean               @default(false) @map("client_cancelled")
+  streamInterrupted Boolean               @default(false) @map("stream_interrupted")
+  organization      Organization          @relation(fields: [organizationId], references: [id])
+  account           Account               @relation(fields: [accountId], references: [id])
+  device            Device                @relation(fields: [deviceId], references: [id])
+  channel           Channel               @relation(fields: [channelId], references: [id])
+  channelModel      ChannelModel?         @relation(fields: [channelModelId], references: [id], onDelete: SetNull)
+  publicModel       PublicModel           @relation(fields: [publicModelId], references: [id])
+  priceVersion      ModelPriceVersion?    @relation(fields: [priceVersionId], references: [id])
+  channelCostRule   ChannelModelCostRule? @relation(fields: [channelCostRuleId], references: [id], onDelete: SetNull)
   routes            RouteAttempt[]
 
   @@index([organizationId, startedAt])
   @@index([accountId, startedAt])
   @@index([publicModelId, startedAt])
   @@index([channelId, startedAt])
+  @@index([organizationId, startedAt, channelId])
+  @@index([organizationId, startedAt, publicModelId])
+  @@index([organizationId, startedAt, accountId])
+  @@index([organizationId, startedAt, channelModelId])
   @@index([sessionId, startedAt])
   @@map("usage_logs")
 }
