@@ -30,4 +30,4 @@ onMounted(() => { if (!root.value) return; chart = init(root.value); render(); o
 watch(() => [props.data, props.metric], render, { deep: true })
 onBeforeUnmount(() => { observer?.disconnect(); chart?.dispose(); chart = null })
 </script>
-<template><div v-if="data.length" ref="root" class="trend-chart"></div><p v-else class="empty chart-empty">当前筛选范围没有使用数据</p></template>
+<template><div class="trend-chart-shell"><div ref="root" class="trend-chart" :class="{ invisible: !data.length }"></div><p v-if="!data.length" class="empty chart-empty">当前筛选范围没有使用数据</p></div></template>

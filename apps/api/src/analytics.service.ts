@@ -107,8 +107,8 @@ export class AnalyticsService {
         COALESCE(SUM(u.input_tokens + u.output_tokens), 0)::numeric AS total_tokens,
         COALESCE(SUM(u.cost_usd), 0)::numeric AS cost_usd,
         percentile_cont(0.95) WITHIN GROUP (ORDER BY u.duration_ms) AS p95_latency_ms,
-        AVG(NULLIF((u.cost_snapshot->>'inputPerMillion')::numeric, 0)) AS avg_input_per_million,
-        AVG(NULLIF((u.cost_snapshot->>'outputPerMillion')::numeric, 0)) AS avg_output_per_million,
+        SUM((u.cost_snapshot->>'inputPerMillion')::numeric * u.input_tokens) / NULLIF(SUM(u.input_tokens), 0) AS avg_input_per_million,
+        SUM((u.cost_snapshot->>'outputPerMillion')::numeric * u.output_tokens) / NULLIF(SUM(u.output_tokens), 0) AS avg_output_per_million,
         MAX(cr.days_of_week::text) AS schedule_days, MAX(cr.start_minute) AS schedule_start_minute,
         MAX(cr.end_minute) AS schedule_end_minute
       FROM usage_logs u
