@@ -1,5 +1,8 @@
 const BASE = import.meta.env.VITE_API_URL || ''
 export function token() { return localStorage.getItem('ucli.accessToken') || '' }
+export function snapshotModelTestMessages<T extends { role: string; content: string }>(messages: readonly T[]): T[] {
+  return messages.map(message => ({ ...message }))
+}
 export async function api<T = any>(path: string, init: RequestInit = {}): Promise<T> {
   const isForm = init.body instanceof FormData
   const response = await fetch(`${BASE}${path}`, {

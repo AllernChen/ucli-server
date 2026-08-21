@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { api, apiSse } from '../api'
+import { api, apiSse, snapshotModelTestMessages } from '../api'
 import type { AdminModelTestResponse, ChannelDetail, ChannelModel, ChannelSummary, Page } from '../types/catalog'
 import StatusBadge from '../components/StatusBadge.vue'
 
@@ -35,7 +35,7 @@ async function send() {
   messages.value.push({ role: 'user', content: prompt.value.trim() }); prompt.value = ''; sending.value = true; error.value = ''
   try {
     const body = {
-      channelModelId: channelModelId.value, messages: messages.value, temperature: temperature.value,
+      channelModelId: channelModelId.value, messages: snapshotModelTestMessages(messages.value), temperature: temperature.value,
       maxTokens: maxTokens.value, stream: streaming.value, ...(keyId.value ? { keyId: keyId.value } : {})
     }
     if (streaming.value) {
