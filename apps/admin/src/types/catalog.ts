@@ -53,6 +53,14 @@ export interface ChannelModel {
   lastSuccessAt: string | null
   lastErrorCode: string | null
   costRules: CostRule[]
+  currentCost?: {
+    id: string
+    source: 'CHANNEL_COST_RULE' | 'PUBLIC_MODEL_FALLBACK'
+    inputPerMillion: string
+    outputPerMillion: string
+    cachedPerMillion: string
+    reasoningPerMillion: string
+  } | null
 }
 
 export interface ChannelSummary {
@@ -98,6 +106,7 @@ export interface PublicModel {
     validFrom: string
     validUntil: string | null
   }>
+  usage24h: { requests: number; tokens: number; costUsd: string }
 }
 
 export interface PublishCheck {

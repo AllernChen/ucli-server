@@ -2,6 +2,9 @@ import 'reflect-metadata'
 import { BadRequestException } from '@nestjs/common'
 import { describe, expect, it, vi } from 'vitest'
 import { AnalyticsService } from '../../apps/api/src/analytics.service.js'
+import { AnalyticsQueryDto } from '../../apps/api/src/analytics.dto.js'
+import { plainToInstance } from 'class-transformer'
+import { validate } from 'class-validator'
 
 const now = new Date('2026-08-20T12:00:00Z')
 const platform = { sub: 'platform-1', organizationId: 'org-home', role: 'PLATFORM_ADMIN' as const }
@@ -14,6 +17,13 @@ function makeService(rows: any[] = []) {
 }
 
 describe('analytics service', () => {
+  it('validates UUIDs, pagination and breakdown enums at the HTTP DTO boundary', async () => {
+    const dto = plainToInstance(AnalyticsQueryDto, {
+      organizationId: 'not-a-uuid', offset: '1.5', dimension: 'channel;drop table usage_logs'
+    })
+    const errors = await validate(dto)
+    expect(errors.map(error => error.property).sort()).toEqual(['dimension', 'offset', 'organizationId'])
+  })
   it('scopes platform, organization admin and member filters without trusting broader query scope', () => {
     const { service } = makeService()
     expect(service.resolveFilter(platform, { organizationId: 'org-2', accountId: 'account-2' }, now))
@@ -48,8 +58,8 @@ describe('analytics service', () => {
   it('uses fixed breakdown allowlists and restricts organization visibility', async () => {
     const { service } = makeService([])
     await expect(service.breakdown(orgAdmin, { dimension: 'organization' })).rejects.toBeInstanceOf(BadRequestException)
-    await expect(service.breakdown(platform, { dimension: 'channel;drop table usage_logs' })).rejects.toBeInstanceOf(BadRequestException)
-    await expect(service.breakdown(platform, { dimension: 'channel', sort: 'costUsd;drop', order: 'desc' }))
+    await expect(service.breakdown(platform, { dimension: 'channel;drop table usage_logs' } as any)).rejects.toBeInstanceOf(BadRequestException)
+    await expect(service.breakdown(platform, { dimension: 'channel', sort: 'costUsd;drop', order: 'desc' } as any))
       .rejects.toBeInstanceOf(BadRequestException)
   })
 

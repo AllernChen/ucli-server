@@ -26,13 +26,18 @@ const form = reactive({
 })
 
 async function load() {
+  const requestId = ++latestRequest
   loading.value = true; error.value = ''
   const params = new URLSearchParams()
   Object.entries(filters).forEach(([key, value]) => { if (value !== '') params.set(key, String(value)) })
   try {
-    result.value = await api<Page<ChannelSummary>>(`/api/v1/admin/channels?${params}`)
+    const next = await api<Page<ChannelSummary>>(`/api/v1/admin/channels?${params}`)
+    if (requestId !== latestRequest) return
+    result.value = next
     await router.replace({ query: Object.fromEntries([...params].filter(([key]) => key !== 'limit')) })
-  } catch (value: any) { error.value = value.message } finally { loading.value = false }
+  } catch (value: any) { if (requestId === latestRequest) error.value = value.message } finally {
+    if (requestId === latestRequest) loading.value = false
+  }
 }
 async function create() {
   error.value = ''
@@ -50,7 +55,7 @@ async function confirmToggle() {
   } catch (value: any) { error.value = value.message }
 }
 function setOffset(offset: number) { filters.offset = offset; load() }
-let timer: number | undefined
+let timer: number | undefined; let latestRequest = 0
 watch(() => [filters.q, filters.provider, filters.protocol, filters.health, filters.enabled], () => {
   filters.offset = 0; window.clearTimeout(timer); timer = window.setTimeout(load, 250)
 })

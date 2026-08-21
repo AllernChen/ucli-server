@@ -24,7 +24,13 @@ function harness(fetcher: typeof fetch) {
       }] }
   }
   const prisma: any = {
-    channelModel: { findUnique: vi.fn(async () => model), update: vi.fn(async ({ data }: any) => Object.assign(model, data)) },
+    channelModel: {
+      findUnique: vi.fn(async () => model), update: vi.fn(async ({ data }: any) => Object.assign(model, data)),
+      updateMany: vi.fn(async ({ where, data }: any) => {
+        if (where.consecutiveFailures !== model.consecutiveFailures) return { count: 0 }
+        Object.assign(model, data); return { count: 1 }
+      })
+    },
     channelModelProbe: { create: vi.fn(async ({ data }: any) => { probes.push(data); return data }) },
     usageLog: { create: vi.fn() }
   }

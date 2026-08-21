@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { api } from '../api'
+import { api, apiSse } from '../api'
 import type { AdminModelTestResponse, ChannelDetail, ChannelModel, ChannelSummary, Page } from '../types/catalog'
 import StatusBadge from '../components/StatusBadge.vue'
 
@@ -9,6 +9,7 @@ const channels = ref<ChannelSummary[]>([]); const channelId = ref(''); const cha
 const models = ref<ChannelModel[]>([]); const channelModelId = ref(''); const keyId = ref('')
 const messages = ref<Message[]>([{ role: 'system', content: 'You are a helpful assistant.' }])
 const prompt = ref(''); const temperature = ref(0.2); const maxTokens = ref(1024)
+const streaming = ref(true); const activeRequest = ref<AbortController | null>(null)
 const sending = ref(false); const error = ref(''); const result = ref<AdminModelTestResponse | null>(null)
 const selectedModel = computed(() => models.value.find(model => model.id === channelModelId.value))
 
@@ -33,15 +34,34 @@ async function send() {
   if (!prompt.value.trim() || !channelModelId.value) return
   messages.value.push({ role: 'user', content: prompt.value.trim() }); prompt.value = ''; sending.value = true; error.value = ''
   try {
-    const response = await api<AdminModelTestResponse>('/api/v1/admin/model-tests', { method: 'POST', body: JSON.stringify({
+    const body = {
       channelModelId: channelModelId.value, messages: messages.value, temperature: temperature.value,
-      maxTokens: maxTokens.value, ...(keyId.value ? { keyId: keyId.value } : {})
-    }) })
-    result.value = response
-    if (response.assistantMessage) messages.value.push({ role: 'assistant', content: response.assistantMessage })
-    else error.value = response.errorCode || `上游返回 HTTP ${response.statusCode}`
-  } catch (value: any) { error.value = value.message } finally { sending.value = false }
+      maxTokens: maxTokens.value, stream: streaming.value, ...(keyId.value ? { keyId: keyId.value } : {})
+    }
+    if (streaming.value) {
+      const assistant: Message = { role: 'assistant', content: '' }
+      messages.value.push(assistant)
+      const controller = new AbortController(); activeRequest.value = controller
+      await apiSse('/api/v1/admin/model-tests/stream', {
+        method: 'POST', body: JSON.stringify(body), signal: controller.signal
+      }, (event, data) => {
+        if (event === 'delta') assistant.content += String(data?.content || '')
+        else if (event === 'metrics') result.value = { ...data, assistantMessage: assistant.content, rawResponse: null }
+        else if (event === 'done' && result.value) result.value = { ...result.value, rawResponse: data?.rawResponse }
+        else if (event === 'error') throw new Error(data?.message || '模型流式测试失败')
+      })
+      if (!assistant.content) messages.value.pop()
+    } else {
+      const response = await api<AdminModelTestResponse>('/api/v1/admin/model-tests', { method: 'POST', body: JSON.stringify(body) })
+      result.value = response
+      if (response.assistantMessage) messages.value.push({ role: 'assistant', content: response.assistantMessage })
+      else error.value = response.errorCode || `上游返回 HTTP ${response.statusCode}`
+    }
+  } catch (value: any) {
+    error.value = value?.name === 'AbortError' ? '测试已取消' : value.message
+  } finally { sending.value = false; activeRequest.value = null }
 }
+function cancel() { activeRequest.value?.abort() }
 function clearConversation() { messages.value = [{ role: 'system', content: 'You are a helpful assistant.' }]; prompt.value = ''; result.value = null; error.value = '' }
 watch(channelId, loadChannel)
 onMounted(async () => { try { await loadChannels(); await loadChannel() } catch (value: any) { error.value = value.message } })
@@ -58,12 +78,13 @@ onMounted(async () => { try { await loadChannels(); await loadChannel() } catch 
       <label>Key（可选）<select v-model="keyId"><option value="">按渠道策略选择</option><option v-for="key in channel?.keys.filter(item => item.enabled) || []" :key="key.id" :value="key.id">••••{{ key.suffix }} · {{ key.health }}</option></select></label>
       <label>Temperature <span>{{ temperature }}</span><input v-model.number="temperature" type="range" min="0" max="2" step="0.1"></label>
       <label>最大输出 Token<input v-model.number="maxTokens" type="number" min="1" max="8192"></label>
+      <label class="inline-check"><input v-model="streaming" type="checkbox">流式输出（记录首字延迟）</label>
       <label>System 提示<textarea v-model="messages[0]!.content" rows="5" maxlength="20000"></textarea></label>
     </section>
     <section class="panel conversation"><div class="conversation-list">
       <article v-for="(message, index) in messages.slice(1)" :key="index" :class="['message', message.role]"><span>{{ message.role === 'user' ? '你' : '模型' }}</span><p>{{ message.content }}</p></article>
       <p v-if="messages.length === 1" class="empty">输入消息开始固定渠道对话测试</p>
-    </div><form class="composer" @submit.prevent="send"><textarea v-model="prompt" rows="4" maxlength="20000" placeholder="输入测试消息；点击发送提交完整多轮上下文"></textarea><button class="primary" :disabled="sending || !prompt.trim() || !channelModelId">{{ sending ? '请求中…' : '发送' }}</button></form></section>
+    </div><form class="composer" @submit.prevent="send"><textarea v-model="prompt" rows="4" maxlength="20000" placeholder="输入测试消息；点击发送提交完整多轮上下文"></textarea><button v-if="sending" type="button" @click="cancel">取消</button><button class="primary" :disabled="sending || !prompt.trim() || !channelModelId">{{ sending ? '请求中…' : '发送' }}</button></form></section>
     <section class="panel test-metrics"><h2>本次结果</h2><template v-if="result"><StatusBadge :status="result.health" />
       <dl><dt>HTTP / 状态</dt><dd>{{ result.statusCode }} · {{ result.ok ? '成功' : result.errorCode }}</dd><dt>延迟 / 首字</dt><dd>{{ result.latencyMs }}ms / {{ result.firstTokenMs ?? '—' }}</dd><dt>输入 / 输出 Token</dt><dd>{{ result.inputTokens }} / {{ result.outputTokens }}</dd><dt>实际 Key</dt><dd>••••{{ result.keySuffix || '—' }}</dd><dt>采购成本</dt><dd>${{ result.estimatedProcurementCostUsd }}</dd><dt>成本来源</dt><dd>{{ result.appliedCost.source }}</dd><dt>输入 / 输出 $/M</dt><dd>{{ result.appliedCost.inputPerMillion }} / {{ result.appliedCost.outputPerMillion }}</dd></dl>
       <details><summary>原始 JSON</summary><pre>{{ JSON.stringify(result.rawResponse, null, 2) }}</pre></details></template><p v-else class="empty">发送后展示实际路由、Token、延迟和采购成本</p></section>

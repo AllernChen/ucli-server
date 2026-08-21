@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client'
 import Decimal from 'decimal.js'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import type { AnalyticsFilter, AnalyticsOverview, AnalyticsPrincipal } from '../../../packages/usage/src/analytics-types.js'
+import type { AnalyticsQueryDto } from './analytics.dto.js'
 
 const DAY = 86_400_000
 const DIMENSIONS = {
@@ -11,8 +12,8 @@ const DIMENSIONS = {
   model: { id: 'u.public_model_id', name: "COALESCE(pm.display_name, u.public_model_id)" },
   channelModel: { id: 'u.channel_model_id::text', name: "COALESCE(cm.upstream_model, '未关联渠道模型')" },
   account: { id: 'u.account_id::text', name: "COALESCE(a.display_name, a.email, u.account_id::text)" },
-  costRule: { id: "COALESCE(u.channel_cost_rule_id::text, u.cost_snapshot->>'source', 'UNPRICED')",
-    name: "COALESCE(cr.name, CASE WHEN u.cost_snapshot->>'source' = 'CHANNEL_COST_RULE' THEN '历史成本规则' WHEN u.cost_snapshot->>'source' = 'PUBLIC_MODEL_FALLBACK' THEN '公共模型兜底成本' ELSE '未配置成本' END)" }
+  costRule: { id: "COALESCE(u.channel_cost_rule_id::text, u.cost_snapshot->>'id', u.cost_snapshot->>'source', 'UNPRICED')",
+    name: "COALESCE(cr.name, u.cost_snapshot->>'ruleName', CASE WHEN u.cost_snapshot->>'source' = 'CHANNEL_COST_RULE' THEN '历史成本规则' WHEN u.cost_snapshot->>'source' = 'PUBLIC_MODEL_FALLBACK' THEN '公共模型兜底成本' ELSE '未配置成本' END)" }
 } as const
 const SORTS = { requests: 'requests', costUsd: 'cost_usd', tokens: 'total_tokens', successRate: 'success_rate', p95LatencyMs: 'p95_latency_ms' } as const
 
@@ -24,7 +25,7 @@ function money(value: unknown): string { return new Decimal(value?.toString() ||
 export class AnalyticsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  resolveFilter(principal: AnalyticsPrincipal, query: Record<string, any>, now = new Date()): AnalyticsFilter {
+  resolveFilter(principal: AnalyticsPrincipal, query: AnalyticsQueryDto, now = new Date()): AnalyticsFilter {
     const end = query.end ? new Date(query.end) : now
     const start = query.start ? new Date(query.start) : new Date(end.getTime() - 7 * DAY)
     if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start >= end) throw new BadRequestException('Invalid analytics time range')
@@ -48,7 +49,7 @@ export class AnalyticsService {
     return Prisma.join(conditions, ' AND ')
   }
 
-  async overview(principal: AnalyticsPrincipal, query: Record<string, any>): Promise<AnalyticsOverview> {
+  async overview(principal: AnalyticsPrincipal, query: AnalyticsQueryDto): Promise<AnalyticsOverview> {
     const filter = this.resolveFilter(principal, query)
     const rows = await this.prisma.$queryRaw<any[]>(Prisma.sql`
       SELECT COUNT(*)::bigint AS requests,
@@ -76,7 +77,7 @@ export class AnalyticsService {
     }
   }
 
-  async timeseries(principal: AnalyticsPrincipal, query: Record<string, any>) {
+  async timeseries(principal: AnalyticsPrincipal, query: AnalyticsQueryDto) {
     const filter = this.resolveFilter(principal, query)
     const interval = query.interval || 'day'
     if (interval !== 'hour' && interval !== 'day') throw new BadRequestException('Interval must be hour or day')
@@ -92,7 +93,7 @@ export class AnalyticsService {
       inputTokens: String(row.input_tokens || 0), outputTokens: String(row.output_tokens || 0), costUsd: money(row.cost_usd) }))
   }
 
-  async breakdown(principal: AnalyticsPrincipal, query: Record<string, any>) {
+  async breakdown(principal: AnalyticsPrincipal, query: AnalyticsQueryDto) {
     const dimension = query.dimension as keyof typeof DIMENSIONS
     const sort = (query.sort || 'costUsd') as keyof typeof SORTS
     const order = String(query.order || 'desc').toLowerCase()
@@ -109,8 +110,9 @@ export class AnalyticsService {
         percentile_cont(0.95) WITHIN GROUP (ORDER BY u.duration_ms) AS p95_latency_ms,
         SUM((u.cost_snapshot->>'inputPerMillion')::numeric * u.input_tokens) / NULLIF(SUM(u.input_tokens), 0) AS avg_input_per_million,
         SUM((u.cost_snapshot->>'outputPerMillion')::numeric * u.output_tokens) / NULLIF(SUM(u.output_tokens), 0) AS avg_output_per_million,
-        MAX(cr.days_of_week::text) AS schedule_days, MAX(cr.start_minute) AS schedule_start_minute,
-        MAX(cr.end_minute) AS schedule_end_minute
+        COALESCE(MAX(cr.days_of_week::text), MAX(u.cost_snapshot->>'daysOfWeek')) AS schedule_days,
+        COALESCE(MAX(cr.start_minute), MAX((u.cost_snapshot->>'startMinute')::integer)) AS schedule_start_minute,
+        COALESCE(MAX(cr.end_minute), MAX((u.cost_snapshot->>'endMinute')::integer)) AS schedule_end_minute
       FROM usage_logs u
       LEFT JOIN organizations o ON o.id = u.organization_id LEFT JOIN channels c ON c.id = u.channel_id
       LEFT JOIN public_models pm ON pm.id = u.public_model_id LEFT JOIN channel_models cm ON cm.id = u.channel_model_id
@@ -122,11 +124,11 @@ export class AnalyticsService {
       totalTokens: String(row.total_tokens || 0), costUsd: money(row.cost_usd), p95LatencyMs: nullableInteger(row.p95_latency_ms),
       avgInputPerMillion: row.avg_input_per_million === null ? null : money(row.avg_input_per_million),
       avgOutputPerMillion: row.avg_output_per_million === null ? null : money(row.avg_output_per_million),
-      schedule: row.schedule_days ? { daysOfWeek: String(row.schedule_days).replace(/[{}]/g, '').split(',').filter(Boolean).map(Number),
+      schedule: row.schedule_days ? { daysOfWeek: String(row.schedule_days).replace(/[\[\]{}\s]/g, '').split(',').filter(Boolean).map(Number),
         startMinute: integer(row.schedule_start_minute), endMinute: integer(row.schedule_end_minute) } : null })), limit, offset }
   }
 
-  async filterOptions(principal: AnalyticsPrincipal, query: Record<string, any>) {
+  async filterOptions(principal: AnalyticsPrincipal, query: AnalyticsQueryDto) {
     const filter = this.resolveFilter(principal, query); const where = this.where(filter)
     const [organizations, channels, models, channelModels, accounts, costRules] = await Promise.all([
       principal.role === 'PLATFORM_ADMIN' ? this.prisma.$queryRaw<any[]>(Prisma.sql`SELECT DISTINCT o.id::text AS id, o.name FROM usage_logs u JOIN organizations o ON o.id=u.organization_id WHERE ${where} ORDER BY o.name`) : [],

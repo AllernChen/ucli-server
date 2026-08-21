@@ -64,8 +64,18 @@ async function toggleKey(key: any) {
 function openCosts(model: ChannelModel) { costModelId.value = model.id; costDrawer.value = true }
 async function saveCost(rule: any) {
   busy.value = true
-  try { await api(`/api/v1/admin/channel-models/${costModelId.value}/cost-rules`, { method: 'POST', body: JSON.stringify(rule) }); toast('采购成本规则已添加'); await load() }
+  try {
+    const { id, ...body } = rule
+    await api(id ? `/api/v1/admin/channel-model-cost-rules/${id}` : `/api/v1/admin/channel-models/${costModelId.value}/cost-rules`, {
+      method: id ? 'PATCH' : 'POST', body: JSON.stringify(body)
+    })
+    toast(id ? '采购成本规则已更新' : '采购成本规则已添加'); await load()
+  }
   catch (value: any) { error.value = value.message } finally { busy.value = false }
+}
+async function toggleCost(id: string, enabled: boolean) {
+  try { await api(`/api/v1/admin/channel-model-cost-rules/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }); toast(enabled ? '成本规则已启用' : '成本规则已停用'); await load() }
+  catch (value: any) { error.value = value.message }
 }
 async function removeCost(id: string) {
   try { await api(`/api/v1/admin/channel-model-cost-rules/${id}`, { method: 'DELETE' }); toast('成本规则已停用'); await load() }
@@ -120,5 +130,5 @@ onMounted(load)
   </template>
 
   <Drawer :open="modelDrawer" title="添加渠道模型" @close="modelDrawer = false"><div class="stack-form"><label>公共模型<select v-model="modelForm.publicModelId"><option v-for="model in publicModels" :key="model.id" :value="model.id">{{ model.displayName }} · {{ model.id }}</option></select></label><label>上游模型名<input v-model="modelForm.upstreamModel"></label><label>协议<select v-model="modelForm.protocol"><option>OPENAI_CHAT</option><option>OPENAI_RESPONSES</option><option>ANTHROPIC_MESSAGES</option><option>GEMINI</option></select></label><label class="check-row"><input v-model="modelForm.supportsStream" type="checkbox">支持流式</label><label class="check-row"><input v-model="modelForm.supportsTools" type="checkbox">支持工具</label><label>自动探测间隔（分钟）<input v-model.number="modelForm.probeIntervalMinutes" type="number" min="5"></label></div><template #footer><button @click="modelDrawer = false">取消</button><button class="primary" :disabled="busy" @click="addModel">添加模型</button></template></Drawer>
-  <Drawer :open="costDrawer" :title="`${selectedCostModel?.publicModelId || ''} · 采购成本`" width="880px" @close="costDrawer = false"><CostScheduleEditor :rules="selectedCostModel?.costRules || []" :timezone="channel?.costTimezone || 'UTC'" :busy="busy" @save="saveCost" @remove="removeCost" /></Drawer>
+  <Drawer :open="costDrawer" :title="`${selectedCostModel?.publicModelId || ''} · 采购成本`" width="880px" @close="costDrawer = false"><CostScheduleEditor :model-id="costModelId" :rules="selectedCostModel?.costRules || []" :timezone="channel?.costTimezone || 'UTC'" :busy="busy" @save="saveCost" @toggle="toggleCost" @remove="removeCost" /></Drawer>
 </template>

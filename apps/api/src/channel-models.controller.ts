@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { AuthGuard, Roles } from '../../../packages/security/src/auth.js'
 import { UuidPipe } from '../../../packages/http/src/uuid.pipe.js'
 import { ChannelModelsService } from './channel-models.service.js'
-import { BatchTestChannelModelsDto, CreateChannelModelDto, CreateCostRuleDto, PageQueryDto, UpdateChannelModelDto, UpdateCostRuleDto } from './catalog.dto.js'
+import { BatchTestChannelModelsDto, CreateChannelModelDto, CreateCostRuleDto, PageQueryDto, PreviewCostRuleDto, UpdateChannelModelDto, UpdateCostRuleDto } from './catalog.dto.js'
 import { ModelTestingService } from './model-testing.service.js'
 
 @ApiTags('admin/channel-models') @ApiBearerAuth() @UseGuards(AuthGuard) @Roles('PLATFORM_ADMIN')
@@ -35,6 +35,11 @@ export class ChannelModelsController {
   @Post('channel-models/:id/cost-rules')
   createCost(@Param('id', UuidPipe) id: string, @Body() body: CreateCostRuleDto) {
     return this.channelModels.createCostRule(id, body)
+  }
+
+  @Post('channel-models/:id/cost-rules/preview')
+  previewCost(@Param('id', UuidPipe) id: string, @Body() body: PreviewCostRuleDto) {
+    return this.channelModels.previewCostRule(id, body)
   }
 
   @Patch('channel-model-cost-rules/:id')

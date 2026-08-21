@@ -3,14 +3,46 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import { AuthGuard, Roles } from '../../../packages/security/src/auth.js'
 import { ChannelModelsService } from './channel-models.service.js'
+import { resolveChannelCost } from '../../../packages/gateway-core/src/cost-schedule.js'
 
 @ApiTags('admin/models') @ApiBearerAuth() @UseGuards(AuthGuard) @Roles('PLATFORM_ADMIN')
 @Controller('api/v1/admin/models')
 export class ModelsController {
   constructor(private readonly prisma: PrismaService, private readonly channelModels: ChannelModelsService) {}
   @Get() async list() {
-    const models = await this.prisma.publicModel.findMany({ include: { channelModels: true, prices: true } })
-    return models.map(({ channelModels, ...model }) => ({ ...model, abilities: channelModels }))
+    const now = new Date()
+    const [models, usage] = await Promise.all([
+      this.prisma.publicModel.findMany({ include: {
+        channelModels: { include: { channel: { select: { costTimezone: true } }, costRules: { where: { enabled: true } } } },
+        prices: { where: { validFrom: { lte: now }, OR: [{ validUntil: null }, { validUntil: { gt: now } }] }, orderBy: { validFrom: 'desc' } }
+      } }),
+      this.prisma.usageLog.groupBy({ by: ['publicModelId'], where: { startedAt: { gte: new Date(now.getTime() - 86_400_000) } },
+        _count: { _all: true }, _sum: { inputTokens: true, outputTokens: true, costUsd: true } })
+    ])
+    const usageByModel = new Map(usage.map(item => [item.publicModelId, item]))
+    return models.map(({ channelModels, ...model }) => {
+      const fallback = model.prices[0]
+      const abilities = channelModels.map(({ channel, ...ability }) => {
+        let currentCost: any = null
+        try { currentCost = resolveChannelCost(ability.costRules.map(rule => ({
+          ...rule, inputPerMillion: rule.inputPerMillion.toString(), outputPerMillion: rule.outputPerMillion.toString(),
+          cachedPerMillion: rule.cachedPerMillion.toString(), reasoningPerMillion: rule.reasoningPerMillion.toString()
+        })), now, channel.costTimezone) } catch { /* Invalid legacy rule is unavailable, not fatal to the catalog. */ }
+        if (!currentCost && fallback) currentCost = {
+          id: fallback.id, source: 'PUBLIC_MODEL_FALLBACK', inputPerMillion: fallback.inputPerMillion.toString(),
+          outputPerMillion: fallback.outputPerMillion.toString(), cachedPerMillion: fallback.cachedPerMillion.toString(),
+          reasoningPerMillion: fallback.reasoningPerMillion.toString(), currency: 'USD', timezone: channel.costTimezone,
+          resolvedAt: now.toISOString()
+        }
+        return { ...ability, currentCost }
+      })
+      const aggregate = usageByModel.get(model.id)
+      return { ...model, abilities, usage24h: {
+        requests: aggregate?._count._all || 0,
+        tokens: Number(aggregate?._sum.inputTokens || 0) + Number(aggregate?._sum.outputTokens || 0),
+        costUsd: aggregate?._sum.costUsd?.toString() || '0'
+      } }
+    })
   }
   @Post() create(@Body() body: any) { return this.prisma.publicModel.create({ data: {
     id: body.id, displayName: body.displayName, contextSize: body.contextSize || null, enabled: false

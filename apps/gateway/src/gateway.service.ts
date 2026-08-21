@@ -47,6 +47,7 @@ export class GatewayService {
   private async candidates(publicModelId: string, protocol: GatewayProtocol, at: Date, fallbackPrice?: any): Promise<RelayCandidate[]> {
     const abilities = await this.prisma.channelModel.findMany({ where: {
       publicModelId, protocol: { in: CLIENT_UPSTREAMS[protocol] }, enabled: true,
+      health: { in: ['HEALTHY', 'DEGRADED'] },
       channel: { enabled: true, health: { in: ['HEALTHY', 'DEGRADED'] }, OR: [{ circuitOpenUntil: null }, { circuitOpenUntil: { lt: new Date() } }] }
     }, include: { costRules: true, channel: { include: { keys: true } } } })
     const remaining = [...abilities]
@@ -70,7 +71,12 @@ export class GatewayService {
         ...rule, inputPerMillion: rule.inputPerMillion.toString(), outputPerMillion: rule.outputPerMillion.toString(),
         cachedPerMillion: rule.cachedPerMillion.toString(), reasoningPerMillion: rule.reasoningPerMillion.toString()
       }))
-      const scheduled = resolveChannelCost(rules, at, ability.channel.costTimezone)
+      let scheduled: ResolvedCost | null
+      try { scheduled = resolveChannelCost(rules, at, ability.channel.costTimezone) } catch {
+        // A legacy or externally-corrupted rule must not take every other healthy
+        // candidate down with it. New writes are rejected by API and DB validation.
+        continue
+      }
       const cost: ResolvedCost | null = scheduled || (fallbackPrice ? {
         id: fallbackPrice.id, source: 'PUBLIC_MODEL_FALLBACK', currency: 'USD', timezone: ability.channel.costTimezone,
         resolvedAt: at.toISOString(), inputPerMillion: fallbackPrice.inputPerMillion.toString(),

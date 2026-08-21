@@ -1,7 +1,7 @@
 import { Transform, Type } from 'class-transformer'
 import {
-  ArrayMaxSize, ArrayNotEmpty, IsArray, IsBoolean, IsEnum, IsIn, IsInt, IsNumberString, IsOptional,
-  IsString, IsUrl, IsUUID, Length, Max, Min
+  ArrayMaxSize, ArrayNotEmpty, IsArray, IsBoolean, IsEnum, IsIn, IsInt, IsOptional,
+  IsString, IsTimeZone, IsUrl, IsUUID, Length, Matches, Max, Min
 } from 'class-validator'
 import { ChannelProtocol, GatewayProtocol, HealthStatus, KeySelection, ModelHealthStatus } from '@prisma/client'
 
@@ -28,7 +28,7 @@ export class CreateChannelDto {
   @IsOptional() @IsInt() @Min(1000) @Max(600000) timeoutMs = 300000
   @IsOptional() @IsInt() @Min(0) @Max(10) maxRetries = 1
   @IsOptional() @IsEnum(KeySelection) keySelection: KeySelection = KeySelection.WEIGHTED_RANDOM
-  @IsOptional() @IsString() costTimezone = 'UTC'
+  @IsOptional() @IsTimeZone() costTimezone = 'UTC'
 }
 
 export class UpdateChannelDto {
@@ -42,7 +42,7 @@ export class UpdateChannelDto {
   @IsOptional() @IsInt() @Min(0) @Max(10) maxRetries?: number
   @IsOptional() @IsEnum(KeySelection) keySelection?: KeySelection
   @IsOptional() @IsBoolean() autoDisable?: boolean
-  @IsOptional() @IsString() costTimezone?: string
+  @IsOptional() @IsTimeZone() costTimezone?: string
 }
 
 export class CreateChannelModelDto {
@@ -67,31 +67,35 @@ export class UpdateChannelModelDto {
 
 export class CreateCostRuleDto {
   @IsString() @Length(1, 80) name!: string
-  @IsArray() @ArrayNotEmpty() @ArrayMaxSize(7) daysOfWeek!: number[]
+  @IsArray() @ArrayNotEmpty() @ArrayMaxSize(7) @IsInt({ each: true }) @Min(1, { each: true }) @Max(7, { each: true }) daysOfWeek!: number[]
   @IsInt() @Min(0) @Max(1439) startMinute!: number
   @IsInt() @Min(0) @Max(1439) endMinute!: number
   @IsOptional() @IsInt() @Min(0) @Max(1000) priority = 0
-  @IsNumberString() inputPerMillion!: string
-  @IsNumberString() outputPerMillion!: string
-  @IsOptional() @IsNumberString() cachedPerMillion = '0'
-  @IsOptional() @IsNumberString() reasoningPerMillion = '0'
+  @Matches(/^(?:0|[1-9]\d*)(?:\.\d+)?$/) inputPerMillion!: string
+  @Matches(/^(?:0|[1-9]\d*)(?:\.\d+)?$/) outputPerMillion!: string
+  @IsOptional() @Matches(/^(?:0|[1-9]\d*)(?:\.\d+)?$/) cachedPerMillion = '0'
+  @IsOptional() @Matches(/^(?:0|[1-9]\d*)(?:\.\d+)?$/) reasoningPerMillion = '0'
   @IsString() validFrom!: string
   @IsOptional() @IsString() validUntil?: string
 }
 
 export class UpdateCostRuleDto {
   @IsOptional() @IsString() @Length(1, 80) name?: string
-  @IsOptional() @IsArray() @ArrayNotEmpty() @ArrayMaxSize(7) daysOfWeek?: number[]
+  @IsOptional() @IsArray() @ArrayNotEmpty() @ArrayMaxSize(7) @IsInt({ each: true }) @Min(1, { each: true }) @Max(7, { each: true }) daysOfWeek?: number[]
   @IsOptional() @IsInt() @Min(0) @Max(1439) startMinute?: number
   @IsOptional() @IsInt() @Min(0) @Max(1439) endMinute?: number
   @IsOptional() @IsInt() @Min(0) @Max(1000) priority?: number
-  @IsOptional() @IsNumberString() inputPerMillion?: string
-  @IsOptional() @IsNumberString() outputPerMillion?: string
-  @IsOptional() @IsNumberString() cachedPerMillion?: string
-  @IsOptional() @IsNumberString() reasoningPerMillion?: string
+  @IsOptional() @Matches(/^(?:0|[1-9]\d*)(?:\.\d+)?$/) inputPerMillion?: string
+  @IsOptional() @Matches(/^(?:0|[1-9]\d*)(?:\.\d+)?$/) outputPerMillion?: string
+  @IsOptional() @Matches(/^(?:0|[1-9]\d*)(?:\.\d+)?$/) cachedPerMillion?: string
+  @IsOptional() @Matches(/^(?:0|[1-9]\d*)(?:\.\d+)?$/) reasoningPerMillion?: string
   @IsOptional() @IsString() validFrom?: string
   @IsOptional() @IsString() validUntil?: string
   @IsOptional() @IsBoolean() enabled?: boolean
+}
+
+export class PreviewCostRuleDto extends CreateCostRuleDto {
+  @IsOptional() @IsUUID('4') id?: string
 }
 
 export class CostRulePreviewDto {

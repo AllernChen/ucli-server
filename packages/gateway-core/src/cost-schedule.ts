@@ -3,6 +3,7 @@ import Decimal from 'decimal.js'
 
 export interface ScheduledCost extends PriceSnapshot {
   id: string
+  name?: string
   priority: number
   daysOfWeek: number[]
   startMinute: number
@@ -20,6 +21,11 @@ export interface ResolvedCost extends PriceSnapshot {
   source: 'CHANNEL_COST_RULE' | 'PUBLIC_MODEL_FALLBACK'
   timezone: string
   resolvedAt: string
+  ruleName?: string
+  daysOfWeek?: number[]
+  startMinute?: number
+  endMinute?: number
+  priority?: number
 }
 
 const WEEKDAYS: Record<string, number> = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 }
@@ -41,7 +47,7 @@ function localTime(at: Date, timezone: string): { weekday: number; minute: numbe
   return { weekday, minute: hour * 60 + minute }
 }
 
-function validateRule(rule: ScheduledCost): void {
+export function validateScheduledCost(rule: ScheduledCost): void {
   if (rule.currency !== 'USD' || [rule.inputPerMillion, rule.outputPerMillion, rule.cachedPerMillion, rule.reasoningPerMillion]
     .some(value => !new Decimal(value).isFinite() || new Decimal(value).isNegative())) {
     throw new TypeError('Cost values must be non-negative USD amounts')
@@ -52,6 +58,10 @@ function validateRule(rule: ScheduledCost): void {
   if (![rule.startMinute, rule.endMinute].every(value => Number.isInteger(value) && value >= 0 && value <= 1439)) {
     throw new TypeError('Schedule minutes must be between 0 and 1439')
   }
+}
+
+export function validateCostTimezone(timezone: string): void {
+  localTime(new Date(0), timezone)
 }
 
 function matchesLocalTime(rule: ScheduledCost, weekday: number, minute: number): boolean {
@@ -67,7 +77,7 @@ function matchesLocalTime(rule: ScheduledCost, weekday: number, minute: number):
 export function resolveChannelCost(rules: ScheduledCost[], at: Date, timezone: string): ResolvedCost | null {
   if (!Number.isFinite(at.getTime())) throw new TypeError('Invalid scheduled date')
   const current = localTime(at, timezone)
-  for (const rule of rules) validateRule(rule)
+  for (const rule of rules) validateScheduledCost(rule)
   const rule = rules.filter(item => item.enabled && item.validFrom <= at && (!item.validUntil || item.validUntil > at) &&
       matchesLocalTime(item, current.weekday, current.minute))
     .sort((left, right) => right.priority - left.priority || right.validFrom.getTime() - left.validFrom.getTime() ||
@@ -76,7 +86,9 @@ export function resolveChannelCost(rules: ScheduledCost[], at: Date, timezone: s
   return {
     id: rule.id, source: 'CHANNEL_COST_RULE', currency: 'USD', inputPerMillion: rule.inputPerMillion,
     outputPerMillion: rule.outputPerMillion, cachedPerMillion: rule.cachedPerMillion,
-    reasoningPerMillion: rule.reasoningPerMillion, timezone, resolvedAt: at.toISOString()
+    reasoningPerMillion: rule.reasoningPerMillion, timezone, resolvedAt: at.toISOString(),
+    ruleName: rule.name, daysOfWeek: [...rule.daysOfWeek], startMinute: rule.startMinute,
+    endMinute: rule.endMinute, priority: rule.priority
   }
 }
 
@@ -107,8 +119,8 @@ function weeklyMinutes(rule: ScheduledCost): boolean[] {
 }
 
 export function costRulesOverlap(left: ScheduledCost, right: ScheduledCost): boolean {
-  validateRule(left)
-  validateRule(right)
+  validateScheduledCost(left)
+  validateScheduledCost(right)
   if (!left.enabled || !right.enabled) return false
   if ((left.validUntil && left.validUntil <= right.validFrom) || (right.validUntil && right.validUntil <= left.validFrom)) return false
   const leftMinutes = weeklyMinutes(left)

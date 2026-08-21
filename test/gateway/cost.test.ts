@@ -8,6 +8,6 @@ describe('price snapshot settlement', () => {
       reasoningTokens: 50_000, source: 'upstream'
     }, {
       inputPerMillion: '1', outputPerMillion: '2', cachedPerMillion: '0.1', reasoningPerMillion: '3'
-    })).toBe('2.06000000')
+    })).toBe('1.96000000')
   })
 })

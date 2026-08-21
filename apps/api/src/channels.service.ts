@@ -1,8 +1,10 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
+import { Prisma } from '@prisma/client'
 import { encryptSecret, secretSuffix } from '../../../packages/security/src/envelope-crypto.js'
 import { loadMasterKey } from '../../../packages/security/src/master-key.js'
 import { decryptSecret } from '../../../packages/security/src/envelope-crypto.js'
+import { validateCostTimezone } from '../../../packages/gateway-core/src/cost-schedule.js'
 
 export interface ChannelListFilter {
   limit?: number
@@ -34,21 +36,26 @@ export class ChannelsService {
       this.prisma.channel.count({ where })
     ])
     const ids = channels.map(channel => channel.id)
-    const logs = ids.length ? await this.prisma.usageLog.findMany({
-      where: { channelId: { in: ids }, startedAt: { gte: new Date(Date.now() - 86_400_000) } },
-      select: { channelId: true, statusCode: true, durationMs: true }
-    }) : []
+    const aggregates: any[] = ids.length ? await this.prisma.$queryRaw(Prisma.sql`
+      SELECT channel_id::text AS channel_id, COUNT(*)::bigint AS requests,
+        COUNT(*) FILTER (WHERE status_code < 400)::bigint AS successes,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95_latency_ms
+      FROM usage_logs
+      WHERE started_at >= ${new Date(Date.now() - 86_400_000)}
+        AND channel_id IN (${Prisma.join(ids.map(id => Prisma.sql`${id}::uuid`))})
+      GROUP BY channel_id`) : []
+    const usageByChannel = new Map(aggregates.map(row => [row.channel_id, row]))
     const items = channels.map(channel => {
-      const usage = logs.filter(log => log.channelId === channel.id)
-      const durations = usage.map(log => log.durationMs).sort((left, right) => left - right)
+      const usage = usageByChannel.get(channel.id)
+      const requests = Number(usage?.requests || 0)
       const { keys, channelModels, ...summary } = channel as any
       return {
         ...summary, availableKeys: keys.filter((key: any) => key.enabled && key.health !== 'DISABLED').length,
         healthyModels: channelModels.filter((model: any) => model.enabled && (model.health === 'HEALTHY' || model.health === 'DEGRADED')).length,
         modelCount: channelModels.length,
         usage24h: {
-          requests: usage.length, successRate: usage.length ? usage.filter(log => log.statusCode < 400).length / usage.length : 0,
-          p95LatencyMs: durations.length ? durations[Math.min(durations.length - 1, Math.ceil(durations.length * 0.95) - 1)] : null
+          requests, successRate: requests ? Number(usage.successes) / requests : 0,
+          p95LatencyMs: usage?.p95_latency_ms == null ? null : Math.round(Number(usage.p95_latency_ms))
         }
       }
     })
@@ -84,11 +91,14 @@ export class ChannelsService {
     const mapped = new Set(channel.channelModels.map(model => model.upstreamModel))
     return [...new Set(ids.filter(Boolean) as string[])].sort().map(upstreamModel => ({ upstreamModel, alreadyMapped: mapped.has(upstreamModel) }))
   }
-  create(body: any) { return this.prisma.channel.create({ data: {
+  create(body: any) {
+    assertCostTimezone(body.costTimezone ?? 'UTC')
+    return this.prisma.channel.create({ data: {
     name: body.name, provider: body.provider, protocol: body.protocol, baseUrl: body.baseUrl,
     priority: body.priority ?? 0, weight: body.weight ?? 1, timeoutMs: body.timeoutMs ?? 300000,
     maxRetries: body.maxRetries ?? 1, keySelection: body.keySelection ?? 'WEIGHTED_RANDOM', costTimezone: body.costTimezone ?? 'UTC'
-  } }) }
+    } })
+  }
   async addKey(channelId: string, body: any) {
     if (!await this.prisma.channel.findUnique({ where: { id: channelId } })) throw new NotFoundException('Channel not found')
     const plaintext = String(body.key || '').trim()
@@ -128,6 +138,7 @@ export class ChannelsService {
     } finally { clearTimeout(timeout) }
   }
   update(id: string, body: any) {
+    if (body.costTimezone !== undefined) assertCostTimezone(body.costTimezone)
     return this.prisma.channel.update({ where: { id }, data: {
       ...(body.name !== undefined ? { name: body.name } : {}),
       ...(body.provider !== undefined ? { provider: body.provider } : {}),
@@ -151,5 +162,11 @@ export class ChannelsService {
       ...(body.remainingUsd !== undefined ? { remainingUsd: body.remainingUsd } : {}),
       ...(body.expiresAt !== undefined ? { expiresAt: body.expiresAt ? new Date(body.expiresAt) : null } : {})
     }, select: { id: true, suffix: true, enabled: true, health: true, priority: true, weight: true, remainingUsd: true, expiresAt: true } })
+  }
+}
+
+function assertCostTimezone(timezone: string): void {
+  try { validateCostTimezone(timezone) } catch {
+    throw new BadRequestException('Cost timezone must be a valid IANA timezone')
   }
 }

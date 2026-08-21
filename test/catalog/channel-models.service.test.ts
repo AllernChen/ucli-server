@@ -20,9 +20,15 @@ function makeHarness() {
   const channelModels: any[] = [
     { id: modelId, channelId, publicModelId: 'gpt-4o', upstreamModel: 'gpt-4o-up', protocol: 'OPENAI_CHAT',
       enabled: true, health: 'HEALTHY', lastTestedAt: new Date('2026-08-20T00:00:00Z'),
-      lastSuccessAt: new Date('2026-08-20T00:00:00Z'), costRules: [costRule()], channel: { enabled: true } },
+      lastSuccessAt: new Date('2026-08-20T00:00:00Z'), costRules: [costRule()], channel: {
+        enabled: true, health: 'HEALTHY', costTimezone: 'UTC', circuitOpenUntil: null,
+        keys: [{ id: 'key-1', enabled: true, health: 'HEALTHY', remainingUsd: null, weight: 1, priority: 0, expiresAt: null, isolatedUntil: null }]
+      } },
     { id: '20000000-0000-4000-8000-000000000002', channelId, publicModelId: 'gpt-4.1', upstreamModel: 'gpt-4.1-up',
-      protocol: 'OPENAI_CHAT', enabled: true, health: 'DEGRADED', costRules: [], channel: { enabled: true } }
+      protocol: 'OPENAI_CHAT', enabled: true, health: 'DEGRADED', costRules: [], channel: {
+        enabled: true, health: 'HEALTHY', costTimezone: 'UTC', circuitOpenUntil: null,
+        keys: [{ id: 'key-1', enabled: true, health: 'HEALTHY', remainingUsd: null, weight: 1, priority: 0, expiresAt: null, isolatedUntil: null }]
+      } }
   ]
   const costRules: any[] = [costRule()]
   const prisma: any = {
@@ -133,5 +139,47 @@ describe('channel model catalog service', () => {
       ready: false, healthyChannelModels: 0, hasCurrentCost: false,
       blockers: ['NO_HEALTHY_CHANNEL_MODEL', 'NO_CURRENT_COST', 'LATEST_TEST_FAILED']
     })
+  })
+
+  it('does not combine health from one channel model with cost from another', async () => {
+    const { service, channelModels } = makeHarness()
+    channelModels[0].costRules = []
+    channelModels.push({
+      ...channelModels[0], id: '20000000-0000-4000-8000-000000000099', health: 'UNHEALTHY', costRules: [costRule()]
+    })
+    await expect(service.publishCheck('gpt-4o', new Date('2026-08-20T01:00:00Z'))).resolves.toMatchObject({
+      ready: false, healthyChannelModels: 1, hasCurrentCost: false, blockers: ['NO_CURRENT_COST']
+    })
+  })
+
+  it('requires the channel itself to be healthy and the rule to match the current local time', async () => {
+    const { service, channelModels } = makeHarness()
+    channelModels[0].channel.health = 'UNHEALTHY'
+    await expect(service.publishCheck('gpt-4o', new Date('2026-08-20T01:00:00Z'))).resolves.toMatchObject({ ready: false })
+    channelModels[0].channel.health = 'HEALTHY'
+    channelModels[0].costRules = [costRule({ daysOfWeek: [5] })]
+    await expect(service.publishCheck('gpt-4o', new Date('2026-08-20T01:00:00Z'))).resolves.toMatchObject({
+      ready: false, healthyChannelModels: 1, hasCurrentCost: false
+    })
+  })
+
+  it('rejects a negative first cost rule before persistence', async () => {
+    const { service, costRules } = makeHarness()
+    costRules.splice(0)
+    await expect(service.createCostRule(modelId, {
+      name: '非法成本', daysOfWeek: [1], startMinute: 0, endMinute: 0, priority: 0,
+      inputPerMillion: '-1', outputPerMillion: '2', cachedPerMillion: '0', reasoningPerMillion: '0',
+      validFrom: '2026-08-01T00:00:00.000Z'
+    })).rejects.toMatchObject({ status: 400 })
+    expect(costRules).toHaveLength(0)
+  })
+
+  it('previews conflicts before saving a cost rule', async () => {
+    const { service } = makeHarness()
+    await expect(service.previewCostRule(modelId, {
+      name: '冲突成本', daysOfWeek: [1, 2, 3, 4, 5, 6, 7], startMinute: 600, endMinute: 700, priority: 0,
+      inputPerMillion: '1', outputPerMillion: '2', cachedPerMillion: '0', reasoningPerMillion: '0',
+      validFrom: '2026-01-01T00:00:00.000Z'
+    }, new Date('2026-08-20T01:00:00Z'))).resolves.toMatchObject({ valid: false, conflicts: [{ name: '基础成本' }] })
   })
 })

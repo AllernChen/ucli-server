@@ -1,7 +1,7 @@
 import { Body, Controller, Post, Req, Res, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { Type } from 'class-transformer'
-import { ArrayMaxSize, ArrayNotEmpty, IsArray, IsIn, IsNumber, IsOptional, IsString, IsUUID, Length, Max, Min, ValidateNested } from 'class-validator'
+import { ArrayMaxSize, ArrayNotEmpty, IsArray, IsBoolean, IsIn, IsNumber, IsOptional, IsString, IsUUID, Length, Max, Min, ValidateNested } from 'class-validator'
 import type { Response } from 'express'
 import { AuthGuard, Roles } from '../../../packages/security/src/auth.js'
 import { ModelTestingService } from './model-testing.service.js'
@@ -18,6 +18,7 @@ export class AdminModelTestDto {
   @IsNumber() @Min(0) @Max(2) temperature!: number
   @IsNumber() @Min(1) @Max(8192) maxTokens!: number
   @IsOptional() @IsUUID('4') keyId?: string
+  @IsOptional() @IsBoolean() stream = false
 }
 
 @ApiTags('admin/model-tests') @ApiBearerAuth() @UseGuards(AuthGuard) @Roles('PLATFORM_ADMIN')
@@ -44,8 +45,9 @@ export class ModelTestingController {
       if (!response.writableEnded && !abort.signal.aborted) response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
     }
     try {
-      const result = await this.modelTesting.runConversation(body, request.principal.sub, abort.signal)
-      if (result.assistantMessage) send('delta', { content: result.assistantMessage })
+      const result = await this.modelTesting.runConversation(
+        { ...body, stream: true }, request.principal.sub, abort.signal, content => send('delta', { content })
+      )
       const { assistantMessage: _assistant, rawResponse, ...metrics } = result
       send('metrics', metrics)
       send('done', { rawResponse })

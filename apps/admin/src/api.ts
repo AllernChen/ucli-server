@@ -20,3 +20,37 @@ export async function optional<T = any[]>(path: string): Promise<T> {
     return response.ok ? await response.json() as T : [] as T
   } catch { return [] as T }
 }
+
+export async function apiSse(
+  path: string, init: RequestInit, onEvent: (event: string, data: any) => void
+): Promise<void> {
+  const response = await fetch(`${BASE}${path}`, {
+    ...init, headers: { authorization: `Bearer ${token()}`, 'content-type': 'application/json', ...init.headers }
+  })
+  if (!response.ok || !response.body) {
+    throw new Error((await response.json().catch(() => null))?.message || `HTTP ${response.status}`)
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  const consume = (block: string) => {
+    const event = block.split(/\r?\n/).find(line => line.startsWith('event:'))?.slice(6).trim() || 'message'
+    const data = block.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('')
+    if (!data) return
+    let parsed: unknown = data
+    try { parsed = JSON.parse(data) } catch { /* Keep plain-text event payload. */ }
+    onEvent(event, parsed)
+  }
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const blocks = buffer.split(/\r?\n\r?\n/)
+      buffer = blocks.pop() || ''
+      blocks.forEach(consume)
+    }
+    buffer += decoder.decode()
+    if (buffer.trim()) consume(buffer)
+  } finally { reader.releaseLock() }
+}

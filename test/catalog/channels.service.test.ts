@@ -19,7 +19,7 @@ function service() {
       count: async () => 1,
       findUnique: async ({ where }: any) => where.id === channel.id ? structuredClone(channel) : null
     },
-    usageLog: { findMany: async () => [] }
+    $queryRaw: async () => []
   }
   return new ChannelsService(prisma)
 }

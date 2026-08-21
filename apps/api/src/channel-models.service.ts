@@ -1,6 +1,9 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
-import { costRulesOverlap, type ScheduledCost } from '../../../packages/gateway-core/src/cost-schedule.js'
+import {
+  costRulesOverlap, resolveChannelCost, validateScheduledCost, type ScheduledCost
+} from '../../../packages/gateway-core/src/cost-schedule.js'
+import { selectKey } from '../../../packages/gateway-core/src/routing.js'
 
 export interface PageRequest { limit: number; offset: number }
 
@@ -18,6 +21,7 @@ export interface CreateChannelModelCostRuleInput {
   validUntil?: string
 }
 export type UpdateChannelModelCostRuleInput = Partial<CreateChannelModelCostRuleInput> & { enabled?: boolean }
+export type PreviewChannelModelCostRuleInput = CreateChannelModelCostRuleInput & { id?: string }
 
 export interface CreateChannelModelInput {
   publicModelId: string
@@ -43,7 +47,7 @@ export class ChannelModelsService {
     }
     const [items, total] = await Promise.all([
       this.prisma.channelModel.findMany({
-        where: { channelId }, include: { costRules: { where: { enabled: true }, orderBy: [{ priority: 'desc' }, { validFrom: 'desc' }] } },
+        where: { channelId }, include: { costRules: { orderBy: [{ enabled: 'desc' }, { priority: 'desc' }, { validFrom: 'desc' }] } },
         orderBy: [{ publicModelId: 'asc' }, { upstreamModel: 'asc' }], skip: page.offset, take: page.limit
       }),
       this.prisma.channelModel.count({ where: { channelId } })
@@ -89,6 +93,25 @@ export class ChannelModelsService {
     })
   }
 
+  async previewCostRule(channelModelId: string, input: PreviewChannelModelCostRuleInput, at = new Date()) {
+    const model = await this.prisma.channelModel.findUnique({
+      where: { id: channelModelId }, include: { channel: { select: { costTimezone: true } }, costRules: true }
+    })
+    if (!model) throw new NotFoundException('Channel model not found')
+    const candidate = costRuleFromInput(channelModelId, input, input.id || 'candidate')
+    assertValidCostRule(candidate)
+    const others = model.costRules.filter(rule => rule.enabled && rule.id !== input.id).map(toScheduledCost)
+    const conflicts = others.filter(rule => rule.priority === candidate.priority && costRulesOverlap(rule, candidate))
+    let resolved = null
+    try { resolved = resolveChannelCost([...others, candidate], at, model.channel.costTimezone) } catch (error: any) {
+      throw new BadRequestException(error?.message || 'Cost rule preview is invalid')
+    }
+    return {
+      valid: conflicts.length === 0, candidateActiveNow: resolved?.id === candidate.id, resolved,
+      conflicts: conflicts.map(rule => ({ id: rule.id, name: rule.name }))
+    }
+  }
+
   async listProbes(channelModelId: string, page: PageRequest) {
     if (!await this.prisma.channelModel.findUnique({ where: { id: channelModelId }, select: { id: true } })) {
       throw new NotFoundException('Channel model not found')
@@ -110,13 +133,8 @@ export class ChannelModelsService {
       if (!Number.isFinite(validFrom.getTime()) || (validUntil && (!Number.isFinite(validUntil.getTime()) || validUntil <= validFrom))) {
         throw new BadRequestException('Cost rule validity range is invalid')
       }
-      const candidate: ScheduledCost = {
-        id: 'candidate', channelModelId, name: input.name, daysOfWeek: input.daysOfWeek,
-        startMinute: input.startMinute, endMinute: input.endMinute, priority: input.priority,
-        inputPerMillion: input.inputPerMillion, outputPerMillion: input.outputPerMillion,
-        cachedPerMillion: input.cachedPerMillion, reasoningPerMillion: input.reasoningPerMillion,
-        currency: 'USD', enabled: true, validFrom, validUntil, createdAt: new Date()
-      } as ScheduledCost
+      const candidate = costRuleFromInput(channelModelId, input, 'candidate')
+      assertValidCostRule(candidate)
       const existing = await transaction.channelModelCostRule.findMany({ where: { channelModelId, enabled: true } })
       const conflicts = existing.filter(rule => rule.priority === candidate.priority && costRulesOverlap(toScheduledCost(rule), candidate))
       if (conflicts.length) throw new ConflictException({
@@ -145,10 +163,11 @@ export class ChannelModelsService {
         (!Number.isFinite(merged.validUntil.getTime()) || merged.validUntil <= merged.validFrom))) {
         throw new BadRequestException('Cost rule validity range is invalid')
       }
+      assertValidCostRule(merged)
       const others = await transaction.channelModelCostRule.findMany({
         where: { channelModelId: existing.channelModelId, enabled: true, id: { not: id } }
       })
-      const conflicts = others.filter(rule => rule.priority === merged.priority && costRulesOverlap(toScheduledCost(rule), merged))
+      const conflicts = merged.enabled ? others.filter(rule => rule.priority === merged.priority && costRulesOverlap(toScheduledCost(rule), merged)) : []
       if (conflicts.length) throw new ConflictException({
         message: 'Cost rule overlaps another rule at the same priority',
         conflicts: conflicts.map(rule => ({ id: rule.id, name: rule.name }))
@@ -181,19 +200,33 @@ export class ChannelModelsService {
   async publishCheck(publicModelId: string, at = new Date()) {
     const publicModel = await this.prisma.publicModel.findUnique({
       where: { id: publicModelId },
-      include: { prices: { where: { validFrom: { lte: at }, OR: [{ validUntil: null }, { validUntil: { gt: at } }] }, take: 1 } }
+      include: { prices: { where: { validFrom: { lte: at }, OR: [{ validUntil: null }, { validUntil: { gt: at } }] },
+        orderBy: { validFrom: 'desc' }, take: 1 } }
     })
     if (!publicModel) throw new NotFoundException('Public model not found')
     const channelModels = await this.prisma.channelModel.findMany({
       where: { publicModelId },
       include: {
-        channel: { select: { enabled: true } },
-        costRules: { where: { enabled: true, validFrom: { lte: at }, OR: [{ validUntil: null }, { validUntil: { gt: at } }] } }
+        channel: { include: { keys: true } },
+        costRules: { where: { enabled: true } }
       }
     })
-    const healthyChannelModels = channelModels.filter(model => model.enabled && model.channel.enabled &&
-      (model.health === 'HEALTHY' || model.health === 'DEGRADED')).length
-    const hasCurrentCost = publicModel.prices.length > 0 || channelModels.some(model => model.costRules.length > 0)
+    const routingCandidates = channelModels.filter(model => {
+      const channel = model.channel
+      if (!model.enabled || !channel.enabled || !['HEALTHY', 'DEGRADED'].includes(model.health) ||
+        !['HEALTHY', 'DEGRADED'].includes(channel.health) || (channel.circuitOpenUntil && channel.circuitOpenUntil >= at)) return false
+      return Boolean(selectKey(channel.keys.map(key => ({
+        ...key, remainingUsd: key.remainingUsd === null ? null : Number(key.remainingUsd),
+        healthy: key.health === 'HEALTHY' || key.health === 'DEGRADED'
+      })), () => 0, at))
+    })
+    const healthyChannelModels = routingCandidates.length
+    const readyCandidates = routingCandidates.filter(model => {
+      try {
+        return Boolean(resolveChannelCost(model.costRules.map(toScheduledCost), at, model.channel.costTimezone) || publicModel.prices[0])
+      } catch { return false }
+    })
+    const hasCurrentCost = readyCandidates.length > 0
     const blockers: Array<'NO_HEALTHY_CHANNEL_MODEL' | 'NO_CURRENT_COST' | 'LATEST_TEST_FAILED'> = []
     if (!healthyChannelModels) blockers.push('NO_HEALTHY_CHANNEL_MODEL')
     if (!hasCurrentCost) blockers.push('NO_CURRENT_COST')
@@ -201,6 +234,26 @@ export class ChannelModelsService {
       blockers.push('LATEST_TEST_FAILED')
     }
     return { ready: blockers.length === 0, healthyChannelModels, hasCurrentCost, blockers }
+  }
+}
+
+function assertValidCostRule(rule: ScheduledCost): void {
+  try { validateScheduledCost(rule) } catch (error: any) {
+    throw new BadRequestException(error?.message || 'Cost rule is invalid')
+  }
+}
+
+function costRuleFromInput(channelModelId: string, input: CreateChannelModelCostRuleInput, id: string): ScheduledCost {
+  const validFrom = new Date(input.validFrom)
+  const validUntil = input.validUntil ? new Date(input.validUntil) : null
+  if (!Number.isFinite(validFrom.getTime()) || (validUntil && (!Number.isFinite(validUntil.getTime()) || validUntil <= validFrom))) {
+    throw new BadRequestException('Cost rule validity range is invalid')
+  }
+  return {
+    id, name: input.name, daysOfWeek: input.daysOfWeek, startMinute: input.startMinute, endMinute: input.endMinute,
+    priority: input.priority, inputPerMillion: input.inputPerMillion, outputPerMillion: input.outputPerMillion,
+    cachedPerMillion: input.cachedPerMillion, reasoningPerMillion: input.reasoningPerMillion,
+    currency: 'USD', enabled: true, validFrom, validUntil, createdAt: new Date()
   }
 }
 

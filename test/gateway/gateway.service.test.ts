@@ -20,7 +20,7 @@ function makeAbility(overrides: Record<string, any> = {}) {
   const inputPerMillion = overrides.inputPerMillion || '1'
   const outputPerMillion = overrides.outputPerMillion || '2'
   return { id: overrides.id || 'cm1', channelId, publicModelId: 'gpt-4o', upstreamModel: overrides.upstreamModel || 'gpt-4o-up', protocol: 'OPENAI_CHAT',
-    supportsStream: true, supportsTools: true, enabled: true,
+    supportsStream: true, supportsTools: true, enabled: true, health: overrides.health || 'HEALTHY',
     costRules: overrides.costRules ?? [{ id: overrides.costRuleId || 'cr1', priority: 0, daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
       startMinute: 0, endMinute: 0, validFrom: new Date('2026-01-01T00:00:00Z'), validUntil: null,
       createdAt: new Date('2026-01-01T00:00:00Z'), enabled: true, currency: 'USD', inputPerMillion,
@@ -115,6 +115,15 @@ describe('gateway service orchestration', () => {
     expect(prisma.channel.update).toHaveBeenCalled()
   })
 
+  it('only queries channel models that are healthy or degraded', async () => {
+    const { service, prisma } = makeHarness()
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ usage: { prompt_tokens: 1, completion_tokens: 1 } }), { status: 200 }))
+    await service.relay({ protocol: 'openai_chat', body: { model: 'gpt-4o', messages: [] }, headers: {}, principal, response: makeResponse() as any })
+    expect(prisma.channelModel.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ health: { in: ['HEALTHY', 'DEGRADED'] } })
+    }))
+  })
+
   it('uses the public model price only as a compatibility fallback', async () => {
     const { service, prisma } = makeHarness({ prisma: { channelModel: { findMany: vi.fn().mockResolvedValue([makeAbility({ costRules: [] })]) } } })
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ usage: { prompt_tokens: 1, completion_tokens: 1 } }), { status: 200 }))
@@ -149,5 +158,16 @@ describe('gateway service orchestration', () => {
     } })
     await expect(service.relay({ protocol: 'openai_chat', body: { model: 'gpt-4o', messages: [] }, headers: {}, principal, response: makeResponse() as any }))
       .rejects.toBeInstanceOf(ServiceUnavailableException)
+  })
+
+  it('isolates a candidate with a corrupted cost rule and routes another valid candidate', async () => {
+    const damaged = makeAbility({ id: 'cm-bad', priority: 10, inputPerMillion: '-1' })
+    const healthy = makeAbility({ id: 'cm-good', channelId: 'ch2', keyId: 'k2', priority: 0 })
+    const { service, prisma } = makeHarness({ prisma: {
+      channelModel: { findMany: vi.fn().mockResolvedValue([damaged, healthy]) }
+    } })
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ usage: { prompt_tokens: 1, completion_tokens: 1 } }), { status: 200 }))
+    await service.relay({ protocol: 'openai_chat', body: { model: 'gpt-4o', messages: [] }, headers: {}, principal, response: makeResponse() as any })
+    expect(prisma.usageLog.create.mock.calls[0][0].data.channelModelId).toBe('cm-good')
   })
 })
