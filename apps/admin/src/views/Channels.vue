@@ -21,7 +21,7 @@ const filters = reactive({
   health: String(route.query.health || ''), enabled: String(route.query.enabled || ''), limit: 20, offset: Number(route.query.offset || 0)
 })
 const form = reactive({
-  name: '', provider: '', protocol: 'OPENAI' as ChannelProtocol, baseUrl: '', keySelection: 'WEIGHTED_RANDOM',
+  name: '', provider: '', protocol: 'OPENAI' as ChannelProtocol, baseUrl: '', modelDiscoveryUrl: '', keySelection: 'WEIGHTED_RANDOM',
   priority: 0, weight: 1, timeoutMs: 300000, maxRetries: 1, costTimezone: 'UTC'
 })
 
@@ -42,7 +42,9 @@ async function load() {
 async function create() {
   error.value = ''
   try {
-    await api('/api/v1/admin/channels', { method: 'POST', body: JSON.stringify(form) })
+    await api('/api/v1/admin/channels', {
+      method: 'POST', body: JSON.stringify({ ...form, modelDiscoveryUrl: form.modelDiscoveryUrl.trim() || undefined })
+    })
     createOpen.value = false; toast('渠道已创建'); await load()
   } catch (value: any) { error.value = value.message }
 }
@@ -82,7 +84,7 @@ onMounted(load)
 
   <Drawer :open="createOpen" title="创建渠道" @close="createOpen = false"><div class="stack-form"><label>渠道名称<input v-model="form.name" placeholder="例如 OpenAI 主渠道"></label><label>供应商<input v-model="form.provider" placeholder="例如 openai"></label>
     <label>协议<select v-model="form.protocol"><option>OPENAI</option><option>ANTHROPIC</option><option>GEMINI</option></select></label><label>Base URL<input v-model="form.baseUrl" placeholder="https://api.example.com"></label>
-    <label>成本时区<input v-model="form.costTimezone" placeholder="UTC / Asia/Shanghai"></label><details><summary>高级路由设置</summary><div class="form-row"><label>优先级<input v-model.number="form.priority" type="number"></label><label>权重<input v-model.number="form.weight" type="number" min="1"></label><label>超时 ms<input v-model.number="form.timeoutMs" type="number"></label><label>重试次数<input v-model.number="form.maxRetries" type="number"></label></div></details></div>
+    <label>成本时区<input v-model="form.costTimezone" placeholder="UTC / Asia/Shanghai"></label><details><summary>高级路由设置</summary><div class="stack-form"><label>模型发现 URL（可选）<input v-model="form.modelDiscoveryUrl" placeholder="https://api.example.com/v1/models"><small class="muted">填写完整地址后，获取上游模型时优先使用该 URL。</small></label><div class="form-row"><label>优先级<input v-model.number="form.priority" type="number"></label><label>权重<input v-model.number="form.weight" type="number" min="1"></label><label>超时 ms<input v-model.number="form.timeoutMs" type="number"></label><label>重试次数<input v-model.number="form.maxRetries" type="number"></label></div></div></details></div>
     <template #footer><button @click="createOpen = false">取消</button><button class="primary" @click="create">创建渠道</button></template></Drawer>
   <ConfirmDialog :open="Boolean(pendingToggle)" :title="pendingToggle?.enabled ? '停用渠道' : '启用渠道'" :message="pendingToggle?.enabled ? '停用后该渠道不会参与新请求路由。' : '启用后健康的渠道模型可以参与路由。'" :danger="pendingToggle?.enabled" @confirm="confirmToggle" @cancel="pendingToggle = null" />
 </template>

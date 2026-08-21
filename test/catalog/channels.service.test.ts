@@ -53,6 +53,62 @@ describe('channel catalog service', () => {
       { upstreamModel: 'gpt-4o', alreadyMapped: true }
     ])
   })
+
+  it('uses the configured model discovery URL instead of deriving one from the base URL', async () => {
+    const masterKey = Buffer.alloc(32, 7)
+    process.env.MASTER_KEY = masterKey.toString('base64')
+    const encrypted = encryptSecret('upstream-key', masterKey)
+    const prisma: any = { channel: { findUnique: async () => ({
+      ...channel,
+      protocol: 'ANTHROPIC',
+      baseUrl: 'https://api.deepseek.com/anthropic',
+      modelDiscoveryUrl: 'https://api.deepseek.com/models',
+      keys: [{ ...channel.keys[0], ...encrypted }],
+      channelModels: []
+    }) } }
+    vi.stubGlobal('fetch', async (input: string | URL | Request) => String(input) === 'https://api.deepseek.com/models'
+      ? new Response(JSON.stringify({ data: [{ id: 'deepseek-v4-flash' }] }), { status: 200 })
+      : new Response(null, { status: 404 }))
+
+    await expect(new ChannelsService(prisma).discoverModels(channel.id)).resolves.toEqual([
+      { upstreamModel: 'deepseek-v4-flash', alreadyMapped: false }
+    ])
+  })
+
+  it('rejects a configured model discovery URL on a different origin', async () => {
+    const masterKey = Buffer.alloc(32, 7)
+    process.env.MASTER_KEY = masterKey.toString('base64')
+    const encrypted = encryptSecret('upstream-key', masterKey)
+    const prisma: any = { channel: { findUnique: async () => ({
+      ...channel,
+      baseUrl: 'https://api.deepseek.com/anthropic',
+      modelDiscoveryUrl: 'https://credentials.example/models',
+      keys: [{ ...channel.keys[0], ...encrypted }],
+      channelModels: []
+    }) } }
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ data: [] }), { status: 200 }))
+
+    await expect(new ChannelsService(prisma).discoverModels(channel.id)).rejects.toThrow(
+      'Model discovery URL must use the same origin as channel base URL'
+    )
+  })
+
+  it('stores a configured model discovery URL when creating a channel', async () => {
+    const prisma: any = { channel: { create: async ({ data }: any) => data } }
+
+    await expect(new ChannelsService(prisma).create({
+      name: 'DeepSeek Anthropic', provider: 'deepseek', protocol: 'ANTHROPIC',
+      baseUrl: 'https://api.deepseek.com/anthropic', modelDiscoveryUrl: 'https://api.deepseek.com/models'
+    })).resolves.toMatchObject({ modelDiscoveryUrl: 'https://api.deepseek.com/models' })
+  })
+
+  it('clears a configured model discovery URL when updating a channel', async () => {
+    const prisma: any = { channel: { update: async ({ data }: any) => data } }
+
+    await expect(new ChannelsService(prisma).update(channel.id, { modelDiscoveryUrl: null })).resolves.toMatchObject({
+      modelDiscoveryUrl: null
+    })
+  })
 })
 
 afterEach(() => vi.unstubAllGlobals())

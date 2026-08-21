@@ -69,6 +69,7 @@ export interface ChannelSummary {
   provider: string
   protocol: ChannelProtocol
   baseUrl: string
+  modelDiscoveryUrl: string | null
   enabled: boolean
   health: HealthStatus
   priority: number

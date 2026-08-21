@@ -19,7 +19,7 @@ const discovered = ref<Array<{ upstreamModel: string; alreadyMapped: boolean }>>
 const probes = ref<Page<ModelProbe>>({ items: [], total: 0, limit: 50, offset: 0 }); const probeModelId = ref('')
 const keyInput = ref('')
 const modelForm = reactive({ publicModelId: '', upstreamModel: '', protocol: 'OPENAI_CHAT', supportsStream: true, supportsTools: true, probeEnabled: true, probeIntervalMinutes: 15 })
-const settings = reactive({ name: '', provider: '', protocol: 'OPENAI', baseUrl: '', costTimezone: 'UTC', priority: 0, weight: 1, timeoutMs: 300000, maxRetries: 1, keySelection: 'WEIGHTED_RANDOM', autoDisable: true })
+const settings = reactive({ name: '', provider: '', protocol: 'OPENAI', baseUrl: '', modelDiscoveryUrl: '', costTimezone: 'UTC', priority: 0, weight: 1, timeoutMs: 300000, maxRetries: 1, keySelection: 'WEIGHTED_RANDOM', autoDisable: true })
 const selectedCostModel = computed(() => models.value.items.find(model => model.id === costModelId.value))
 
 async function load() {
@@ -32,6 +32,7 @@ async function load() {
     ])
     channel.value = detail; models.value = modelPage; publicModels.value = catalog
     Object.assign(settings, { name: detail.name, provider: detail.provider, protocol: detail.protocol, baseUrl: detail.baseUrl,
+      modelDiscoveryUrl: detail.modelDiscoveryUrl || '',
       costTimezone: detail.costTimezone, priority: detail.priority, weight: detail.weight, timeoutMs: detail.timeoutMs,
       maxRetries: detail.maxRetries, keySelection: detail.keySelection, autoDisable: detail.autoDisable })
     if (!modelForm.publicModelId) modelForm.publicModelId = catalog[0]?.id || ''
@@ -82,7 +83,9 @@ async function removeCost(id: string) {
   catch (value: any) { error.value = value.message }
 }
 async function saveSettings() {
-  try { await api(`/api/v1/admin/channels/${channelId}`, { method: 'PATCH', body: JSON.stringify(settings) }); toast('渠道设置已保存'); await load() }
+  try { await api(`/api/v1/admin/channels/${channelId}`, {
+    method: 'PATCH', body: JSON.stringify({ ...settings, modelDiscoveryUrl: settings.modelDiscoveryUrl.trim() || null })
+  }); toast('渠道设置已保存'); await load() }
   catch (value: any) { error.value = value.message }
 }
 async function loadProbes(modelId: string) {
@@ -126,7 +129,7 @@ onMounted(load)
 
     <section v-else-if="tab === 'health'" class="panel"><div class="section-header"><div><h2>模型健康记录</h2><p class="muted">选择渠道模型查看最近探测结果。</p></div><select v-model="probeModelId" @change="loadProbes(probeModelId)"><option value="">选择渠道模型</option><option v-for="model in models.items" :key="model.id" :value="model.id">{{ model.publicModelId }} → {{ model.upstreamModel }}</option></select></div><table v-if="probes.items.length"><thead><tr><th>时间</th><th>来源</th><th>状态</th><th>HTTP</th><th>延迟 / 首字</th><th>错误</th></tr></thead><tbody><tr v-for="probe in probes.items" :key="probe.id"><td>{{ new Date(probe.testedAt).toLocaleString() }}</td><td>{{ probe.source }}</td><td><StatusBadge :status="probe.health" /></td><td>{{ probe.statusCode ?? '—' }}</td><td>{{ probe.latencyMs }} / {{ probe.firstTokenMs ?? '—' }} ms</td><td>{{ probe.errorCode || '—' }}</td></tr></tbody></table><p v-else class="empty">选择模型后查看探测记录</p></section>
 
-    <section v-else class="panel"><h2>渠道设置</h2><div class="stack-form two-column"><label>名称<input v-model="settings.name"></label><label>供应商<input v-model="settings.provider"></label><label>协议<select v-model="settings.protocol"><option>OPENAI</option><option>ANTHROPIC</option><option>GEMINI</option></select></label><label>Base URL<input v-model="settings.baseUrl"></label><label>成本时区<input v-model="settings.costTimezone"></label><label>Key 策略<select v-model="settings.keySelection"><option value="WEIGHTED_RANDOM">加权随机</option><option value="ROUND_ROBIN">轮询</option></select></label><label>优先级<input v-model.number="settings.priority" type="number"></label><label>权重<input v-model.number="settings.weight" type="number"></label><label>超时 ms<input v-model.number="settings.timeoutMs" type="number"></label><label>重试次数<input v-model.number="settings.maxRetries" type="number"></label></div><button class="primary" @click="saveSettings">保存设置</button></section>
+    <section v-else class="panel"><h2>渠道设置</h2><div class="stack-form two-column"><label>名称<input v-model="settings.name"></label><label>供应商<input v-model="settings.provider"></label><label>协议<select v-model="settings.protocol"><option>OPENAI</option><option>ANTHROPIC</option><option>GEMINI</option></select></label><label>Base URL<input v-model="settings.baseUrl"></label><label>成本时区<input v-model="settings.costTimezone"></label><label>Key 策略<select v-model="settings.keySelection"><option value="WEIGHTED_RANDOM">加权随机</option><option value="ROUND_ROBIN">轮询</option></select></label><label>优先级<input v-model.number="settings.priority" type="number"></label><label>权重<input v-model.number="settings.weight" type="number"></label><label>超时 ms<input v-model.number="settings.timeoutMs" type="number"></label><label>重试次数<input v-model.number="settings.maxRetries" type="number"></label></div><details><summary>高级设置</summary><div class="stack-form"><label>模型发现 URL（可选）<input v-model="settings.modelDiscoveryUrl" placeholder="https://api.example.com/v1/models"><small class="muted">填写完整地址后，“从上游发现”将优先请求该 URL；留空使用协议默认地址。</small></label></div></details><button class="primary" @click="saveSettings">保存设置</button></section>
   </template>
 
   <Drawer :open="modelDrawer" title="添加渠道模型" @close="modelDrawer = false"><div class="stack-form"><label>公共模型<select v-model="modelForm.publicModelId"><option v-for="model in publicModels" :key="model.id" :value="model.id">{{ model.displayName }} · {{ model.id }}</option></select></label><label>上游模型名<input v-model="modelForm.upstreamModel"></label><label>协议<select v-model="modelForm.protocol"><option>OPENAI_CHAT</option><option>OPENAI_RESPONSES</option><option>ANTHROPIC_MESSAGES</option><option>GEMINI</option></select></label><label class="check-row"><input v-model="modelForm.supportsStream" type="checkbox">支持流式</label><label class="check-row"><input v-model="modelForm.supportsTools" type="checkbox">支持工具</label><label>自动探测间隔（分钟）<input v-model.number="modelForm.probeIntervalMinutes" type="number" min="5"></label></div><template #footer><button @click="modelDrawer = false">取消</button><button class="primary" :disabled="busy" @click="addModel">添加模型</button></template></Drawer>

@@ -192,6 +192,7 @@ model Channel {
   provider         String
   protocol         ChannelProtocol
   baseUrl          String          @map("base_url")
+  modelDiscoveryUrl String?         @map("model_discovery_url")
   priority         Int             @default(0)
   weight           Int             @default(1)
   enabled          Boolean         @default(true)

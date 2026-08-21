@@ -82,7 +82,15 @@ export class ChannelsService {
     const headers: Record<string, string> = channel.protocol === 'ANTHROPIC'
       ? { 'x-api-key': plaintext, 'anthropic-version': '2023-06-01' }
       : channel.protocol === 'GEMINI' ? { 'x-goog-api-key': plaintext } : { authorization: `Bearer ${plaintext}` }
-    const response = await fetch(channel.protocol === 'GEMINI' ? new URL('v1beta/models', base) : new URL('v1/models', base), { headers })
+    const configuredDiscoveryUrl = channel.modelDiscoveryUrl
+      ? validateModelDiscoveryUrl(channel.modelDiscoveryUrl, channel.baseUrl)
+      : null
+    const discoveryUrl = configuredDiscoveryUrl || (channel.protocol === 'GEMINI'
+      ? new URL('v1beta/models', base)
+      : new URL('v1/models', base))
+    const response = await fetch(discoveryUrl, {
+      headers, ...(configuredDiscoveryUrl ? { redirect: 'error' as const } : {})
+    })
     if (!response.ok) throw new BadRequestException(`Upstream model discovery failed with status ${response.status}`)
     const payload: any = await response.json()
     const ids = channel.protocol === 'GEMINI'
@@ -95,6 +103,7 @@ export class ChannelsService {
     assertCostTimezone(body.costTimezone ?? 'UTC')
     return this.prisma.channel.create({ data: {
     name: body.name, provider: body.provider, protocol: body.protocol, baseUrl: body.baseUrl,
+    modelDiscoveryUrl: body.modelDiscoveryUrl ?? null,
     priority: body.priority ?? 0, weight: body.weight ?? 1, timeoutMs: body.timeoutMs ?? 300000,
     maxRetries: body.maxRetries ?? 1, keySelection: body.keySelection ?? 'WEIGHTED_RANDOM', costTimezone: body.costTimezone ?? 'UTC'
     } })
@@ -144,6 +153,7 @@ export class ChannelsService {
       ...(body.provider !== undefined ? { provider: body.provider } : {}),
       ...(body.protocol !== undefined ? { protocol: body.protocol } : {}),
       ...(body.baseUrl !== undefined ? { baseUrl: body.baseUrl } : {}),
+      ...(body.modelDiscoveryUrl !== undefined ? { modelDiscoveryUrl: body.modelDiscoveryUrl || null } : {}),
       ...(body.priority !== undefined ? { priority: body.priority } : {}),
       ...(body.weight !== undefined ? { weight: body.weight } : {}),
       ...(body.timeoutMs !== undefined ? { timeoutMs: body.timeoutMs } : {}),
@@ -169,4 +179,22 @@ function assertCostTimezone(timezone: string): void {
   try { validateCostTimezone(timezone) } catch {
     throw new BadRequestException('Cost timezone must be a valid IANA timezone')
   }
+}
+
+function validateModelDiscoveryUrl(value: string, baseUrl: string): URL {
+  let discoveryUrl: URL
+  let channelBaseUrl: URL
+  try {
+    discoveryUrl = new URL(value)
+    channelBaseUrl = new URL(baseUrl)
+  } catch {
+    throw new BadRequestException('Model discovery URL must be a valid HTTP(S) URL')
+  }
+  if (!['http:', 'https:'].includes(discoveryUrl.protocol) || discoveryUrl.username || discoveryUrl.password) {
+    throw new BadRequestException('Model discovery URL must be an HTTP(S) URL without credentials')
+  }
+  if (discoveryUrl.origin !== channelBaseUrl.origin) {
+    throw new BadRequestException('Model discovery URL must use the same origin as channel base URL')
+  }
+  return discoveryUrl
 }

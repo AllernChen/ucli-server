@@ -23,6 +23,9 @@ export class CreateChannelDto {
   @IsString() @Length(1, 100) provider!: string
   @IsEnum(ChannelProtocol) protocol!: ChannelProtocol
   @IsUrl({ require_protocol: true, require_tld: false }) baseUrl!: string
+  @IsOptional() @IsUrl({
+    protocols: ['http', 'https'], require_protocol: true, require_valid_protocol: true, require_tld: false, disallow_auth: true
+  }) modelDiscoveryUrl?: string | null
   @IsOptional() @IsInt() priority = 0
   @IsOptional() @IsInt() @Min(1) weight = 1
   @IsOptional() @IsInt() @Min(1000) @Max(600000) timeoutMs = 300000
@@ -36,6 +39,9 @@ export class UpdateChannelDto {
   @IsOptional() @IsString() @Length(1, 100) provider?: string
   @IsOptional() @IsEnum(ChannelProtocol) protocol?: ChannelProtocol
   @IsOptional() @IsUrl({ require_protocol: true, require_tld: false }) baseUrl?: string
+  @IsOptional() @IsUrl({
+    protocols: ['http', 'https'], require_protocol: true, require_valid_protocol: true, require_tld: false, disallow_auth: true
+  }) modelDiscoveryUrl?: string | null
   @IsOptional() @IsInt() priority?: number
   @IsOptional() @IsInt() @Min(1) weight?: number
   @IsOptional() @IsInt() @Min(1000) @Max(600000) timeoutMs?: number
