@@ -1,0 +1,82 @@
+name: ucli-server
+
+services:
+  migrate:
+    image: ${PROJECT_NAME}-runtime:${VERSION}
+    pull_policy: never
+    command: npx prisma migrate deploy
+    env_file: .env
+    networks:
+      - portrait-network
+
+  api:
+    image: ${PROJECT_NAME}-runtime:${VERSION}
+    pull_policy: never
+    container_name: ucli-server-api
+    restart: unless-stopped
+    command: node dist/apps/api/src/main.js
+    env_file: .env
+    networks:
+      - app-network
+      - portrait-network
+      - minio-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:3000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  gateway:
+    image: ${PROJECT_NAME}-runtime:${VERSION}
+    pull_policy: never
+    container_name: ucli-server-gateway
+    restart: unless-stopped
+    command: node dist/apps/gateway/src/main.js
+    env_file: .env
+    networks:
+      - app-network
+      - portrait-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:3001/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  worker:
+    image: ${PROJECT_NAME}-runtime:${VERSION}
+    pull_policy: never
+    container_name: ucli-server-worker
+    restart: unless-stopped
+    command: node dist/apps/worker/src/main.js
+    env_file: .env
+    networks:
+      - app-network
+      - portrait-network
+
+  web:
+    image: ${PROJECT_NAME}-web:${VERSION}
+    pull_policy: never
+    container_name: ucli-server-web
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    networks:
+      - app-network
+    depends_on:
+      api:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+
+networks:
+  app-network:
+    name: ucli-server-app
+    driver: bridge
+  portrait-network:
+    external: true
+    name: config_default
+  minio-network:
+    external: true
+    name: ai-bot-cowork-deploy

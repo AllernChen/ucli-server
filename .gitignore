@@ -7,3 +7,7 @@ data/
 *.log
 dev-logs/
 .playwright-cli/
+conf/.env
+images/*.tar
+images/*.tar.gz
+releases/

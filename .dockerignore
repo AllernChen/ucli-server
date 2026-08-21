@@ -1,0 +1,13 @@
+.git
+.gitignore
+.env
+node_modules
+dist
+coverage
+apps/admin/dist
+conf/.env
+images
+releases
+dev-logs
+docs/screenshots
+*.log
