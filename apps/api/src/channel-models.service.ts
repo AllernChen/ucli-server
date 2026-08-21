@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
+import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import {
   costRulesOverlap, resolveChannelCost, validateScheduledCost, type ScheduledCost
@@ -128,6 +129,7 @@ export class ChannelModelsService {
       if (!await transaction.channelModel.findUnique({ where: { id: channelModelId }, select: { id: true } })) {
         throw new NotFoundException('Channel model not found')
       }
+      await lockCostRules(transaction, channelModelId)
       const validFrom = new Date(input.validFrom)
       const validUntil = input.validUntil ? new Date(input.validUntil) : null
       if (!Number.isFinite(validFrom.getTime()) || (validUntil && (!Number.isFinite(validUntil.getTime()) || validUntil <= validFrom))) {
@@ -147,11 +149,14 @@ export class ChannelModelsService {
         outputPerMillion: input.outputPerMillion, cachedPerMillion: input.cachedPerMillion,
         reasoningPerMillion: input.reasoningPerMillion, currency: 'USD', validFrom, validUntil
       } })
-    })
+    }, { maxWait: 10_000, timeout: 15_000 })
   }
 
   async updateCostRule(id: string, input: UpdateChannelModelCostRuleInput) {
     return this.prisma.$transaction(async transaction => {
+      const initial = await transaction.channelModelCostRule.findUnique({ where: { id } })
+      if (!initial) throw new NotFoundException('Cost rule not found')
+      await lockCostRules(transaction, initial.channelModelId)
       const existing = await transaction.channelModelCostRule.findUnique({ where: { id } })
       if (!existing) throw new NotFoundException('Cost rule not found')
       const merged = toScheduledCost({
@@ -186,7 +191,7 @@ export class ChannelModelsService {
         ...(input.validUntil !== undefined ? { validUntil: merged.validUntil } : {}),
         ...(input.enabled !== undefined ? { enabled: input.enabled } : {})
       } })
-    })
+    }, { maxWait: 10_000, timeout: 15_000 })
   }
 
   async removeCostRule(id: string) {
@@ -230,7 +235,7 @@ export class ChannelModelsService {
     const blockers: Array<'NO_HEALTHY_CHANNEL_MODEL' | 'NO_CURRENT_COST' | 'LATEST_TEST_FAILED'> = []
     if (!healthyChannelModels) blockers.push('NO_HEALTHY_CHANNEL_MODEL')
     if (!hasCurrentCost) blockers.push('NO_CURRENT_COST')
-    if (channelModels.some(model => model.lastTestedAt) && !channelModels.some(model => model.enabled && model.health === 'HEALTHY')) {
+    if (readyCandidates.some(model => model.lastTestedAt) && !readyCandidates.some(model => model.health === 'HEALTHY')) {
       blockers.push('LATEST_TEST_FAILED')
     }
     return { ready: blockers.length === 0, healthyChannelModels, hasCurrentCost, blockers }
@@ -255,6 +260,10 @@ function costRuleFromInput(channelModelId: string, input: CreateChannelModelCost
     cachedPerMillion: input.cachedPerMillion, reasoningPerMillion: input.reasoningPerMillion,
     currency: 'USD', enabled: true, validFrom, validUntil, createdAt: new Date()
   }
+}
+
+async function lockCostRules(transaction: any, channelModelId: string): Promise<void> {
+  await transaction.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${channelModelId}, 0))`)
 }
 
 function toScheduledCost(rule: any): ScheduledCost {

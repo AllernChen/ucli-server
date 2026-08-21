@@ -31,6 +31,7 @@ function makeHarness() {
       } }
   ]
   const costRules: any[] = [costRule()]
+  let transactionTail = Promise.resolve()
   const prisma: any = {
     channel: { findUnique: async ({ where }: any) => where.id === channelId ? { id: channelId } : null },
     publicModel: { findUnique: async ({ where }: any) => ['gpt-4o', 'gpt-4.1'].includes(where.id) ? { id: where.id, prices: [] } : null },
@@ -51,8 +52,16 @@ function makeHarness() {
       update: async ({ where, data }: any) => Object.assign(costRules.find(item => item.id === where.id), data),
       delete: async ({ where }: any) => costRules.splice(costRules.findIndex(item => item.id === where.id), 1)[0]
     },
+    $executeRaw: async () => 1,
     usageLog: { count: async ({ where }: any) => where.channelModelId === modelId || where.channelCostRuleId === costRules[0]?.id ? 2 : 0 },
-    $transaction: async (operation: any) => typeof operation === 'function' ? operation(prisma) : Promise.all(operation)
+    $transaction: async (operation: any) => {
+      if (typeof operation !== 'function') return Promise.all(operation)
+      let release!: () => void
+      const previous = transactionTail
+      transactionTail = new Promise<void>(resolve => { release = resolve })
+      await previous
+      try { return await operation(prisma) } finally { release() }
+    }
   }
   return { service: new ChannelModelsService(prisma), channelModels, costRules }
 }
@@ -137,7 +146,7 @@ describe('channel model catalog service', () => {
     channelModels[0].costRules = []
     await expect(service.publishCheck('gpt-4o', new Date('2026-08-20T01:00:00Z'))).resolves.toEqual({
       ready: false, healthyChannelModels: 0, hasCurrentCost: false,
-      blockers: ['NO_HEALTHY_CHANNEL_MODEL', 'NO_CURRENT_COST', 'LATEST_TEST_FAILED']
+      blockers: ['NO_HEALTHY_CHANNEL_MODEL', 'NO_CURRENT_COST']
     })
   })
 
@@ -181,5 +190,32 @@ describe('channel model catalog service', () => {
       inputPerMillion: '1', outputPerMillion: '2', cachedPerMillion: '0', reasoningPerMillion: '0',
       validFrom: '2026-01-01T00:00:00.000Z'
     }, new Date('2026-08-20T01:00:00Z'))).resolves.toMatchObject({ valid: false, conflicts: [{ name: '基础成本' }] })
+  })
+
+  it('serializes concurrent writes so equal-priority overlapping rules cannot both persist', async () => {
+    const { service, costRules } = makeHarness()
+    costRules.splice(0)
+    const input = {
+      name: '并发基础成本', daysOfWeek: [1, 2, 3, 4, 5, 6, 7], startMinute: 0, endMinute: 0, priority: 0,
+      inputPerMillion: '1', outputPerMillion: '2', cachedPerMillion: '0', reasoningPerMillion: '0',
+      validFrom: '2026-01-01T00:00:00.000Z'
+    }
+    const outcomes = await Promise.allSettled([
+      service.createCostRule(modelId, input), service.createCostRule(modelId, { ...input, name: '并发冲突成本' })
+    ])
+    expect(outcomes.map(outcome => outcome.status).sort()).toEqual(['fulfilled', 'rejected'])
+    expect(costRules).toHaveLength(1)
+  })
+
+  it('does not let an unavailable healthy model hide a failed ready candidate', async () => {
+    const { service, channelModels } = makeHarness()
+    channelModels[0].health = 'DEGRADED'
+    channelModels.push({
+      ...channelModels[0], id: '20000000-0000-4000-8000-000000000098', health: 'HEALTHY',
+      channel: { ...channelModels[0].channel, keys: [] }
+    })
+    await expect(service.publishCheck('gpt-4o', new Date('2026-08-20T01:00:00Z'))).resolves.toMatchObject({
+      ready: false, healthyChannelModels: 1, hasCurrentCost: true, blockers: ['LATEST_TEST_FAILED']
+    })
   })
 })

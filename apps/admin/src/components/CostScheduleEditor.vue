@@ -25,7 +25,7 @@ const form = reactive({
   inputPerMillion: '', outputPerMillion: '', cachedPerMillion: '0', reasoningPerMillion: '0',
   validFrom: new Date().toISOString().slice(0, 10), validUntil: ''
 })
-const editingId = ref(''); const validationError = ref(''); const previewing = ref(false)
+const editingId = ref(''); const validationError = ref(''); const previewing = ref(false); const conflictIds = ref<string[]>([])
 
 const previewAt = computed(() => new Date(`${form.validFrom}T12:00:00Z`))
 const activeRules = computed(() => props.rules.filter(rule => rule.enabled && rule.id !== editingId.value &&
@@ -53,22 +53,22 @@ function payload(): CostRuleInput {
 }
 async function submit() {
   if (!form.daysOfWeek.length || form.inputPerMillion === '' || form.outputPerMillion === '') return
-  previewing.value = true; validationError.value = ''
+  previewing.value = true; validationError.value = ''; conflictIds.value = []
   try {
     const rule = payload()
     const preview = await api<any>(`/api/v1/admin/channel-models/${props.modelId}/cost-rules/preview`, {
       method: 'POST', body: JSON.stringify({ ...rule, ...(editingId.value ? { id: editingId.value } : {}) })
     })
     if (!preview.valid) {
+      conflictIds.value = preview.conflicts.map((item: any) => item.id)
       validationError.value = `与同优先级规则冲突：${preview.conflicts.map((item: any) => item.name).join('、')}`
       return
     }
     emit('save', { ...rule, ...(editingId.value ? { id: editingId.value } : {}) })
-    resetForm()
   } catch (error: any) { validationError.value = error.message } finally { previewing.value = false }
 }
 function edit(rule: CostRule) {
-  editingId.value = rule.id; validationError.value = ''
+  editingId.value = rule.id; validationError.value = ''; conflictIds.value = []
   Object.assign(form, {
     name: rule.name, daysOfWeek: [...rule.daysOfWeek], start: clock(rule.startMinute), end: clock(rule.endMinute),
     priority: rule.priority, inputPerMillion: rule.inputPerMillion, outputPerMillion: rule.outputPerMillion,
@@ -77,7 +77,7 @@ function edit(rule: CostRule) {
   })
 }
 function resetForm() {
-  editingId.value = ''; validationError.value = ''
+  editingId.value = ''; validationError.value = ''; conflictIds.value = []
   Object.assign(form, { name: '基础成本', daysOfWeek: [1, 2, 3, 4, 5, 6, 7], start: '00:00', end: '00:00',
     priority: 0, inputPerMillion: '', outputPerMillion: '', cachedPerMillion: '0', reasoningPerMillion: '0',
     validFrom: new Date().toISOString().slice(0, 10), validUntil: '' })
@@ -93,6 +93,10 @@ function ruleAt(day: number, hour: number) {
   return [...activeRules.value, ...(draftRule.value ? [draftRule.value] : [])]
     .filter(rule => covers(rule, day, hour)).sort((a, b) => b.priority - a.priority)[0]
 }
+function hasConflict(day: number, hour: number) {
+  return Boolean(draftRule.value && covers(draftRule.value, day, hour) && activeRules.value.some(rule =>
+    conflictIds.value.includes(rule.id) && rule.priority === draftRule.value!.priority && covers(rule, day, hour)))
+}
 function clock(value: number) { return `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}` }
 </script>
 
@@ -102,7 +106,7 @@ function clock(value: number) { return `${String(Math.floor(value / 60)).padStar
     <div class="schedule-grid">
       <div></div><small v-for="hour in 24" :key="hour">{{ hour - 1 }}</small>
       <template v-for="day in 7" :key="day"><strong>周{{ weekdays[day - 1] }}</strong>
-        <span v-for="hour in 24" :key="hour" :class="{ covered: ruleAt(day, hour - 1), peak: (ruleAt(day, hour - 1)?.priority || 0) > 0 }" :title="ruleAt(day, hour - 1)?.name || '未配置'"></span>
+        <span v-for="hour in 24" :key="hour" :class="{ covered: ruleAt(day, hour - 1), peak: (ruleAt(day, hour - 1)?.priority || 0) > 0, conflict: hasConflict(day, hour - 1) }" :title="hasConflict(day, hour - 1) ? '同优先级冲突' : ruleAt(day, hour - 1)?.name || '未配置'"></span>
       </template>
     </div>
     <div v-if="rules.length" class="rule-list">

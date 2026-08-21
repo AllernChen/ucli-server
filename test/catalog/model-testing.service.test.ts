@@ -152,4 +152,34 @@ describe('model testing service', () => {
     expect(results.flat()).toHaveLength(1)
     expect(fetcher).toHaveBeenCalledTimes(1)
   })
+
+  it('does not update health or probes when a received stream is cancelled by the client', async () => {
+    const fetcher = vi.fn(async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'Hi' } }] })}\n\n`))
+      }
+    }), { status: 200, headers: { 'content-type': 'text/event-stream' } })) as any
+    const { service, probes, prisma } = makeHarness('OPENAI_CHAT', fetcher)
+    const abort = new AbortController()
+    const pending = service.runConversation({
+      channelModelId, messages: [{ role: 'user', content: 'Hi' }], temperature: 0, maxTokens: 16, stream: true
+    }, 'actor-1', abort.signal)
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalled())
+    abort.abort()
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(prisma.channelModel.updateMany).not.toHaveBeenCalled()
+    expect(probes).toHaveLength(0)
+  })
+
+  it('degrades health when an accepted upstream stream ends without completion', async () => {
+    const upstream = `data: ${JSON.stringify({ choices: [{ delta: { content: 'partial' } }] })}\n\n`
+    const fetcher = vi.fn(async () => new Response(upstream, {
+      status: 200, headers: { 'content-type': 'text/event-stream' }
+    })) as any
+    const { service, probes } = makeHarness('OPENAI_CHAT', fetcher)
+    await expect(service.runConversation({
+      channelModelId, messages: [{ role: 'user', content: 'Hi' }], temperature: 0, maxTokens: 16, stream: true
+    }, 'actor-1')).resolves.toMatchObject({ ok: false, health: 'DEGRADED', errorCode: 'UPSTREAM_STREAM_INTERRUPTED' })
+    expect(probes.at(-1)).toMatchObject({ health: 'DEGRADED', errorCode: 'UPSTREAM_STREAM_INTERRUPTED' })
+  })
 })

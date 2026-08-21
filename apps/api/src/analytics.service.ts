@@ -136,7 +136,10 @@ export class AnalyticsService {
       this.prisma.$queryRaw<any[]>(Prisma.sql`SELECT DISTINCT pm.id, pm.display_name AS name FROM usage_logs u JOIN public_models pm ON pm.id=u.public_model_id WHERE ${where} ORDER BY name`),
       this.prisma.$queryRaw<any[]>(Prisma.sql`SELECT DISTINCT cm.id::text AS id, cm.upstream_model AS name FROM usage_logs u JOIN channel_models cm ON cm.id=u.channel_model_id WHERE ${where} ORDER BY name`),
       this.prisma.$queryRaw<any[]>(Prisma.sql`SELECT DISTINCT a.id::text AS id, COALESCE(a.display_name,a.email) AS name FROM usage_logs u JOIN accounts a ON a.id=u.account_id WHERE ${where} ORDER BY name`),
-      this.prisma.$queryRaw<any[]>(Prisma.sql`SELECT DISTINCT COALESCE(cr.id::text,u.cost_snapshot->>'source') AS id, COALESCE(cr.name,u.cost_snapshot->>'source') AS name FROM usage_logs u LEFT JOIN channel_model_cost_rules cr ON cr.id=u.channel_cost_rule_id WHERE ${where} ORDER BY name`)
+      this.prisma.$queryRaw<any[]>(Prisma.sql`SELECT DISTINCT
+        COALESCE(cr.id::text,u.cost_snapshot->>'id',u.cost_snapshot->>'source') AS id,
+        COALESCE(cr.name,u.cost_snapshot->>'ruleName',u.cost_snapshot->>'source') AS name
+        FROM usage_logs u LEFT JOIN channel_model_cost_rules cr ON cr.id=u.channel_cost_rule_id WHERE ${where} ORDER BY name`)
     ])
     return { organizations, channels, models, channelModels, accounts, costRules }
   }

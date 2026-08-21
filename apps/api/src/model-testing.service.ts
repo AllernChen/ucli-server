@@ -265,9 +265,16 @@ export class ModelTestingService {
       }
     } catch (error: any) {
       if (signal?.aborted) throw error
+      ok = false
       const lastAttempt = error?.attempts?.at(-1)
-      statusCode = Number(lastAttempt?.status || 0)
-      ;({ code: errorCode, terminal } = failureCode(statusCode))
+      if (statusCode === 200 && !lastAttempt) {
+        statusCode = 0
+        errorCode = 'UPSTREAM_STREAM_INTERRUPTED'
+        terminal = false
+      } else {
+        statusCode = Number(lastAttempt?.status || 0)
+        ;({ code: errorCode, terminal } = failureCode(statusCode))
+      }
     }
     const finishedAt = new Date()
     const transition = await this.applyHealthTransition(channelModel.id, channelModel.consecutiveFailures,
@@ -356,12 +363,16 @@ async function consumeConversationStream(
   let buffer = ''
   let assistantMessage = ''
   let firstTokenMs: number | null = null
+  let completed = false
   const consumeEvent = (event: string) => {
     const data = event.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('')
-    if (!data || data === '[DONE]') return
+    if (!data) return
+    if (data === '[DONE]') { completed = true; return }
     try {
       const payload = JSON.parse(data)
       if (rawEvents.length < 1000) rawEvents.push(payload)
+      if (payload?.type === 'message_stop' || payload?.type === 'response.completed' ||
+        payload?.choices?.some((choice: any) => choice?.finish_reason != null)) completed = true
       const delta = extractStreamDelta(payload, protocol)
       if (delta) {
         if (firstTokenMs === null) firstTokenMs = Math.max(0, Date.now() - started)
@@ -374,6 +385,7 @@ async function consumeConversationStream(
     while (true) {
       if (signal?.aborted) throw new DOMException('Model test was cancelled', 'AbortError')
       const { done, value } = await reader.read()
+      if (signal?.aborted) throw new DOMException('Model test was cancelled', 'AbortError')
       if (done) break
       const chunk = Buffer.from(value)
       usage.push(chunk)
@@ -384,6 +396,8 @@ async function consumeConversationStream(
     }
     buffer += decoder.decode()
     if (buffer.trim()) consumeEvent(buffer)
+    if (signal?.aborted) throw new DOMException('Model test was cancelled', 'AbortError')
+    if (!completed) throw new Error('Upstream stream ended before a completion event')
   } finally {
     signal?.removeEventListener('abort', cancel)
     reader.releaseLock()
