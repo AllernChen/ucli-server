@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 import { api } from '../api'
+import { formatCny, PLATFORM_CURRENCY } from '../currency'
 import type { CostRule } from '../types/catalog'
 
 interface CostRuleInput {
@@ -35,7 +36,7 @@ const draftRule = computed(() => form.daysOfWeek.length && form.inputPerMillion 
   startMinute: minute(form.start), endMinute: minute(form.end), priority: Number(form.priority),
   inputPerMillion: form.inputPerMillion, outputPerMillion: form.outputPerMillion,
   cachedPerMillion: form.cachedPerMillion || '0', reasoningPerMillion: form.reasoningPerMillion || '0',
-  currency: 'USD' as const, enabled: true, validFrom: `${form.validFrom}T00:00:00.000Z`,
+  currency: PLATFORM_CURRENCY, enabled: true, validFrom: `${form.validFrom}T00:00:00.000Z`,
   validUntil: form.validUntil ? `${form.validUntil}T00:00:00.000Z` : null, createdAt: new Date().toISOString()
 } : null)
 function minute(value: string) { const [hour, minutes] = value.split(':').map(Number); return hour * 60 + minutes }
@@ -110,13 +111,13 @@ function clock(value: number) { return `${String(Math.floor(value / 60)).padStar
       </template>
     </div>
     <div v-if="rules.length" class="rule-list">
-      <article v-for="rule in rules" :key="rule.id" :class="{ muted: !rule.enabled }"><div><strong>{{ rule.name }}{{ rule.enabled ? '' : ' · 已停用' }}</strong><small>优先级 {{ rule.priority }} · {{ clock(rule.startMinute) }}–{{ clock(rule.endMinute) }} · in ${{ rule.inputPerMillion }} / out ${{ rule.outputPerMillion }}</small></div>
+      <article v-for="rule in rules" :key="rule.id" :class="{ muted: !rule.enabled }"><div><strong>{{ rule.name }}{{ rule.enabled ? '' : ' · 已停用' }}</strong><small>优先级 {{ rule.priority }} · {{ clock(rule.startMinute) }}–{{ clock(rule.endMinute) }} · in {{ formatCny(rule.inputPerMillion) }} / out {{ formatCny(rule.outputPerMillion) }}</small></div>
         <div class="actions"><button @click="edit(rule)">编辑</button><button @click="emit('toggle', rule.id, !rule.enabled)">{{ rule.enabled ? '停用' : '启用' }}</button><button class="danger-link" @click="emit('remove', rule.id)">删除</button></div></article>
     </div>
     <section class="sub-panel"><h3>{{ editingId ? '编辑成本规则' : '新增成本规则' }}</h3>
       <div class="day-selector"><button v-for="day in 7" :key="day" :class="{ active: form.daysOfWeek.includes(day) }" @click="toggleDay(day)">周{{ weekdays[day - 1] }}</button></div>
       <div class="form-row"><input v-model="form.name" placeholder="规则名称"><input v-model="form.start" type="time"><input v-model="form.end" type="time"><input v-model.number="form.priority" type="number" min="0" placeholder="优先级"></div>
-      <div class="form-row"><input v-model="form.inputPerMillion" inputmode="decimal" placeholder="输入成本 $/M"><input v-model="form.outputPerMillion" inputmode="decimal" placeholder="输出成本 $/M"><input v-model="form.cachedPerMillion" inputmode="decimal" placeholder="缓存成本 $/M"><input v-model="form.reasoningPerMillion" inputmode="decimal" placeholder="推理成本 $/M"></div>
+      <div class="form-row"><input v-model="form.inputPerMillion" inputmode="decimal" placeholder="输入成本 ¥/M"><input v-model="form.outputPerMillion" inputmode="decimal" placeholder="输出成本 ¥/M"><input v-model="form.cachedPerMillion" inputmode="decimal" placeholder="缓存成本 ¥/M"><input v-model="form.reasoningPerMillion" inputmode="decimal" placeholder="推理成本 ¥/M"></div>
       <p v-if="validationError" class="state error">{{ validationError }}</p>
       <div class="form-row"><label>生效日期<input v-model="form.validFrom" type="date"></label><label>失效日期（可选）<input v-model="form.validUntil" type="date"></label><button v-if="editingId" @click="resetForm">取消编辑</button><button class="primary" :disabled="busy || previewing" @click="submit">{{ previewing ? '校验中…' : editingId ? '保存修改' : '添加规则' }}</button></div>
     </section>

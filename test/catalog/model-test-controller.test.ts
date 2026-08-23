@@ -14,7 +14,7 @@ function harness(fetcher: typeof fetch) {
     upstreamModel: 'fixed-upstream', protocol: 'OPENAI_CHAT', enabled: true, health: 'HEALTHY', consecutiveFailures: 0,
     costRules: [{ id: '40000000-0000-4000-8000-000000000001', priority: 0, daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
       startMinute: 0, endMinute: 0, validFrom: new Date('2026-01-01T00:00:00Z'), validUntil: null,
-      createdAt: new Date('2026-01-01T00:00:00Z'), enabled: true, currency: 'USD', inputPerMillion: '1',
+        createdAt: new Date('2026-01-01T00:00:00Z'), enabled: true, currency: 'CNY', inputPerMillion: '1',
       outputPerMillion: '2', cachedPerMillion: '0', reasoningPerMillion: '0' }],
     publicModel: { prices: [] },
     channel: { id: '10000000-0000-4000-8000-000000000001', enabled: true, baseUrl: 'https://fixed.example',
@@ -25,7 +25,8 @@ function harness(fetcher: typeof fetch) {
   }
   const prisma: any = {
     channelModel: {
-      findUnique: vi.fn(async () => model), update: vi.fn(async ({ data }: any) => Object.assign(model, data)),
+      findUnique: vi.fn(async () => model), findFirst: vi.fn(async () => model),
+      update: vi.fn(async ({ data }: any) => Object.assign(model, data)),
       updateMany: vi.fn(async ({ where, data }: any) => {
         if (where.consecutiveFailures !== model.consecutiveFailures) return { count: 0 }
         Object.assign(model, data); return { count: 1 }

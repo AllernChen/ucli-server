@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { api, optional } from '../api'
 import { toast } from '../toast'
+import { formatCny } from '../currency'
 
 const loading = ref(true)
 const error = ref('')
@@ -69,7 +70,7 @@ onMounted(load)
       <h2>报告列表</h2>
       <table v-if="reports.length">
         <thead><tr><th>周期</th><th>范围</th><th>时间范围</th><th>请求数</th><th>费用</th><th>创建时间</th></tr></thead>
-        <tbody><tr v-for="report in reports" :key="report.id"><td>{{ report.period }}</td><td>{{ report.scope }}</td><td>{{ report.rangeStart?.slice(0, 10) }} ~ {{ report.rangeEnd?.slice(0, 10) }}</td><td>{{ report.metrics?.requests }}</td><td>${{ report.metrics?.costUsd }}</td><td>{{ report.createdAt }}</td></tr></tbody>
+          <tbody><tr v-for="report in reports" :key="report.id"><td>{{ report.period }}</td><td>{{ report.scope }}</td><td>{{ report.rangeStart?.slice(0, 10) }} ~ {{ report.rangeEnd?.slice(0, 10) }}</td><td>{{ report.metrics?.requests }}</td><td>{{ formatCny(report.metrics?.costUsd) }}</td><td>{{ report.createdAt }}</td></tr></tbody>
       </table>
       <p v-else class="empty">暂无报告</p>
       <div v-if="reports.length" class="actions">

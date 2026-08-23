@@ -16,7 +16,7 @@ const quotaSettledTokens = new Counter({
 
 const quotaSettledCost = new Counter({
   name: 'ucli_quota_settled_cost_usd_total',
-  help: 'USD cost consumed against quota policies on successful requests',
+  help: 'CNY procurement cost consumed against quota policies on successful requests',
   registers: [registry]
 })
 

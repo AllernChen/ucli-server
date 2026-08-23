@@ -10,7 +10,7 @@ export class ClientController {
   @Get('bootstrap') async bootstrap(@Req() request: any) {
     const [organization, models] = await Promise.all([
       this.prisma.organization.findUniqueOrThrow({ where: { id: request.principal.organizationId } }),
-      this.prisma.publicModel.findMany({ where: { enabled: true }, include: { policies: true } })
+      this.prisma.publicModel.findMany({ where: { enabled: true, deletedAt: null }, include: { policies: true } })
     ])
     return {
       organization: { id: organization.id, name: organization.name, timezone: organization.timezone },

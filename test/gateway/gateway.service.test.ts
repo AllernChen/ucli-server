@@ -23,7 +23,7 @@ function makeAbility(overrides: Record<string, any> = {}) {
     supportsStream: true, supportsTools: true, enabled: true, health: overrides.health || 'HEALTHY',
     costRules: overrides.costRules ?? [{ id: overrides.costRuleId || 'cr1', priority: 0, daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
       startMinute: 0, endMinute: 0, validFrom: new Date('2026-01-01T00:00:00Z'), validUntil: null,
-      createdAt: new Date('2026-01-01T00:00:00Z'), enabled: true, currency: 'USD', inputPerMillion,
+      createdAt: new Date('2026-01-01T00:00:00Z'), enabled: true, currency: 'CNY', inputPerMillion,
       outputPerMillion, cachedPerMillion: '0', reasoningPerMillion: '0' }],
     channel: { id: channelId, priority: overrides.priority ?? 0, weight: 1, health: 'HEALTHY', enabled: true, circuitOpenUntil: null,
       baseUrl: 'https://upstream.example', timeoutMs: 1000, maxRetries: 0, keySelection: 'WEIGHTED_RANDOM',
@@ -32,16 +32,19 @@ function makeAbility(overrides: Record<string, any> = {}) {
 
 function makeHarness(overrides: { prisma?: Record<string, any>; quota?: Record<string, any> } = {}) {
   const prisma = {
-    publicModel: { findFirst: vi.fn().mockResolvedValue({
-      id: 'gpt-4o', enabled: true, policies: [],
-      prices: [{ id: 'p1', inputPerMillion: '1', outputPerMillion: '2', cachedPerMillion: '0', reasoningPerMillion: '0' }]
-    }) },
+    publicModel: {
+      findMany: vi.fn().mockResolvedValue([{ id: 'gpt-4o', displayName: 'GPT-4o', contextSize: 128000, enabled: true, policies: [] }]),
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'gpt-4o', enabled: true, policies: [],
+        prices: [{ id: 'p1', inputPerMillion: '1', outputPerMillion: '2', cachedPerMillion: '0', reasoningPerMillion: '0', currency: 'CNY' }]
+      })
+    },
     channelModel: { findMany: vi.fn().mockResolvedValue([makeAbility()]) },
     quotaPolicy: { findMany: vi.fn().mockResolvedValue([]) },
     usageLog: { create: vi.fn().mockResolvedValue({}) },
     auditLog: { create: vi.fn().mockResolvedValue({}) },
     channelKey: { updateMany: vi.fn().mockResolvedValue({}) },
-    channel: { update: vi.fn().mockResolvedValue({}) },
+    channel: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     ...overrides.prisma
   }
   const quota = {
@@ -61,6 +64,16 @@ function makeResponse() {
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 
 describe('gateway service orchestration', () => {
+  it('exposes only active public models to employees', async () => {
+    const { service, prisma } = makeHarness()
+
+    await service.models({ organizationId: principal.organizationId, accountId: principal.sub, role: principal.role })
+
+    expect(prisma.publicModel.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ enabled: true, deletedAt: null })
+    }))
+  })
+
   it('relays a successful request, writes usage and marks the channel healthy', async () => {
     const { service, prisma } = makeHarness()
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ usage: { prompt_tokens: 7, completion_tokens: 2 } }), { status: 200 }))
@@ -79,9 +92,13 @@ describe('gateway service orchestration', () => {
     expect(data.channelCostRuleId).toBe('cr1')
     expect(data.priceVersionId).toBeUndefined()
     expect(data.costUsd).toBe('0.00001100')
-    expect(data.costSnapshot).toMatchObject({ source: 'CHANNEL_COST_RULE', inputPerMillion: '1', outputPerMillion: '2', currency: 'USD', timezone: 'UTC' })
-    expect(prisma.channelKey.updateMany).toHaveBeenCalled()
-    expect(prisma.channel.update).toHaveBeenCalled()
+    expect(data.costSnapshot).toMatchObject({ source: 'CHANNEL_COST_RULE', inputPerMillion: '1', outputPerMillion: '2', currency: 'CNY', timezone: 'UTC' })
+    expect(prisma.channelKey.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ deletedAt: null })
+    }))
+    expect(prisma.channel.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ deletedAt: null })
+    }))
   })
 
   it('rejects with 429 when a quota policy denies the request', async () => {
@@ -111,8 +128,12 @@ describe('gateway service orchestration', () => {
     expect(data.routeAttempts).toBe(1)
     expect(data.channelModelId).toBe('cm1')
     expect(data.costUsd).toBe('0')
-    expect(prisma.channelKey.updateMany).toHaveBeenCalled()
-    expect(prisma.channel.update).toHaveBeenCalled()
+    expect(prisma.channelKey.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ deletedAt: null })
+    }))
+    expect(prisma.channel.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ deletedAt: null })
+    }))
   })
 
   it('only queries channel models that are healthy or degraded', async () => {
@@ -124,6 +145,33 @@ describe('gateway service orchestration', () => {
     }))
   })
 
+  it('routes only through active models, channels, keys, cost rules and fallback prices', async () => {
+    const { service, prisma } = makeHarness()
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ usage: { prompt_tokens: 1, completion_tokens: 1 } }), { status: 200 }))
+
+    await service.relay({ protocol: 'openai_chat', body: { model: 'gpt-4o', messages: [] }, headers: {}, principal, response: makeResponse() as any })
+
+    expect(prisma.publicModel.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: 'gpt-4o', enabled: true, deletedAt: null }),
+      include: expect.objectContaining({
+        prices: expect.objectContaining({ where: expect.objectContaining({ deletedAt: null, enabled: true }) })
+      })
+    }))
+    expect(prisma.channelModel.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        publicModelId: 'gpt-4o', enabled: true, deletedAt: null,
+        publicModel: expect.objectContaining({ deletedAt: null }),
+        channel: expect.objectContaining({ enabled: true, deletedAt: null })
+      }),
+      include: expect.objectContaining({
+        costRules: expect.objectContaining({ where: expect.objectContaining({ deletedAt: null }) }),
+        channel: expect.objectContaining({
+          include: expect.objectContaining({ keys: expect.objectContaining({ where: expect.objectContaining({ deletedAt: null }) }) })
+        })
+      })
+    }))
+  })
+
   it('uses the public model price only as a compatibility fallback', async () => {
     const { service, prisma } = makeHarness({ prisma: { channelModel: { findMany: vi.fn().mockResolvedValue([makeAbility({ costRules: [] })]) } } })
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ usage: { prompt_tokens: 1, completion_tokens: 1 } }), { status: 200 }))
@@ -131,7 +179,7 @@ describe('gateway service orchestration', () => {
     const data = prisma.usageLog.create.mock.calls[0][0].data
     expect(data.channelCostRuleId).toBeUndefined()
     expect(data.priceVersionId).toBe('p1')
-    expect(data.costSnapshot).toMatchObject({ source: 'PUBLIC_MODEL_FALLBACK', inputPerMillion: '1', outputPerMillion: '2' })
+    expect(data.costSnapshot).toMatchObject({ source: 'PUBLIC_MODEL_FALLBACK', inputPerMillion: '1', outputPerMillion: '2', currency: 'CNY' })
   })
 
   it('reserves the maximum candidate procurement cost but settles the actual selected candidate cost', async () => {

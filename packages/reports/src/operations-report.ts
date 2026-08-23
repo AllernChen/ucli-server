@@ -22,7 +22,7 @@ export function renderOperationsReport(metrics: OperationsMetrics): string {
     `- 请求数：${metrics.requests}`,
     `- 活跃账号：${metrics.activeAccounts}`,
     `- Token 消耗：${metrics.totalTokens}`,
-    `- 费用：$${metrics.costUsd}`,
+    `- 费用：¥${metrics.costUsd}`,
     `- 成功率：${(metrics.successRate * 100).toFixed(2)}%`,
     `- 估算活跃时长：${metrics.estimatedActiveMinutes} 分钟`,
     '',

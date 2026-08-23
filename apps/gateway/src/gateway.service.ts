@@ -38,7 +38,7 @@ export class GatewayService {
   constructor(private readonly prisma: PrismaService, private readonly quota: RedisQuotaService) {}
 
   async models(principal: ModelAccessPrincipal) {
-    const models = await this.prisma.publicModel.findMany({ where: { enabled: true },
+    const models = await this.prisma.publicModel.findMany({ where: { enabled: true, deletedAt: null },
       include: { policies: true } })
     return models.filter(model => canAccessModel(model.policies, principal))
       .map(({ id, displayName, contextSize }) => ({ id, displayName, contextSize }))
@@ -46,10 +46,14 @@ export class GatewayService {
 
   private async candidates(publicModelId: string, protocol: GatewayProtocol, at: Date, fallbackPrice?: any): Promise<RelayCandidate[]> {
     const abilities = await this.prisma.channelModel.findMany({ where: {
-      publicModelId, protocol: { in: CLIENT_UPSTREAMS[protocol] }, enabled: true,
+      publicModelId, protocol: { in: CLIENT_UPSTREAMS[protocol] }, enabled: true, deletedAt: null,
+      publicModel: { deletedAt: null },
       health: { in: ['HEALTHY', 'DEGRADED'] },
-      channel: { enabled: true, health: { in: ['HEALTHY', 'DEGRADED'] }, OR: [{ circuitOpenUntil: null }, { circuitOpenUntil: { lt: new Date() } }] }
-    }, include: { costRules: true, channel: { include: { keys: true } } } })
+      channel: { enabled: true, deletedAt: null, health: { in: ['HEALTHY', 'DEGRADED'] }, OR: [{ circuitOpenUntil: null }, { circuitOpenUntil: { lt: new Date() } }] }
+    }, include: {
+      costRules: { where: { deletedAt: null } },
+      channel: { include: { keys: { where: { deletedAt: null } } } }
+    } })
     const remaining = [...abilities]
     const result: RelayCandidate[] = []
     while (remaining.length) {
@@ -78,7 +82,7 @@ export class GatewayService {
         continue
       }
       const cost: ResolvedCost | null = scheduled || (fallbackPrice ? {
-        id: fallbackPrice.id, source: 'PUBLIC_MODEL_FALLBACK', currency: 'USD', timezone: ability.channel.costTimezone,
+        id: fallbackPrice.id, source: 'PUBLIC_MODEL_FALLBACK', currency: 'CNY', timezone: ability.channel.costTimezone,
         resolvedAt: at.toISOString(), inputPerMillion: fallbackPrice.inputPerMillion.toString(),
         outputPerMillion: fallbackPrice.outputPerMillion.toString(), cachedPerMillion: fallbackPrice.cachedPerMillion.toString(),
         reasoningPerMillion: fallbackPrice.reasoningPerMillion.toString()
@@ -104,9 +108,9 @@ export class GatewayService {
     const publicModelId = String(body?.model || '')
     if (!publicModelId) throw new NotFoundException('Model is required')
     const startedAt = new Date()
-    const model = await this.prisma.publicModel.findFirst({ where: { id: publicModelId, enabled: true }, include: {
+    const model = await this.prisma.publicModel.findFirst({ where: { id: publicModelId, enabled: true, deletedAt: null }, include: {
       policies: true,
-      prices: { where: { validFrom: { lte: startedAt }, OR: [{ validUntil: null }, { validUntil: { gt: startedAt } }] }, orderBy: { validFrom: 'desc' }, take: 1 }
+      prices: { where: { deletedAt: null, enabled: true, validFrom: { lte: startedAt }, OR: [{ validUntil: null }, { validUntil: { gt: startedAt } }] }, orderBy: { validFrom: 'desc' }, take: 1 }
     } })
     if (!model || !canAccessModel(model.policies, { organizationId: principal.organizationId, accountId: principal.sub, role: principal.role })) {
       throw new NotFoundException('Model is unavailable')
@@ -198,11 +202,11 @@ export class GatewayService {
         })) } : undefined
       } }).catch(logError => console.error('failure-usage-log-write-failed', { error: logError.message }))
       await Promise.all((failure.attempts || []).filter((attempt: any) => attempt.status === 0 || attempt.status === 429 || attempt.status >= 500)
-        .map((attempt: any) => this.prisma.channelKey.updateMany({ where: { id: attempt.keyId }, data: {
+        .map((attempt: any) => this.prisma.channelKey.updateMany({ where: { id: attempt.keyId, deletedAt: null }, data: {
           health: 'DEGRADED', isolatedUntil: new Date(Date.now() + 60_000)
         } })))
       await Promise.all([...new Set((failure.attempts || []).map((attempt: any) => attempt.channelId) as string[])]
-        .map(channelId => this.prisma.channel.update({ where: { id: channelId }, data: {
+        .map(channelId => this.prisma.channel.updateMany({ where: { id: channelId, deletedAt: null }, data: {
           health: 'DEGRADED', circuitOpenUntil: new Date(Date.now() + 60_000)
         } })))
       throw new ServiceUnavailableException(`No upstream channel succeeded (request: ${failure.requestId})`)
@@ -257,21 +261,21 @@ export class GatewayService {
         })) }
       } }).catch(error => console.error('usage-log-write-failed', { requestId: result.requestId, error: error.message }))
       if (statusCode === 401 || statusCode === 403) {
-        await this.prisma.channelKey.updateMany({ where: { id: result.candidate.keyId }, data: {
+        await this.prisma.channelKey.updateMany({ where: { id: result.candidate.keyId, deletedAt: null }, data: {
           enabled: false, health: 'UNHEALTHY', isolatedUntil: null
         } })
-        await this.prisma.channel.update({ where: { id: result.candidate.channelId }, data: { health: 'DEGRADED' } })
+        await this.prisma.channel.updateMany({ where: { id: result.candidate.channelId, deletedAt: null }, data: { health: 'DEGRADED' } })
       } else if (statusCode < 400) {
-        await this.prisma.channelKey.updateMany({ where: { id: result.candidate.keyId }, data: {
+        await this.prisma.channelKey.updateMany({ where: { id: result.candidate.keyId, deletedAt: null }, data: {
           health: 'HEALTHY', isolatedUntil: null, lastUsedAt: new Date()
         } })
       }
       const failedAttempts = result.attempts.filter(attempt => attempt.keyId !== result.candidate.keyId &&
         (attempt.status === 0 || attempt.status === 429 || attempt.status >= 500))
       await Promise.all(failedAttempts.map(attempt => this.prisma.channelKey.updateMany({
-        where: { id: attempt.keyId }, data: { health: 'DEGRADED', isolatedUntil: new Date(Date.now() + 60_000) }
+        where: { id: attempt.keyId, deletedAt: null }, data: { health: 'DEGRADED', isolatedUntil: new Date(Date.now() + 60_000) }
       })))
-      await this.prisma.channel.update({ where: { id: result.candidate.channelId }, data: {
+      await this.prisma.channel.updateMany({ where: { id: result.candidate.channelId, deletedAt: null }, data: {
         health: statusCode < 400 ? 'HEALTHY' : undefined,
         lastSuccessAt: statusCode < 400 ? new Date() : undefined,
         circuitOpenUntil: statusCode < 400 ? null : undefined

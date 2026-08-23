@@ -13,5 +13,6 @@ describe('quota metrics', () => {
     const metrics = await registry.metrics()
     expect(metrics).toContain('ucli_quota_settled_tokens_total 500')
     expect(metrics).toContain('ucli_quota_settled_cost_usd_total 0.12')
+    expect(metrics).toContain('# HELP ucli_quota_settled_cost_usd_total CNY procurement cost consumed against quota policies')
   })
 })

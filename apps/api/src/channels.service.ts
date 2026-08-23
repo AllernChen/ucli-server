@@ -1,10 +1,13 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import { Prisma } from '@prisma/client'
 import { encryptSecret, secretSuffix } from '../../../packages/security/src/envelope-crypto.js'
 import { loadMasterKey } from '../../../packages/security/src/master-key.js'
 import { decryptSecret } from '../../../packages/security/src/envelope-crypto.js'
 import { validateCostTimezone } from '../../../packages/gateway-core/src/cost-schedule.js'
+import { CatalogLifecycle } from './catalog.dto.js'
+import { lockCatalogRecord } from './catalog-lock.js'
+import { validateModelDiscoveryUrl as validateDiscoveryUrl } from '../../../packages/gateway-core/src/model-discovery-url.js'
 
 export interface ChannelListFilter {
   limit?: number
@@ -14,6 +17,7 @@ export interface ChannelListFilter {
   protocol?: 'OPENAI' | 'ANTHROPIC' | 'GEMINI'
   health?: 'HEALTHY' | 'DEGRADED' | 'UNHEALTHY' | 'DISABLED'
   enabled?: boolean
+  lifecycle?: CatalogLifecycle
 }
 
 @Injectable()
@@ -23,13 +27,14 @@ export class ChannelsService {
     const limit = Math.min(200, Math.max(1, filter.limit ?? 50))
     const offset = Math.max(0, filter.offset ?? 0)
     const where: any = {
+      ...lifecycleWhere(filter.lifecycle),
       ...(filter.q ? { OR: [{ name: { contains: filter.q, mode: 'insensitive' } }, { provider: { contains: filter.q, mode: 'insensitive' } }] } : {}),
       ...(filter.provider ? { provider: filter.provider } : {}), ...(filter.protocol ? { protocol: filter.protocol } : {}),
       ...(filter.health ? { health: filter.health } : {}), ...(filter.enabled !== undefined ? { enabled: filter.enabled } : {})
     }
     const [channels, total] = await Promise.all([
       this.prisma.channel.findMany({ where, include: {
-        channelModels: { select: { id: true, health: true, enabled: true } }, keys: { select: {
+        channelModels: { where: lifecycleWhere(filter.lifecycle), select: { id: true, health: true, enabled: true } }, keys: { where: lifecycleWhere(filter.lifecycle), select: {
           id: true, suffix: true, enabled: true, health: true, priority: true, weight: true, remainingUsd: true, expiresAt: true
         } }
       }, orderBy: [{ priority: 'desc' }, { name: 'asc' }], skip: offset, take: limit }),
@@ -62,20 +67,22 @@ export class ChannelsService {
     return { items, total, limit, offset }
   }
 
-  async detail(id: string) {
+  async detail(id: string, lifecycle: CatalogLifecycle = CatalogLifecycle.ACTIVE) {
     const channel = await this.prisma.channel.findUnique({ where: { id }, include: {
-      keys: { select: { id: true, suffix: true, enabled: true, health: true, priority: true, weight: true, remainingUsd: true,
-        expiresAt: true, isolatedUntil: true, lastUsedAt: true } },
-      channelModels: { include: { costRules: { where: { enabled: true }, orderBy: [{ priority: 'desc' }, { validFrom: 'desc' }] } } }
+      keys: { where: lifecycleWhere(lifecycle), select: { id: true, suffix: true, enabled: true, health: true, priority: true, weight: true, remainingUsd: true,
+        expiresAt: true, isolatedUntil: true, lastUsedAt: true, deletedAt: true } },
+      channelModels: { where: lifecycleWhere(lifecycle), include: { costRules: { where: {
+        ...lifecycleWhere(lifecycle), ...(lifecycle === CatalogLifecycle.ACTIVE ? { enabled: true } : {})
+      }, orderBy: [{ priority: 'desc' }, { validFrom: 'desc' }] } } }
     } })
-    if (!channel) throw new NotFoundException('Channel not found')
+    if (!channel || !matchesLifecycle(channel, lifecycle)) throw new NotFoundException('Channel not found')
     const safeKeys = (channel.keys as any[]).map(({ ciphertext: _ciphertext, iv: _iv, tag: _tag, ...key }) => key)
     return { ...channel, keys: safeKeys }
   }
   async discoverModels(id: string) {
     const channel = await this.prisma.channel.findUnique({ where: { id }, include: { keys: true, channelModels: true } })
-    if (!channel) throw new NotFoundException('Channel not found')
-    const key = channel.keys.find(item => item.enabled && item.health !== 'DISABLED')
+    if (!channel || channel.deletedAt) throw new NotFoundException('Channel not found')
+    const key = channel.keys.find(item => !item.deletedAt && item.enabled && item.health !== 'DISABLED')
     if (!key) throw new BadRequestException('Channel requires an enabled key')
     const plaintext = decryptSecret({ algorithm: 'aes-256-gcm', ciphertext: key.ciphertext, iv: key.iv, tag: key.tag }, loadMasterKey())
     const base = channel.baseUrl.endsWith('/') ? channel.baseUrl : `${channel.baseUrl}/`
@@ -96,11 +103,12 @@ export class ChannelsService {
     const ids = channel.protocol === 'GEMINI'
       ? (payload.models || []).map((model: any) => String(model.name || '').replace(/^models\//, ''))
       : (payload.data || []).map((model: any) => String(model.id || ''))
-    const mapped = new Set(channel.channelModels.map(model => model.upstreamModel))
+    const mapped = new Set(channel.channelModels.filter(model => !model.deletedAt).map(model => model.upstreamModel))
     return [...new Set(ids.filter(Boolean) as string[])].sort().map(upstreamModel => ({ upstreamModel, alreadyMapped: mapped.has(upstreamModel) }))
   }
   create(body: any) {
     assertCostTimezone(body.costTimezone ?? 'UTC')
+    if (body.modelDiscoveryUrl) validateModelDiscoveryUrl(body.modelDiscoveryUrl, body.baseUrl)
     return this.prisma.channel.create({ data: {
     name: body.name, provider: body.provider, protocol: body.protocol, baseUrl: body.baseUrl,
     modelDiscoveryUrl: body.modelDiscoveryUrl ?? null,
@@ -109,7 +117,8 @@ export class ChannelsService {
     } })
   }
   async addKey(channelId: string, body: any) {
-    if (!await this.prisma.channel.findUnique({ where: { id: channelId } })) throw new NotFoundException('Channel not found')
+    const channel = await this.prisma.channel.findUnique({ where: { id: channelId } })
+    if (!channel || channel.deletedAt) throw new NotFoundException('Channel not found')
     const plaintext = String(body.key || '').trim()
     if (!plaintext) throw new BadRequestException('Key is required')
     const encrypted = encryptSecret(plaintext, loadMasterKey())
@@ -118,12 +127,17 @@ export class ChannelsService {
       suffix: secretSuffix(plaintext), priority: body.priority ?? 0, weight: body.weight ?? 1
     }, select: { id: true, suffix: true, enabled: true, health: true } })
   }
-  setEnabled(id: string, enabled: boolean) { return this.prisma.channel.update({ where: { id }, data: { enabled } }) }
+  async setEnabled(id: string, enabled: boolean) {
+    const channel = await this.requireActiveChannel(id)
+    return this.prisma.channel.update({ where: { id }, data: {
+      enabled, ...(enabled && channel.health === 'DISABLED' ? { health: 'DEGRADED' as const } : {})
+    } })
+  }
   async test(id: string) {
     const channel = await this.prisma.channel.findUnique({ where: { id }, include: { keys: true, channelModels: true } })
-    if (!channel) throw new NotFoundException('Channel not found')
-    const key = channel.keys.find(item => item.enabled)
-    const ability = channel.channelModels.find(item => item.enabled)
+    if (!channel || channel.deletedAt) throw new NotFoundException('Channel not found')
+    const key = channel.keys.find(item => !item.deletedAt && item.enabled)
+    const ability = channel.channelModels.find(item => !item.deletedAt && item.enabled)
     if (!key || !ability) throw new BadRequestException('Channel requires an enabled key and model ability')
     const plaintext = decryptSecret({ algorithm: 'aes-256-gcm', ciphertext: key.ciphertext, iv: key.iv, tag: key.tag }, loadMasterKey())
     const started = Date.now()
@@ -146,8 +160,12 @@ export class ChannelsService {
       return { ok: false, status: 0, latencyMs: Date.now() - started, health: 'UNHEALTHY', error: error.name }
     } finally { clearTimeout(timeout) }
   }
-  update(id: string, body: any) {
+  async update(id: string, body: any) {
+    const channel = await this.requireActiveChannel(id)
     if (body.costTimezone !== undefined) assertCostTimezone(body.costTimezone)
+    const baseUrl = body.baseUrl ?? channel.baseUrl
+    const modelDiscoveryUrl = body.modelDiscoveryUrl !== undefined ? body.modelDiscoveryUrl : channel.modelDiscoveryUrl
+    if (modelDiscoveryUrl) validateModelDiscoveryUrl(modelDiscoveryUrl, baseUrl)
     return this.prisma.channel.update({ where: { id }, data: {
       ...(body.name !== undefined ? { name: body.name } : {}),
       ...(body.provider !== undefined ? { provider: body.provider } : {}),
@@ -164,15 +182,92 @@ export class ChannelsService {
     } })
   }
   async updateKey(channelId: string, keyId: string, body: any) {
-    if (!await this.prisma.channelKey.findFirst({ where: { id: keyId, channelId } })) throw new NotFoundException('Key not found')
+    await this.requireActiveChannel(channelId)
+    const key = await this.prisma.channelKey.findFirst({ where: { id: keyId, channelId } })
+    if (!key) throw new NotFoundException('Key not found')
+    if (key.deletedAt) throw new ConflictException('Archived key cannot be edited')
     return this.prisma.channelKey.update({ where: { id: keyId }, data: {
       ...(body.enabled !== undefined ? { enabled: Boolean(body.enabled) } : {}),
+      ...(body.enabled === true && key.health === 'DISABLED' ? { health: 'DEGRADED' as const } : {}),
       ...(body.priority !== undefined ? { priority: body.priority } : {}),
       ...(body.weight !== undefined ? { weight: body.weight } : {}),
       ...(body.remainingUsd !== undefined ? { remainingUsd: body.remainingUsd } : {}),
       ...(body.expiresAt !== undefined ? { expiresAt: body.expiresAt ? new Date(body.expiresAt) : null } : {})
-    }, select: { id: true, suffix: true, enabled: true, health: true, priority: true, weight: true, remainingUsd: true, expiresAt: true } })
+    }, select: { id: true, suffix: true, enabled: true, health: true, priority: true, weight: true, remainingUsd: true, expiresAt: true, deletedAt: true } })
   }
+
+  async archive(id: string) {
+    return this.prisma.$transaction(async transaction => {
+      await lockCatalogRecord(transaction, `channel:${id}`)
+      const channel = await transaction.channel.findUnique({ where: { id }, select: { id: true, deletedAt: true } })
+      if (!channel) throw new NotFoundException('Channel not found')
+      if (channel.deletedAt) return { id, lifecycle: CatalogLifecycle.ARCHIVED, deletedAt: channel.deletedAt }
+      const deletedAt = new Date()
+      const modelIds = (await transaction.channelModel.findMany({ where: { channelId: id }, select: { id: true } })).map(item => item.id)
+      await transaction.channelModelCostRule.updateMany({
+        where: { channelModelId: { in: modelIds } }, data: { deletedAt, enabled: false }
+      })
+      await transaction.channelModel.updateMany({
+        where: { channelId: id }, data: { deletedAt, enabled: false, probeEnabled: false, health: 'DISABLED' }
+      })
+      await transaction.channelKey.updateMany({
+        where: { channelId: id }, data: { deletedAt, enabled: false, health: 'DISABLED', isolatedUntil: null }
+      })
+      await transaction.channel.update({
+        where: { id }, data: { deletedAt, enabled: false, health: 'DISABLED', circuitOpenUntil: null }
+      })
+      return { id, lifecycle: CatalogLifecycle.ARCHIVED, deletedAt }
+    })
+  }
+
+  async restore(id: string) {
+    const channel = await this.prisma.channel.findUnique({ where: { id }, select: { id: true, deletedAt: true } })
+    if (!channel) throw new NotFoundException('Channel not found')
+    if (!channel.deletedAt) return { id, lifecycle: CatalogLifecycle.ACTIVE, deletedAt: null }
+    await this.prisma.channel.update({
+      where: { id }, data: { deletedAt: null, enabled: false, health: 'DISABLED', circuitOpenUntil: null }
+    })
+    return { id, lifecycle: CatalogLifecycle.ACTIVE, deletedAt: null }
+  }
+
+  async archiveKey(channelId: string, keyId: string) {
+    await this.requireActiveChannel(channelId)
+    const key = await this.prisma.channelKey.findFirst({ where: { id: keyId, channelId } })
+    if (!key) throw new NotFoundException('Key not found')
+    if (key.deletedAt) return { id: keyId, lifecycle: CatalogLifecycle.ARCHIVED, deletedAt: key.deletedAt }
+    const deletedAt = new Date()
+    await this.prisma.channelKey.update({
+      where: { id: keyId }, data: { deletedAt, enabled: false, health: 'DISABLED', isolatedUntil: null }
+    })
+    return { id: keyId, lifecycle: CatalogLifecycle.ARCHIVED, deletedAt }
+  }
+
+  async restoreKey(channelId: string, keyId: string) {
+    await this.requireActiveChannel(channelId)
+    const key = await this.prisma.channelKey.findFirst({ where: { id: keyId, channelId } })
+    if (!key) throw new NotFoundException('Key not found')
+    if (!key.deletedAt) return { id: keyId, lifecycle: CatalogLifecycle.ACTIVE, deletedAt: null }
+    await this.prisma.channelKey.update({
+      where: { id: keyId }, data: { deletedAt: null, enabled: false, health: 'DISABLED', isolatedUntil: null }
+    })
+    return { id: keyId, lifecycle: CatalogLifecycle.ACTIVE, deletedAt: null }
+  }
+
+  private async requireActiveChannel(id: string) {
+    const channel = await this.prisma.channel.findUnique({ where: { id } })
+    if (!channel || channel.deletedAt) throw new NotFoundException('Channel not found')
+    return channel
+  }
+}
+
+function lifecycleWhere(lifecycle: CatalogLifecycle = CatalogLifecycle.ACTIVE): Record<string, unknown> {
+  if (lifecycle === CatalogLifecycle.ALL) return {}
+  return lifecycle === CatalogLifecycle.ARCHIVED ? { deletedAt: { not: null } } : { deletedAt: null }
+}
+
+function matchesLifecycle(item: { deletedAt?: Date | null }, lifecycle: CatalogLifecycle): boolean {
+  if (lifecycle === CatalogLifecycle.ALL) return true
+  return lifecycle === CatalogLifecycle.ARCHIVED ? Boolean(item.deletedAt) : !item.deletedAt
 }
 
 function assertCostTimezone(timezone: string): void {
@@ -182,19 +277,9 @@ function assertCostTimezone(timezone: string): void {
 }
 
 function validateModelDiscoveryUrl(value: string, baseUrl: string): URL {
-  let discoveryUrl: URL
-  let channelBaseUrl: URL
   try {
-    discoveryUrl = new URL(value)
-    channelBaseUrl = new URL(baseUrl)
-  } catch {
-    throw new BadRequestException('Model discovery URL must be a valid HTTP(S) URL')
+    return validateDiscoveryUrl(value, baseUrl)
+  } catch (error: any) {
+    throw new BadRequestException(error?.message || 'Model discovery URL is invalid')
   }
-  if (!['http:', 'https:'].includes(discoveryUrl.protocol) || discoveryUrl.username || discoveryUrl.password) {
-    throw new BadRequestException('Model discovery URL must be an HTTP(S) URL without credentials')
-  }
-  if (discoveryUrl.origin !== channelBaseUrl.origin) {
-    throw new BadRequestException('Model discovery URL must use the same origin as channel base URL')
-  }
-  return discoveryUrl
 }

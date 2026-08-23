@@ -13,7 +13,7 @@ function render() {
   const labels = props.data.map(item => new Date(item.bucket).toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit' }))
   const values = props.data.map(item => props.metric === 'requests' ? item.requests : props.metric === 'tokens'
     ? Number(item.inputTokens) + Number(item.outputTokens) : Number(item.costUsd))
-  const names = { requests: '请求数', tokens: 'Token', cost: '采购成本 USD' }
+  const names = { requests: '请求数', tokens: 'Token', cost: '采购成本 CNY' }
   const option: EChartsOption = {
     animationDuration: 300, backgroundColor: 'transparent', tooltip: { trigger: 'axis' }, legend: { textStyle: { color: '#8fa1b8' } },
     grid: { left: 52, right: 52, top: 42, bottom: 34 }, xAxis: { type: 'category', data: labels, axisLabel: { color: '#728199' }, axisLine: { lineStyle: { color: '#26384e' } } },

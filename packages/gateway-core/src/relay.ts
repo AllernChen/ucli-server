@@ -23,7 +23,13 @@ export interface RelayResult {
   response: Response
   usage: NormalizedUsage
   candidate: RelayCandidate
-  attempts: Array<{ channelId: string; keyId: string; status: number; durationMs: number }>
+  attempts: Array<{
+    channelId: string
+    keyId: string
+    status: number
+    durationMs: number
+    errorCode?: 'UPSTREAM_TIMEOUT' | 'UPSTREAM_NETWORK_ERROR'
+  }>
 }
 
 export async function relayRequest({ candidates, body, incomingHeaders, fetcher = fetch, signal }: {
@@ -39,10 +45,14 @@ export async function relayRequest({ candidates, body, incomingHeaders, fetcher 
     for (let retry = 0; retry <= Math.max(0, candidate.maxRetries); retry += 1) {
       const started = Date.now()
       const controller = new AbortController()
+      let timedOut = false
       const cancel = () => controller.abort()
       if (signal?.aborted) controller.abort()
       else signal?.addEventListener('abort', cancel, { once: true })
-      const timeout = setTimeout(() => controller.abort(), candidate.timeoutMs)
+      const timeout = setTimeout(() => {
+        timedOut = true
+        controller.abort()
+      }, candidate.timeoutMs)
       try {
       const headers: Record<string, string> = { 'content-type': 'application/json', 'x-ucli-request-id': requestId }
       let url: string
@@ -98,7 +108,13 @@ export async function relayRequest({ candidates, body, incomingHeaders, fetcher 
       }
       return { requestId, response, usage, candidate, attempts }
       } catch (error) {
-        attempts.push({ channelId: candidate.channelId, keyId: candidate.keyId, status: 0, durationMs: Date.now() - started })
+        const errorCode = timedOut || (error as { name?: string })?.name === 'AbortError'
+          ? 'UPSTREAM_TIMEOUT'
+          : 'UPSTREAM_NETWORK_ERROR'
+        attempts.push({
+          channelId: candidate.channelId, keyId: candidate.keyId, status: 0,
+          durationMs: Date.now() - started, errorCode
+        })
       } finally { clearTimeout(timeout); signal?.removeEventListener('abort', cancel) }
     }
   }

@@ -10,7 +10,10 @@ export class MonitoringController {
   @Get('health') async health() {
     const since = new Date(Date.now() - 60 * 60_000)
     const [channels, total, errors, latency] = await Promise.all([
-      this.prisma.channel.findMany({ include: { keys: { select: { id: true, suffix: true, health: true, remainingUsd: true } } } }),
+      this.prisma.channel.findMany({
+        where: { deletedAt: null },
+        include: { keys: { where: { deletedAt: null }, select: { id: true, suffix: true, health: true, remainingUsd: true } } }
+      }),
       this.prisma.usageLog.count({ where: { startedAt: { gte: since } } }),
       this.prisma.usageLog.count({ where: { startedAt: { gte: since }, statusCode: { gte: 400 } } }),
       this.prisma.usageLog.aggregate({ where: { startedAt: { gte: since } }, _avg: { durationMs: true, firstTokenMs: true } })

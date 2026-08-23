@@ -1,16 +1,93 @@
 import { Transform, Type } from 'class-transformer'
 import {
   ArrayMaxSize, ArrayNotEmpty, IsArray, IsBoolean, IsEnum, IsIn, IsInt, IsOptional,
-  IsString, IsTimeZone, IsUrl, IsUUID, Length, Matches, Max, Min
+  IsDateString, IsString, IsTimeZone, IsUrl, IsUUID, Length, Matches, Max, Min,
+  Validate, ValidateIf, ValidationArguments, ValidatorConstraint, ValidatorConstraintInterface
 } from 'class-validator'
 import { ChannelProtocol, GatewayProtocol, HealthStatus, KeySelection, ModelHealthStatus } from '@prisma/client'
+
+export enum CatalogLifecycle {
+  ACTIVE = 'ACTIVE',
+  ARCHIVED = 'ARCHIVED',
+  ALL = 'ALL'
+}
+
+const NON_NEGATIVE_DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/
+
+@ValidatorConstraint({ name: 'isAfterValidFrom', async: false })
+class IsAfterValidFromConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown, args: ValidationArguments) {
+    if (value === undefined || value === null) return true
+    if (typeof value !== 'string') return false
+    const validFrom = (args.object as { validFrom?: unknown }).validFrom
+    if (typeof validFrom !== 'string') return true
+    const from = new Date(validFrom)
+    const until = new Date(value)
+    return Number.isFinite(from.getTime()) && Number.isFinite(until.getTime()) && until > from
+  }
+
+  defaultMessage() { return 'validUntil must be later than validFrom' }
+}
 
 export class PageQueryDto {
   @Type(() => Number) @IsInt() @Min(1) @Max(200) limit = 50
   @Type(() => Number) @IsInt() @Min(0) offset = 0
 }
 
+export class LifecyclePageQueryDto extends PageQueryDto {
+  @IsOptional() @IsEnum(CatalogLifecycle) lifecycle: CatalogLifecycle = CatalogLifecycle.ACTIVE
+}
+
+export class CreatePublicModelDto {
+  @IsString() @Length(1, 200) id!: string
+  @IsString() @Length(1, 200) displayName!: string
+  @IsString() @Length(1, 100) manufacturer!: string
+  @IsOptional() @IsInt() @Min(1) contextSize?: number | null
+}
+
+export class UpdatePublicModelDto {
+  @IsOptional() @IsString() @Length(1, 200) displayName?: string
+  @IsOptional() @IsString() @Length(1, 100) manufacturer?: string
+  @IsOptional() @IsInt() @Min(1) contextSize?: number | null
+}
+
+export class CreatePublicModelAbilityDto {
+  @IsUUID('4') channelId!: string
+  @IsString() @Length(1, 300) upstreamModel!: string
+  @IsEnum(GatewayProtocol) protocol!: GatewayProtocol
+  @IsOptional() @IsBoolean() supportsStream = true
+  @IsOptional() @IsBoolean() supportsTools = true
+  @IsOptional() @IsBoolean() probeEnabled = true
+  @IsOptional() @IsInt() @Min(5) @Max(1440) probeIntervalMinutes = 15
+}
+
+export class ArchivePublicModelAbilityDto {
+  @IsUUID('4') channelId!: string
+  @IsEnum(GatewayProtocol) protocol!: GatewayProtocol
+}
+
+export class CreateModelPriceDto {
+  @Matches(NON_NEGATIVE_DECIMAL) inputPerMillion!: string
+  @Matches(NON_NEGATIVE_DECIMAL) outputPerMillion!: string
+  @IsOptional() @Matches(NON_NEGATIVE_DECIMAL) cachedPerMillion = '0'
+  @IsOptional() @Matches(NON_NEGATIVE_DECIMAL) reasoningPerMillion = '0'
+  @IsOptional() @IsIn(['CNY']) currency = 'CNY'
+  @IsOptional() @IsDateString({ strict: true }) validFrom?: string
+  @IsOptional() @IsDateString({ strict: true }) @Validate(IsAfterValidFromConstraint) validUntil?: string | null
+}
+
+export class UpdateModelPriceDto {
+  @IsOptional() @Matches(NON_NEGATIVE_DECIMAL) inputPerMillion?: string
+  @IsOptional() @Matches(NON_NEGATIVE_DECIMAL) outputPerMillion?: string
+  @IsOptional() @Matches(NON_NEGATIVE_DECIMAL) cachedPerMillion?: string
+  @IsOptional() @Matches(NON_NEGATIVE_DECIMAL) reasoningPerMillion?: string
+  @IsOptional() @IsIn(['CNY']) currency?: string
+  @IsOptional() @IsDateString({ strict: true }) validFrom?: string
+  @IsOptional() @IsDateString({ strict: true }) @Validate(IsAfterValidFromConstraint) validUntil?: string | null
+}
+
 export class ChannelListQueryDto extends PageQueryDto {
+  @IsOptional() @IsEnum(CatalogLifecycle) lifecycle: CatalogLifecycle = CatalogLifecycle.ACTIVE
   @IsOptional() @IsString() q?: string
   @IsOptional() @IsString() provider?: string
   @IsOptional() @IsEnum(ChannelProtocol) protocol?: ChannelProtocol
@@ -61,6 +138,22 @@ export class CreateChannelModelDto {
   @IsOptional() @IsInt() @Min(5) @Max(1440) probeIntervalMinutes = 15
 }
 
+export class BindChannelModelDto {
+  @IsString() @Length(1, 200) publicModelId!: string
+  @IsOptional() @IsBoolean() createPublicModel = false
+  @ValidateIf(input => input.createPublicModel === true)
+  @IsString() @Length(1, 200) publicModelDisplayName?: string
+  @ValidateIf(input => input.createPublicModel === true)
+  @IsString() @Length(1, 100) manufacturer?: string
+  @IsOptional() @IsInt() @Min(1) contextSize?: number | null
+  @IsString() @Length(1, 300) upstreamModel!: string
+  @IsEnum(GatewayProtocol) protocol!: GatewayProtocol
+  @IsOptional() @IsBoolean() supportsStream = true
+  @IsOptional() @IsBoolean() supportsTools = true
+  @IsOptional() @IsBoolean() probeEnabled = true
+  @IsOptional() @IsInt() @Min(5) @Max(1440) probeIntervalMinutes = 15
+}
+
 export class UpdateChannelModelDto {
   @IsOptional() @IsString() @Length(1, 300) upstreamModel?: string
   @IsOptional() @IsBoolean() supportsStream?: boolean
@@ -82,7 +175,7 @@ export class CreateCostRuleDto {
   @IsOptional() @Matches(/^(?:0|[1-9]\d*)(?:\.\d+)?$/) cachedPerMillion = '0'
   @IsOptional() @Matches(/^(?:0|[1-9]\d*)(?:\.\d+)?$/) reasoningPerMillion = '0'
   @IsString() validFrom!: string
-  @IsOptional() @IsString() validUntil?: string
+  @IsOptional() @IsString() validUntil?: string | null
 }
 
 export class UpdateCostRuleDto {
@@ -96,7 +189,7 @@ export class UpdateCostRuleDto {
   @IsOptional() @Matches(/^(?:0|[1-9]\d*)(?:\.\d+)?$/) cachedPerMillion?: string
   @IsOptional() @Matches(/^(?:0|[1-9]\d*)(?:\.\d+)?$/) reasoningPerMillion?: string
   @IsOptional() @IsString() validFrom?: string
-  @IsOptional() @IsString() validUntil?: string
+  @IsOptional() @IsString() validUntil?: string | null
   @IsOptional() @IsBoolean() enabled?: boolean
 }
 

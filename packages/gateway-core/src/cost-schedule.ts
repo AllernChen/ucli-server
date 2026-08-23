@@ -17,7 +17,7 @@ export interface ScheduledCost extends PriceSnapshot {
 
 export interface ResolvedCost extends PriceSnapshot {
   id: string
-  currency: 'USD'
+  currency: 'CNY'
   source: 'CHANNEL_COST_RULE' | 'PUBLIC_MODEL_FALLBACK'
   timezone: string
   resolvedAt: string
@@ -48,9 +48,9 @@ function localTime(at: Date, timezone: string): { weekday: number; minute: numbe
 }
 
 export function validateScheduledCost(rule: ScheduledCost): void {
-  if (rule.currency !== 'USD' || [rule.inputPerMillion, rule.outputPerMillion, rule.cachedPerMillion, rule.reasoningPerMillion]
+  if (rule.currency !== 'CNY' || [rule.inputPerMillion, rule.outputPerMillion, rule.cachedPerMillion, rule.reasoningPerMillion]
     .some(value => !new Decimal(value).isFinite() || new Decimal(value).isNegative())) {
-    throw new TypeError('Cost values must be non-negative USD amounts')
+    throw new TypeError('Cost values must be non-negative CNY amounts')
   }
   if (!rule.daysOfWeek.length || rule.daysOfWeek.some(day => !Number.isInteger(day) || day < 1 || day > 7)) {
     throw new TypeError('Days of week must be ISO weekdays from 1 to 7')
@@ -84,7 +84,7 @@ export function resolveChannelCost(rules: ScheduledCost[], at: Date, timezone: s
       right.createdAt.getTime() - left.createdAt.getTime() || left.id.localeCompare(right.id))[0]
   if (!rule) return null
   return {
-    id: rule.id, source: 'CHANNEL_COST_RULE', currency: 'USD', inputPerMillion: rule.inputPerMillion,
+    id: rule.id, source: 'CHANNEL_COST_RULE', currency: 'CNY', inputPerMillion: rule.inputPerMillion,
     outputPerMillion: rule.outputPerMillion, cachedPerMillion: rule.cachedPerMillion,
     reasoningPerMillion: rule.reasoningPerMillion, timezone, resolvedAt: at.toISOString(),
     ruleName: rule.name, daysOfWeek: [...rule.daysOfWeek], startMinute: rule.startMinute,

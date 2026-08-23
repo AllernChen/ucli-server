@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { api } from '../api'
+import { formatCny } from '../currency'
 
 const loading = ref(true)
 const error = ref('')
@@ -58,7 +59,7 @@ onMounted(load)
               <td class="mono">{{ row.publicModelId }}</td>
               <td class="mono">{{ row.upstreamModel }}</td>
               <td>{{ fmt(row.inputTokens) }} / {{ fmt(row.outputTokens) }}</td>
-              <td>${{ row.costUsd }}</td>
+              <td>{{ formatCny(row.costUsd) }}</td>
               <td>{{ row.durationMs }}ms<template v-if="row.firstTokenMs"> / 首字 {{ row.firstTokenMs }}ms</template></td>
               <td><i :class="row.statusCode < 400 ? 'ok' : 'bad'"></i>{{ row.statusCode }}<template v-if="row.errorCode"> ({{ row.errorCode }})</template></td>
               <td>{{ row.switched ? '是' : '—' }}</td>

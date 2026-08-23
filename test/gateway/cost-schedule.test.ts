@@ -9,11 +9,19 @@ import {
 const base: ScheduledCost = {
   id: 'base', priority: 0, daysOfWeek: [1, 2, 3, 4, 5, 6, 7], startMinute: 0, endMinute: 0,
   validFrom: new Date('2026-01-01T00:00:00Z'), validUntil: null, createdAt: new Date('2026-01-01T00:00:00Z'),
-  enabled: true, currency: 'USD', inputPerMillion: '1', outputPerMillion: '2',
+  enabled: true, currency: 'CNY', inputPerMillion: '1', outputPerMillion: '2',
   cachedPerMillion: '0.2', reasoningPerMillion: '3'
 }
 
 describe('channel model cost schedules', () => {
+  it('accepts CNY procurement costs and rejects USD schedules', () => {
+    const usd = { ...base, currency: 'USD' }
+
+    expect(resolveChannelCost([base], new Date('2026-08-20T00:00:00Z'), 'UTC')).toMatchObject({ currency: 'CNY' })
+    expect(() => resolveChannelCost([usd], new Date('2026-08-20T00:00:00Z'), 'UTC'))
+      .toThrow('CNY')
+  })
+
   it('uses the higher-priority peak cost in the channel timezone', () => {
     const peak: ScheduledCost = {
       ...base, id: 'peak', priority: 10, daysOfWeek: [1, 2, 3, 4, 5], startMinute: 20 * 60,
@@ -51,7 +59,7 @@ describe('channel model cost schedules', () => {
   it('rejects invalid timezone and negative procurement costs', () => {
     expect(() => resolveChannelCost([base], new Date('2026-08-20T00:00:00Z'), 'Mars/Olympus')).toThrow('Invalid IANA timezone')
     expect(() => resolveChannelCost([{ ...base, inputPerMillion: '-1' }], new Date('2026-08-20T00:00:00Z'), 'UTC'))
-      .toThrow('Cost values must be non-negative USD amounts')
+      .toThrow('Cost values must be non-negative CNY amounts')
   })
 
   it('builds a conservative reservation snapshot from the maximum of every token category', () => {

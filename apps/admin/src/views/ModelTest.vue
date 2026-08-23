@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { api, apiSse, snapshotModelTestMessages } from '../api'
 import type { AdminModelTestResponse, ChannelDetail, ChannelModel, ChannelSummary, Page } from '../types/catalog'
 import StatusBadge from '../components/StatusBadge.vue'
+import { formatCny } from '../currency'
 
 type Message = { role: 'system' | 'user' | 'assistant'; content: string }
 const channels = ref<ChannelSummary[]>([]); const channelId = ref(''); const channel = ref<ChannelDetail | null>(null)
@@ -86,7 +87,7 @@ onMounted(async () => { try { await loadChannels(); await loadChannel() } catch 
       <p v-if="messages.length === 1" class="empty">输入消息开始固定渠道对话测试</p>
     </div><form class="composer" @submit.prevent="send"><textarea v-model="prompt" rows="4" maxlength="20000" placeholder="输入测试消息；点击发送提交完整多轮上下文"></textarea><button v-if="sending" type="button" @click="cancel">取消</button><button class="primary" :disabled="sending || !prompt.trim() || !channelModelId">{{ sending ? '请求中…' : '发送' }}</button></form></section>
     <section class="panel test-metrics"><h2>本次结果</h2><template v-if="result"><StatusBadge :status="result.health" />
-      <dl><dt>HTTP / 状态</dt><dd>{{ result.statusCode }} · {{ result.ok ? '成功' : result.errorCode }}</dd><dt>延迟 / 首字</dt><dd>{{ result.latencyMs }}ms / {{ result.firstTokenMs ?? '—' }}</dd><dt>输入 / 输出 Token</dt><dd>{{ result.inputTokens }} / {{ result.outputTokens }}</dd><dt>实际 Key</dt><dd>••••{{ result.keySuffix || '—' }}</dd><dt>采购成本</dt><dd>${{ result.estimatedProcurementCostUsd }}</dd><dt>成本来源</dt><dd>{{ result.appliedCost.source }}</dd><dt>输入 / 输出 $/M</dt><dd>{{ result.appliedCost.inputPerMillion }} / {{ result.appliedCost.outputPerMillion }}</dd></dl>
+<dl><dt>HTTP / 状态</dt><dd>{{ result.statusCode }} · {{ result.ok ? '成功' : result.errorCode }}</dd><dt>延迟 / 首字</dt><dd>{{ result.latencyMs }}ms / {{ result.firstTokenMs ?? '—' }}</dd><dt>输入 / 输出 Token</dt><dd>{{ result.inputTokens }} / {{ result.outputTokens }}</dd><dt>实际 Key</dt><dd>••••{{ result.keySuffix || '—' }}</dd><dt>采购成本</dt><dd>{{ formatCny(result.estimatedProcurementCostUsd) }}</dd><dt>成本来源</dt><dd>{{ result.appliedCost.source }}</dd><dt>输入 / 输出 ¥/M</dt><dd>{{ result.appliedCost.inputPerMillion }} / {{ result.appliedCost.outputPerMillion }}</dd></dl>
       <details><summary>原始 JSON</summary><pre>{{ JSON.stringify(result.rawResponse, null, 2) }}</pre></details></template><p v-else class="empty">发送后展示实际路由、Token、延迟和采购成本</p></section>
   </div>
 </template>

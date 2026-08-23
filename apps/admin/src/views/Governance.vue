@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { api } from '../api'
 import { toast } from '../toast'
+import { formatCny } from '../currency'
 
 const loading = ref(true)
 const error = ref('')
@@ -132,8 +133,8 @@ onMounted(load)
           <input v-model="quotaForm.publicModelId" placeholder="模型 id（可选）">
           <input v-model="quotaForm.dailyTokens" type="number" placeholder="每日 token">
           <input v-model="quotaForm.monthlyTokens" type="number" placeholder="每月 token">
-          <input v-model="quotaForm.dailyCostUsd" type="number" step="0.01" placeholder="每日费用$">
-          <input v-model="quotaForm.monthlyCostUsd" type="number" step="0.01" placeholder="每月费用$">
+        <input v-model="quotaForm.dailyCostUsd" type="number" step="0.01" placeholder="每日费用¥">
+        <input v-model="quotaForm.monthlyCostUsd" type="number" step="0.01" placeholder="每月费用¥">
           <input v-model="quotaForm.qps" type="number" placeholder="QPS">
           <input v-model="quotaForm.tpm" type="number" placeholder="TPM">
           <input v-model="quotaForm.concurrency" type="number" placeholder="并发">
@@ -144,7 +145,7 @@ onMounted(load)
         <h2>配额列表</h2>
         <table v-if="quotas.length">
           <thead><tr><th>账号</th><th>模型</th><th>每日/每月 token</th><th>每日/每月费用</th><th>QPS</th><th>TPM</th><th>并发</th><th>操作</th></tr></thead>
-          <tbody><tr v-for="q in quotas" :key="q.id"><td>{{ q.accountId?.slice(0, 8) || '组织级' }}</td><td>{{ q.publicModelId || '全部' }}</td><td>{{ q.dailyTokens || '—' }} / {{ q.monthlyTokens || '—' }}</td><td>${{ q.dailyCostUsd || '—' }} / ${{ q.monthlyCostUsd || '—' }}</td><td>{{ q.qps || '—' }}</td><td>{{ q.tpm || '—' }}</td><td>{{ q.concurrency || '—' }}</td><td><button @click="deleteQuota(q.id)">删除</button></td></tr></tbody>
+            <tbody><tr v-for="q in quotas" :key="q.id"><td>{{ q.accountId?.slice(0, 8) || '组织级' }}</td><td>{{ q.publicModelId || '全部' }}</td><td>{{ q.dailyTokens || '—' }} / {{ q.monthlyTokens || '—' }}</td><td>{{ formatCny(q.dailyCostUsd) }} / {{ formatCny(q.monthlyCostUsd) }}</td><td>{{ q.qps || '—' }}</td><td>{{ q.tpm || '—' }}</td><td>{{ q.concurrency || '—' }}</td><td><button @click="deleteQuota(q.id)">删除</button></td></tr></tbody>
         </table>
         <p v-else class="empty">暂无配额</p>
       </section>

@@ -69,10 +69,13 @@ function upstreamErrorCode(payload: any): string | null {
   return typeof value === 'string' ? value.toLowerCase() : null
 }
 
-function failureCode(statusCode: number, payload?: unknown): { code: string; terminal: boolean } {
+function failureCode(
+  statusCode: number, payload?: unknown, transportErrorCode?: 'UPSTREAM_TIMEOUT' | 'UPSTREAM_NETWORK_ERROR'
+): { code: string; terminal: boolean } {
   if (statusCode === 401 || statusCode === 403) return { code: 'UPSTREAM_AUTH_FAILED', terminal: true }
   if (statusCode === 404 && upstreamErrorCode(payload) === 'model_not_found') return { code: 'UPSTREAM_MODEL_NOT_FOUND', terminal: true }
-  if (statusCode === 408 || statusCode === 0) return { code: 'UPSTREAM_TIMEOUT', terminal: false }
+  if (statusCode === 408) return { code: 'UPSTREAM_TIMEOUT', terminal: false }
+  if (statusCode === 0) return { code: transportErrorCode || 'UPSTREAM_NETWORK_ERROR', terminal: false }
   if (statusCode === 429) return { code: 'UPSTREAM_RATE_LIMITED', terminal: false }
   if (statusCode >= 500) return { code: 'UPSTREAM_5XX', terminal: false }
   return { code: `UPSTREAM_HTTP_${statusCode}`, terminal: false }
@@ -104,11 +107,13 @@ export class ModelTestingService {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const transition = nextModelHealth({ consecutiveFailures }, outcome)
       const updated = await this.prisma.channelModel.updateMany({
-        where: { id, consecutiveFailures },
+        where: { id, consecutiveFailures, deletedAt: null },
         data: { ...transition, lastTestedAt: testedAt, ...(outcome.ok ? { lastSuccessAt: testedAt } : {}) }
       })
       if (updated.count === 1) return transition
-      const latest = await this.prisma.channelModel.findUnique({ where: { id }, select: { consecutiveFailures: true } })
+      const latest = await this.prisma.channelModel.findFirst({
+        where: { id, deletedAt: null }, select: { consecutiveFailures: true }
+      })
       if (!latest) throw new NotFoundException('Channel model not found')
       consecutiveFailures = latest.consecutiveFailures
     }
@@ -119,8 +124,9 @@ export class ModelTestingService {
     id: string, _input: Record<string, unknown> = {}, actorId: string | null = null, source: ProbeSource = 'MANUAL'
   ): Promise<ModelTestResult> {
     void actorId
-    const channelModel: any = await this.prisma.channelModel.findUnique({
-      where: { id }, include: { channel: { include: { keys: true } } }
+    const channelModel: any = await this.prisma.channelModel.findFirst({
+      where: { id, deletedAt: null, channel: { deletedAt: null }, publicModel: { deletedAt: null } },
+      include: { channel: { include: { keys: { where: { deletedAt: null } } } } }
     })
     if (!channelModel) throw new NotFoundException('Channel model not found')
     if (!channelModel.enabled || !channelModel.channel.enabled) throw new BadRequestException('Channel model is disabled')
@@ -148,7 +154,7 @@ export class ModelTestingService {
           channelModelId: channelModel.id,
           apiKey, upstreamModel: channelModel.upstreamModel, protocol: PROTOCOLS[channelModel.protocol as PrismaProtocol],
           maxRetries: channelModel.channel.maxRetries, timeoutMs: Math.min(channelModel.channel.timeoutMs, 30_000),
-          cost: { id: 'health-check', source: 'PUBLIC_MODEL_FALLBACK', currency: 'USD', timezone: 'UTC',
+          cost: { id: 'health-check', source: 'PUBLIC_MODEL_FALLBACK', currency: 'CNY', timezone: 'UTC',
             resolvedAt: new Date(started).toISOString(), inputPerMillion: '0', outputPerMillion: '0',
             cachedPerMillion: '0', reasoningPerMillion: '0' }
         }],
@@ -166,7 +172,7 @@ export class ModelTestingService {
     } catch (error: any) {
       const lastAttempt = error?.attempts?.at(-1)
       statusCode = Number(lastAttempt?.status || 0)
-      ;({ code: errorCode, terminal } = failureCode(statusCode))
+      ;({ code: errorCode, terminal } = failureCode(statusCode, undefined, lastAttempt?.errorCode))
     }
     const testedAt = new Date()
     const transition = await this.applyHealthTransition(id, channelModel.consecutiveFailures,
@@ -191,11 +197,22 @@ export class ModelTestingService {
       throw new BadRequestException('Conversation exceeds message or content limits')
     }
     const testedAt = new Date()
-    const channelModel: any = await this.prisma.channelModel.findUnique({ where: { id: input.channelModelId }, include: {
-      costRules: true, publicModel: { include: { prices: { where: { validFrom: { lte: testedAt }, OR: [
-        { validUntil: null }, { validUntil: { gt: testedAt } }
-      ] }, orderBy: { validFrom: 'desc' }, take: 1 } } }, channel: { include: { keys: true } }
-    } })
+    const channelModel: any = await this.prisma.channelModel.findFirst({
+      where: {
+        id: input.channelModelId, deletedAt: null,
+        channel: { deletedAt: null }, publicModel: { deletedAt: null }
+      },
+      include: {
+        costRules: { where: { deletedAt: null } },
+        publicModel: { include: { prices: {
+          where: { deletedAt: null, enabled: true, validFrom: { lte: testedAt }, OR: [
+            { validUntil: null }, { validUntil: { gt: testedAt } }
+          ] },
+          orderBy: { validFrom: 'desc' }, take: 1
+        } } },
+        channel: { include: { keys: { where: { deletedAt: null } } } }
+      }
+    })
     if (!channelModel) throw new NotFoundException('Channel model not found')
     if (!channelModel.enabled || !channelModel.channel.enabled) throw new BadRequestException('Channel model is disabled')
     const availableKeys = channelModel.channel.keys.map((key: any) => ({
@@ -212,7 +229,7 @@ export class ModelTestingService {
     }))
     const fallback = channelModel.publicModel.prices[0]
     const appliedCost: ResolvedCost | null = resolveChannelCost(rules, testedAt, channelModel.channel.costTimezone) || (fallback ? {
-      id: fallback.id, source: 'PUBLIC_MODEL_FALLBACK', currency: 'USD', timezone: channelModel.channel.costTimezone,
+      id: fallback.id, source: 'PUBLIC_MODEL_FALLBACK', currency: 'CNY', timezone: channelModel.channel.costTimezone,
       resolvedAt: testedAt.toISOString(), inputPerMillion: fallback.inputPerMillion.toString(), outputPerMillion: fallback.outputPerMillion.toString(),
       cachedPerMillion: fallback.cachedPerMillion.toString(), reasoningPerMillion: fallback.reasoningPerMillion.toString()
     } : null)
@@ -273,7 +290,7 @@ export class ModelTestingService {
         terminal = false
       } else {
         statusCode = Number(lastAttempt?.status || 0)
-        ;({ code: errorCode, terminal } = failureCode(statusCode))
+        ;({ code: errorCode, terminal } = failureCode(statusCode, undefined, lastAttempt?.errorCode))
       }
     }
     const finishedAt = new Date()
@@ -295,7 +312,13 @@ export class ModelTestingService {
   async testChannelModels(channelId: string, ids: string[], actorId: string | null): Promise<ModelTestResult[]> {
     const uniqueIds = [...new Set(ids)]
     if (!uniqueIds.length || uniqueIds.length > 20) throw new BadRequestException('Select between 1 and 20 channel models')
-    const models = await this.prisma.channelModel.findMany({ where: { id: { in: uniqueIds } }, select: { id: true, channelId: true } })
+    const models = await this.prisma.channelModel.findMany({
+      where: {
+        id: { in: uniqueIds }, deletedAt: null,
+        channel: { deletedAt: null }, publicModel: { deletedAt: null }
+      },
+      select: { id: true, channelId: true }
+    })
     if (models.length !== uniqueIds.length || models.some((model: any) => model.channelId !== channelId)) {
       throw new BadRequestException('Every channel model must belong to the selected channel')
     }
@@ -307,14 +330,17 @@ export class ModelTestingService {
 
   async testDueChannelModels(now = new Date()): Promise<ModelTestResult[]> {
     const candidates: any[] = await this.prisma.channelModel.findMany({
-      where: { enabled: true, probeEnabled: true, channel: { enabled: true } },
+      where: {
+        enabled: true, probeEnabled: true, deletedAt: null,
+        channel: { enabled: true, deletedAt: null }, publicModel: { deletedAt: null }
+      },
       select: { id: true, lastTestedAt: true, probeIntervalMinutes: true }, orderBy: { lastTestedAt: 'asc' }, take: 200
     })
     const due = candidates.filter(model => !model.lastTestedAt ||
       model.lastTestedAt.getTime() + model.probeIntervalMinutes * 60_000 <= now.getTime()).slice(0, 30)
     const results = await concurrentMap(due, 3, async model => {
       const claimed = await this.prisma.channelModel.updateMany({
-        where: { id: model.id, lastTestedAt: model.lastTestedAt }, data: { lastTestedAt: now }
+        where: { id: model.id, lastTestedAt: model.lastTestedAt, deletedAt: null }, data: { lastTestedAt: now }
       })
       if (claimed.count !== 1) return null
       return this.testChannelModel(model.id, {}, null, 'SCHEDULED').catch(error => ({

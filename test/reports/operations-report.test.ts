@@ -10,6 +10,8 @@ describe('operations report', () => {
     })
     expect(report).toContain('估算活跃时长：40 分钟')
     expect(report).toContain('成功率：95.00%')
+    expect(report).toContain('费用：¥1.20')
+    expect(report).not.toContain('费用：$')
     expect(report).not.toContain('Prompt')
   })
 })

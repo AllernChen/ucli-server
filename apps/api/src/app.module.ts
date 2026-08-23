@@ -8,6 +8,7 @@ import { ChannelsController } from './channels.controller.js'
 import { ChannelsService } from './channels.service.js'
 import { ClientController } from './client.controller.js'
 import { ModelsController } from './models.controller.js'
+import { ModelsService } from './models.service.js'
 import { ReportsController } from './reports.controller.js'
 import { SkillsController } from './skills.controller.js'
 import { UsageController } from './usage.controller.js'
@@ -20,12 +21,13 @@ import { AuditInterceptor } from '../../../packages/http/src/audit.interceptor.j
 import { ChannelModelsController } from './channel-models.controller.js'
 import { ChannelModelsService } from './channel-models.service.js'
 import { ModelTestingService } from './model-testing.service.js'
+import { ModelBindingService } from './model-binding.service.js'
 import { ModelTestingController } from './model-testing.controller.js'
 import { AnalyticsController } from './analytics.controller.js'
 import { AnalyticsService } from './analytics.service.js'
 
 @Module({
   controllers: [AuthController, ChannelsController, ChannelModelsController, ModelTestingController, AnalyticsController, ClientController, ModelsController, UsageController, SkillsController, ReportsController, GovernanceController, MonitoringController, MetricsController, OrganizationsController],
-  providers: [PrismaService, AuthService, ChannelsService, ChannelModelsService, ModelTestingService, AnalyticsService, AuthGuard, ObjectStorageService, AuditInterceptor]
+  providers: [PrismaService, AuthService, ChannelsService, ChannelModelsService, ModelBindingService, ModelsService, ModelTestingService, AnalyticsService, AuthGuard, ObjectStorageService, AuditInterceptor]
 })
 export class AppModule {}

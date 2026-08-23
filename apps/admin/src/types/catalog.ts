@@ -1,11 +1,13 @@
 export type HealthStatus = 'UNKNOWN' | 'HEALTHY' | 'DEGRADED' | 'UNHEALTHY' | 'DISABLED'
 export type ChannelProtocol = 'OPENAI' | 'ANTHROPIC' | 'GEMINI'
 export type GatewayProtocol = 'OPENAI_RESPONSES' | 'OPENAI_CHAT' | 'ANTHROPIC_MESSAGES' | 'GEMINI'
+export type CatalogLifecycle = 'ACTIVE' | 'ARCHIVED' | 'ALL'
 
 export interface Page<T> { items: T[]; total: number; limit: number; offset: number }
 
 export interface ChannelKey {
   id: string
+  deletedAt: string | null
   suffix: string
   enabled: boolean
   health: HealthStatus
@@ -19,6 +21,7 @@ export interface ChannelKey {
 
 export interface CostRule {
   id: string
+  deletedAt: string | null
   channelModelId: string
   name: string
   daysOfWeek: number[]
@@ -29,7 +32,7 @@ export interface CostRule {
   outputPerMillion: string
   cachedPerMillion: string
   reasoningPerMillion: string
-  currency: 'USD'
+  currency: 'CNY'
   enabled: boolean
   validFrom: string
   validUntil: string | null
@@ -38,6 +41,7 @@ export interface CostRule {
 
 export interface ChannelModel {
   id: string
+  deletedAt: string | null
   channelId: string
   publicModelId: string
   upstreamModel: string
@@ -52,6 +56,7 @@ export interface ChannelModel {
   lastTestedAt: string | null
   lastSuccessAt: string | null
   lastErrorCode: string | null
+  costTimezone: string
   costRules: CostRule[]
   currentCost?: {
     id: string
@@ -60,11 +65,20 @@ export interface ChannelModel {
     outputPerMillion: string
     cachedPerMillion: string
     reasoningPerMillion: string
+    currency: 'CNY'
+    timezone: string
+    resolvedAt: string
+    ruleName?: string
+    daysOfWeek?: number[]
+    startMinute?: number
+    endMinute?: number
+    priority?: number
   } | null
 }
 
 export interface ChannelSummary {
   id: string
+  deletedAt: string | null
   name: string
   provider: string
   protocol: ChannelProtocol
@@ -92,21 +106,30 @@ export interface ChannelDetail extends Omit<ChannelSummary, 'availableKeys' | 'h
   channelModels: ChannelModel[]
 }
 
+export interface PublicModelPrice {
+  id: string
+  inputPerMillion: string
+  outputPerMillion: string
+  cachedPerMillion: string
+  reasoningPerMillion: string
+  currency: 'CNY'
+  enabled: boolean
+  validFrom: string
+  validUntil: string | null
+  deletedAt: string | null
+  used: boolean
+}
+
 export interface PublicModel {
   id: string
+  deletedAt: string | null
+  manufacturer: string
+  manufacturerKey: string
   displayName: string
   contextSize: number | null
   enabled: boolean
   abilities: ChannelModel[]
-  prices: Array<{
-    id: string
-    inputPerMillion: string
-    outputPerMillion: string
-    cachedPerMillion: string
-    reasoningPerMillion: string
-    validFrom: string
-    validUntil: string | null
-  }>
+  prices: PublicModelPrice[]
   usage24h: { requests: number; tokens: number; costUsd: string }
 }
 
@@ -152,7 +175,7 @@ export interface AdminModelTestResponse extends ModelTestResult {
     outputPerMillion: string
     cachedPerMillion: string
     reasoningPerMillion: string
-    currency: 'USD'
+    currency: 'CNY'
     timezone: string
     resolvedAt: string
   }

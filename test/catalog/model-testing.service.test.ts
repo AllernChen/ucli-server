@@ -13,7 +13,7 @@ function makeHarness(protocol = 'OPENAI_CHAT', fetcher: typeof fetch = vi.fn()) 
       id: '40000000-0000-4000-8000-000000000001', name: 'base', enabled: true, priority: 0,
       daysOfWeek: [1, 2, 3, 4, 5, 6, 7], startMinute: 0, endMinute: 0,
       inputPerMillion: '1', outputPerMillion: '2', cachedPerMillion: '0', reasoningPerMillion: '0',
-      currency: 'USD', validFrom: new Date('2026-01-01T00:00:00Z'), validUntil: null, createdAt: new Date('2026-01-01T00:00:00Z')
+      currency: 'CNY', validFrom: new Date('2026-01-01T00:00:00Z'), validUntil: null, createdAt: new Date('2026-01-01T00:00:00Z')
     }],
     publicModel: { prices: [] },
     channel: {
@@ -30,6 +30,7 @@ function makeHarness(protocol = 'OPENAI_CHAT', fetcher: typeof fetch = vi.fn()) 
   const prisma: any = {
     channelModel: {
       findUnique: vi.fn(async ({ where }: any) => where.id === model.id ? model : null),
+      findFirst: vi.fn(async ({ where }: any) => where.id === model.id ? model : null),
       findMany: vi.fn(async () => [model]),
       update: vi.fn(async ({ data }: any) => Object.assign(model, data)),
       updateMany: vi.fn(async ({ where, data }: any) => {
@@ -55,6 +56,29 @@ function okPayload(protocol: string) {
 }
 
 describe('model testing service', () => {
+  it('manual probes load only an active model, channel and key', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(okPayload('OPENAI_CHAT')), { status: 200 })) as any
+    const { service, prisma } = makeHarness('OPENAI_CHAT', fetcher)
+
+    await service.testChannelModel(channelModelId)
+
+    expect(prisma.channelModel.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        id: channelModelId, deletedAt: null,
+        channel: expect.objectContaining({ deletedAt: null }),
+        publicModel: expect.objectContaining({ deletedAt: null })
+      }),
+      include: expect.objectContaining({
+        channel: expect.objectContaining({
+          include: expect.objectContaining({ keys: expect.objectContaining({ where: expect.objectContaining({ deletedAt: null }) }) })
+        })
+      })
+    }))
+    expect(prisma.channelModel.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: channelModelId, deletedAt: null })
+    }))
+  })
+
   for (const protocol of ['OPENAI_CHAT', 'ANTHROPIC_MESSAGES', 'GEMINI']) {
     it(`records a successful ${protocol} probe without prompt or response content`, async () => {
       const fetcher = vi.fn(async (_url: any, init: any) => {
@@ -115,12 +139,39 @@ describe('model testing service', () => {
     expect(probes[0]).toMatchObject({ statusCode: null, errorCode: 'UPSTREAM_TIMEOUT' })
   })
 
+  it('records an immediate transport failure as a network error instead of a timeout', async () => {
+    const { service, probes } = makeHarness('OPENAI_CHAT', vi.fn(async () => {
+      throw new TypeError('fetch failed')
+    }) as any)
+
+    const result = await service.testChannelModel(channelModelId, {}, null, 'SCHEDULED')
+
+    expect(result).toMatchObject({
+      ok: false, statusCode: 0, errorCode: 'UPSTREAM_NETWORK_ERROR', health: 'DEGRADED'
+    })
+    expect(probes[0]).toMatchObject({ statusCode: null, errorCode: 'UPSTREAM_NETWORK_ERROR' })
+  })
+
   it('batch-tests only models belonging to the channel and isolates failures', async () => {
     const { service } = makeHarness('OPENAI_CHAT', vi.fn(async () => new Response(JSON.stringify(okPayload('OPENAI_CHAT')), { status: 200 })) as any)
     const results = await service.testChannelModels(channelId, [channelModelId], 'actor-1')
     expect(results).toEqual([expect.objectContaining({ channelModelId, ok: true })])
     await expect(service.testChannelModels('10000000-0000-4000-8000-000000000099', [channelModelId], 'actor-1'))
       .rejects.toMatchObject({ status: 400 })
+  })
+
+  it('batch validation excludes archived models and models of archived channels', async () => {
+    const { service, prisma } = makeHarness('OPENAI_CHAT', vi.fn(async () => new Response(JSON.stringify(okPayload('OPENAI_CHAT')), { status: 200 })) as any)
+
+    await service.testChannelModels(channelId, [channelModelId], 'actor-1')
+
+    expect(prisma.channelModel.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        id: { in: [channelModelId] }, deletedAt: null,
+        channel: expect.objectContaining({ deletedAt: null }),
+        publicModel: expect.objectContaining({ deletedAt: null })
+      })
+    }))
   })
 
   it('forwards real upstream stream deltas and records first-token metrics', async () => {
@@ -144,6 +195,48 @@ describe('model testing service', () => {
     expect(probes.at(-1)).toMatchObject({ source: 'CONVERSATION', firstTokenMs: expect.any(Number) })
   })
 
+  it('conversation tests resolve cost only from active catalog records', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(okPayload('OPENAI_CHAT')), { status: 200 })) as any
+    const { service, prisma } = makeHarness('OPENAI_CHAT', fetcher)
+
+    await service.runConversation({
+      channelModelId, messages: [{ role: 'user', content: 'Hi' }], temperature: 0, maxTokens: 16, stream: false
+    }, 'actor-1')
+
+    expect(prisma.channelModel.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        id: channelModelId, deletedAt: null,
+        channel: expect.objectContaining({ deletedAt: null }),
+        publicModel: expect.objectContaining({ deletedAt: null })
+      }),
+      include: expect.objectContaining({
+        costRules: expect.objectContaining({ where: expect.objectContaining({ deletedAt: null }) }),
+        publicModel: expect.objectContaining({
+          include: expect.objectContaining({
+            prices: expect.objectContaining({ where: expect.objectContaining({ deletedAt: null, enabled: true }) })
+          })
+        }),
+        channel: expect.objectContaining({
+          include: expect.objectContaining({ keys: expect.objectContaining({ where: expect.objectContaining({ deletedAt: null }) }) })
+        })
+      })
+    }))
+  })
+
+  it('returns a CNY fallback procurement snapshot when no channel rule matches', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(okPayload('OPENAI_CHAT')), { status: 200 })) as any
+    const { service, model } = makeHarness('OPENAI_CHAT', fetcher)
+    model.costRules = []
+    model.publicModel.prices = [{
+      id: 'price-cny', inputPerMillion: '3', outputPerMillion: '6', cachedPerMillion: '0.025',
+      reasoningPerMillion: '6', currency: 'CNY'
+    }]
+
+    await expect(service.runConversation({
+      channelModelId, messages: [{ role: 'user', content: 'Hi' }], temperature: 0, maxTokens: 16, stream: false
+    }, 'actor-1')).resolves.toMatchObject({ appliedCost: { source: 'PUBLIC_MODEL_FALLBACK', currency: 'CNY' } })
+  })
+
   it('claims a due scheduled probe so concurrent workers do not test it twice', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify(okPayload('OPENAI_CHAT')), { status: 200 })) as any
     const { service } = makeHarness('OPENAI_CHAT', fetcher)
@@ -151,6 +244,25 @@ describe('model testing service', () => {
     const results = await Promise.all([service.testDueChannelModels(now), service.testDueChannelModels(now)])
     expect(results.flat()).toHaveLength(1)
     expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('scheduled probes claim only active models on active channels', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(okPayload('OPENAI_CHAT')), { status: 200 })) as any
+    const { service, prisma } = makeHarness('OPENAI_CHAT', fetcher)
+    const now = new Date('2026-08-21T00:00:00Z')
+
+    await service.testDueChannelModels(now)
+
+    expect(prisma.channelModel.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        enabled: true, probeEnabled: true, deletedAt: null,
+        channel: expect.objectContaining({ enabled: true, deletedAt: null }),
+        publicModel: expect.objectContaining({ deletedAt: null })
+      })
+    }))
+    expect(prisma.channelModel.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: channelModelId, deletedAt: null })
+    }))
   })
 
   it('does not update health or probes when a received stream is cancelled by the client', async () => {

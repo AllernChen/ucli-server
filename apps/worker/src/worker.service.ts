@@ -7,6 +7,7 @@ import { renderOperationsReport } from '../../../packages/reports/src/operations
 import Decimal from 'decimal.js'
 import { estimateActiveMinutes } from '../../../packages/usage/src/analytics.js'
 import { ModelTestingService } from '../../api/src/model-testing.service.js'
+import { validateModelDiscoveryUrl } from '../../../packages/gateway-core/src/model-discovery-url.js'
 
 @Injectable()
 export class WorkerService {
@@ -28,28 +29,44 @@ export class WorkerService {
 
   @Cron('0 */5 * * * *')
   async probeChannels() {
-    const channels = await this.prisma.channel.findMany({ where: { enabled: true }, include: { keys: true, channelModels: true } })
+    const channels = await this.prisma.channel.findMany({
+      where: { enabled: true, deletedAt: null },
+      include: {
+        keys: { where: { deletedAt: null } },
+        channelModels: { where: { deletedAt: null, publicModel: { deletedAt: null } } }
+      }
+    })
     for (const channel of channels) {
       const key = channel.keys.find(item => item.enabled && item.health !== 'DISABLED')
       const ability = channel.channelModels.find(item => item.enabled)
       if (!key || !ability) continue
       try {
-        const plaintext = decryptSecret({ algorithm: 'aes-256-gcm', ciphertext: key.ciphertext, iv: key.iv, tag: key.tag }, loadMasterKey())
         const base = channel.baseUrl.endsWith('/') ? channel.baseUrl : `${channel.baseUrl}/`
+        const configuredDiscoveryUrl = channel.modelDiscoveryUrl
+          ? validateModelDiscoveryUrl(channel.modelDiscoveryUrl, channel.baseUrl)
+          : null
+        const plaintext = decryptSecret({ algorithm: 'aes-256-gcm', ciphertext: key.ciphertext, iv: key.iv, tag: key.tag }, loadMasterKey())
         const headers: Record<string, string> = channel.protocol === 'ANTHROPIC'
           ? { 'x-api-key': plaintext, 'anthropic-version': '2023-06-01' }
           : channel.protocol === 'GEMINI' ? { 'x-goog-api-key': plaintext } : { authorization: `Bearer ${plaintext}` }
-        const response = await fetch(channel.protocol === 'GEMINI' ? new URL('v1beta/models', base) : new URL('v1/models', base), { headers })
-        const health = response.ok ? 'HEALTHY' : response.status === 401 || response.status === 403 ? 'UNHEALTHY' : 'DEGRADED'
-        if (response.status === 401 || response.status === 403) {
-          await this.prisma.channelKey.update({ where: { id: key.id }, data: { health: 'UNHEALTHY', enabled: false } })
-        }
-        await this.prisma.channel.update({ where: { id: channel.id }, data: {
-          health, lastTestedAt: new Date(), ...(health === 'HEALTHY' ? { lastSuccessAt: new Date(), circuitOpenUntil: null } : {})
+        const discoveryUrl = configuredDiscoveryUrl || (channel.protocol === 'GEMINI'
+          ? new URL('v1beta/models', base)
+          : new URL('v1/models', base))
+        const response = await fetch(discoveryUrl, {
+          headers, ...(configuredDiscoveryUrl ? { redirect: 'error' as const } : {})
+        })
+        const health = response.ok ? 'HEALTHY'
+          : response.status === 401 || response.status === 403 ? 'UNHEALTHY' : 'DEGRADED'
+        await this.prisma.channel.updateMany({ where: { id: channel.id, deletedAt: null }, data: {
+          health, lastTestedAt: new Date(), circuitOpenUntil: null,
+          ...(health === 'HEALTHY' ? { lastSuccessAt: new Date() } : {})
         } })
+        if (health === 'UNHEALTHY' && channel.autoDisable) {
+          await this.prisma.channelKey.update({ where: { id: key.id }, data: { health: 'DISABLED' } })
+        }
       } catch {
-        await this.prisma.channel.update({ where: { id: channel.id }, data: {
-          health: 'UNHEALTHY', lastTestedAt: new Date(), circuitOpenUntil: new Date(Date.now() + 5 * 60_000)
+        await this.prisma.channel.updateMany({ where: { id: channel.id, deletedAt: null }, data: {
+          health: 'DEGRADED', lastTestedAt: new Date(), circuitOpenUntil: null
         } })
       }
     }

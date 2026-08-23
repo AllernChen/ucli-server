@@ -2,6 +2,7 @@
 import { onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from './api'
+import { formatCny } from './currency'
 
 const route = useRoute()
 const loading = ref(true)
@@ -30,7 +31,7 @@ onMounted(load); watch(() => route.name, load)
       <article><span>Token 消耗</span><strong>{{ Number(summary.totalTokens).toLocaleString() }}</strong></article>
       <article><span>成功率</span><strong>{{ (summary.successRate * 100).toFixed(1) }}%</strong></article>
       <article><span>估算活跃时长</span><strong>{{ summary.estimatedActiveMinutes }}m</strong></article>
-      <article><span>累计费用</span><strong>${{ summary.costUsd }}</strong></article>
+      <article><span>累计费用</span><strong>{{ formatCny(summary.costUsd) }}</strong></article>
     </div>
     <section class="panel">
       <h2>{{ isUsage() ? '最近使用日志' : '渠道状态' }}</h2>

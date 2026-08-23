@@ -3,16 +3,21 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { AuthGuard, Roles } from '../../../packages/security/src/auth.js'
 import { UuidPipe } from '../../../packages/http/src/uuid.pipe.js'
 import { ChannelModelsService } from './channel-models.service.js'
-import { BatchTestChannelModelsDto, CreateChannelModelDto, CreateCostRuleDto, PageQueryDto, PreviewCostRuleDto, UpdateChannelModelDto, UpdateCostRuleDto } from './catalog.dto.js'
+import { BatchTestChannelModelsDto, BindChannelModelDto, CreateChannelModelDto, CreateCostRuleDto, LifecyclePageQueryDto, PageQueryDto, PreviewCostRuleDto, UpdateChannelModelDto, UpdateCostRuleDto } from './catalog.dto.js'
+import { ModelBindingService } from './model-binding.service.js'
 import { ModelTestingService } from './model-testing.service.js'
 
 @ApiTags('admin/channel-models') @ApiBearerAuth() @UseGuards(AuthGuard) @Roles('PLATFORM_ADMIN')
 @Controller('api/v1/admin')
 export class ChannelModelsController {
-  constructor(private readonly channelModels: ChannelModelsService, private readonly modelTesting: ModelTestingService) {}
+  constructor(
+    private readonly channelModels: ChannelModelsService,
+    private readonly modelTesting: ModelTestingService,
+    private readonly modelBinding: ModelBindingService
+  ) {}
 
   @Get('channels/:channelId/models')
-  list(@Param('channelId', UuidPipe) channelId: string, @Query() query: PageQueryDto) {
+  list(@Param('channelId', UuidPipe) channelId: string, @Query() query: LifecyclePageQueryDto) {
     return this.channelModels.listByChannel(channelId, query)
   }
 
@@ -21,16 +26,31 @@ export class ChannelModelsController {
     return this.channelModels.create(channelId, body)
   }
 
+  @Post('channels/:channelId/models/bind')
+  bind(@Param('channelId', UuidPipe) channelId: string, @Body() body: BindChannelModelDto) {
+    return this.modelBinding.bind(channelId, body)
+  }
+
   @Patch('channel-models/:id')
   update(@Param('id', UuidPipe) id: string, @Body() body: UpdateChannelModelDto) {
     return this.channelModels.update(id, body)
   }
 
+  @Patch('channel-models/:id/bind')
+  rebind(@Param('id', UuidPipe) id: string, @Body() body: BindChannelModelDto) {
+    return this.modelBinding.rebind(id, body)
+  }
+
   @Delete('channel-models/:id')
-  remove(@Param('id', UuidPipe) id: string) { return this.channelModels.remove(id) }
+  archive(@Param('id', UuidPipe) id: string) { return this.channelModels.archive(id) }
+
+  @Post('channel-models/:id/restore')
+  restore(@Param('id', UuidPipe) id: string) { return this.channelModels.restore(id) }
 
   @Get('channel-models/:id/cost-rules')
-  costs(@Param('id', UuidPipe) id: string) { return this.channelModels.listCostRules(id) }
+  costs(@Param('id', UuidPipe) id: string, @Query() query: LifecyclePageQueryDto) {
+    return this.channelModels.listCostRules(id, query.lifecycle)
+  }
 
   @Post('channel-models/:id/cost-rules')
   createCost(@Param('id', UuidPipe) id: string, @Body() body: CreateCostRuleDto) {
@@ -48,7 +68,10 @@ export class ChannelModelsController {
   }
 
   @Delete('channel-model-cost-rules/:id')
-  removeCost(@Param('id', UuidPipe) id: string) { return this.channelModels.removeCostRule(id) }
+  archiveCost(@Param('id', UuidPipe) id: string) { return this.channelModels.archiveCostRule(id) }
+
+  @Post('channel-model-cost-rules/:id/restore')
+  restoreCost(@Param('id', UuidPipe) id: string) { return this.channelModels.restoreCostRule(id) }
 
   @Get('channel-models/:id/probes')
   probes(@Param('id', UuidPipe) id: string, @Query() query: PageQueryDto) {

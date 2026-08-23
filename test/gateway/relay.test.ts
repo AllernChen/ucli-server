@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { relayRequest } from '../../packages/gateway-core/src/relay.js'
 
 describe('upstream relay', () => {
-  const cost = { id: 'cost', source: 'CHANNEL_COST_RULE' as const, currency: 'USD' as const, timezone: 'UTC',
+  const cost = { id: 'cost', source: 'CHANNEL_COST_RULE' as const, currency: 'CNY' as const, timezone: 'UTC',
     resolvedAt: '2026-01-01T00:00:00.000Z', inputPerMillion: '1', outputPerMillion: '1', cachedPerMillion: '0', reasoningPerMillion: '0' }
   it('maps the model, hides the first failed candidate, and returns normalized usage', async () => {
     const requests: Array<{ url: string; body: any }> = []
