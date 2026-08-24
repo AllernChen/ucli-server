@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { CostRule } from '../../apps/admin/src/types/catalog.js'
 import {
   buildWeeklyCostTimeline, costRuleLifecycle, costRulePayload, costStatusMeta, createCostRuleDraft,
-  formatProcurementPrice, parseCostWorkspaceSelection
+  formatProcurementPrice, parseCostWorkspaceSelection, procurementCostRoute
 } from '../../apps/admin/src/procurement-costs.js'
 
 const now = new Date('2026-08-24T10:00:00.000Z')
@@ -116,5 +116,12 @@ describe('procurement cost workspace presentation', () => {
     })
 
     expect(() => costRulePayload(draft, 'UTC')).toThrow('全天规则请开启“全天”')
+  })
+
+  it('builds stable deep links from channel and public-model detail pages', () => {
+    expect(procurementCostRoute({ channelId: 'channel-1', channelModelId: 'ability-1', publicModelId: 'model-1' }))
+      .toEqual({ path: '/procurement-costs', query: { channelId: 'channel-1', channelModelId: 'ability-1', publicModelId: 'model-1' } })
+    expect(procurementCostRoute({ publicModelId: 'model-1' }))
+      .toEqual({ path: '/procurement-costs', query: { publicModelId: 'model-1' } })
   })
 })

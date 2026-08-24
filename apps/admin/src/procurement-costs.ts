@@ -35,6 +35,14 @@ export function parseCostWorkspaceSelection(query: Record<string, unknown>) {
   }
 }
 
+export function procurementCostRoute(selection: { channelId?: string; channelModelId?: string; publicModelId?: string }) {
+  const query: Record<string, string> = {}
+  if (selection.channelId) query.channelId = selection.channelId
+  if (selection.channelModelId) query.channelModelId = selection.channelModelId
+  if (selection.publicModelId) query.publicModelId = selection.publicModelId
+  return { path: '/procurement-costs', query }
+}
+
 export function formatProcurementPrice(cost: Pick<ResolvedProcurementCost, 'inputPerMillion' | 'outputPerMillion'> | null | undefined) {
   if (!cost) return '未配置采购成本'
   return `输入 ${formatCny(cost.inputPerMillion)} / 输出 ${formatCny(cost.outputPerMillion)} / 1M Token`
