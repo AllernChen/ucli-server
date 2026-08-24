@@ -23,6 +23,7 @@ const allowedStatuses: ProcurementCostStatus[] = [
 ]
 const loading = ref(true)
 const error = ref('')
+const objectListCollapsed = ref(false)
 const selectedId = ref(initial.channelModelId)
 const selectedAt = ref(new Date().toISOString())
 const inspectedSlot = ref<CostTimelineSlot | null>(null)
@@ -156,7 +157,8 @@ onMounted(load)
   <p v-if="loading" class="state">正在加载采购成本配置…</p><p v-else-if="error" class="state error">{{ error }}</p>
   <section v-else-if="!result.items.length" class="panel empty">没有符合条件的渠道模型</section>
   <div v-else class="cost-workspace">
-    <section class="panel cost-object-tree">
+    <button class="cost-tree-toggle" @click="objectListCollapsed = !objectListCollapsed">{{ objectListCollapsed ? '展开对象列表' : '收起对象列表' }}</button>
+    <section v-if="!objectListCollapsed" class="panel cost-object-tree">
       <section v-for="group in grouped" :key="group.key"><h2>{{ group.name }}</h2>
         <div v-for="model in group.models" :key="model.id" class="cost-model-group"><strong>{{ model.name }}</strong><small>{{ model.id }}</small>
           <button v-for="item in model.items" :key="item.channelModelId" :class="{ active: selected?.channelModelId === item.channelModelId }" @click="select(item)">

@@ -157,6 +157,31 @@ export function dateInTimezone(at: Date, timezone: string) {
   return `${String(parts.year).padStart(4, '0')}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`
 }
 
+export function dateTimeInTimezone(at: Date, timezone: string) {
+  const parts = dateParts(at, timezone)
+  return `${String(parts.year).padStart(4, '0')}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}T${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`
+}
+
+export function zonedDateTime(value: string, timezone: string) {
+  const matched = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value)
+  if (!matched) throw new Error('请选择有效的测试时间')
+  const desiredParts = matched.slice(1).map(Number)
+  const [year, month, day, hour, minute] = desiredParts
+  const desired = Date.UTC(year, month - 1, day, hour, minute)
+  let candidate = desired
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const local = dateParts(new Date(candidate), timezone)
+    const represented = Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute, local.second)
+    candidate += desired - represented
+  }
+  const result = new Date(candidate)
+  const local = dateParts(result, timezone)
+  if (local.year !== year || local.month !== month || local.day !== day || local.hour !== hour || local.minute !== minute) {
+    throw new Error('该时区时间不存在，请避开夏令时切换时段')
+  }
+  return result
+}
+
 function zonedMidnight(date: string, timezone: string) {
   const matched = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date)
   if (!matched) throw new Error('请选择有效的生效日期')

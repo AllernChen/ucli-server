@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { CostRule } from '../../apps/admin/src/types/catalog.js'
 import {
   buildWeeklyCostTimeline, costRuleLifecycle, costRulePayload, costStatusMeta, createCostRuleDraft,
-  formatProcurementPrice, parseCostWorkspaceSelection, procurementCostRoute
+  dateTimeInTimezone, formatProcurementPrice, parseCostWorkspaceSelection, procurementCostRoute,
+  zonedDateTime
 } from '../../apps/admin/src/procurement-costs.js'
 
 const now = new Date('2026-08-24T10:00:00.000Z')
@@ -102,6 +103,17 @@ describe('procurement cost workspace presentation', () => {
       inputPerMillion: '3', outputPerMillion: '6', cachedPerMillion: '0', reasoningPerMillion: '0',
       validFrom: '2026-08-23T16:00:00.000Z', validUntil: null
     })
+  })
+
+  it('converts evaluation wall-clock input using the channel timezone instead of the browser timezone', () => {
+    expect(zonedDateTime('2026-08-24T19:00', 'UTC').toISOString()).toBe('2026-08-24T19:00:00.000Z')
+    expect(zonedDateTime('2026-08-24T19:00', 'Asia/Shanghai').toISOString()).toBe('2026-08-24T11:00:00.000Z')
+    expect(dateTimeInTimezone(new Date('2026-08-24T19:00:00.000Z'), 'UTC')).toBe('2026-08-24T19:00')
+  })
+
+  it('rejects a wall-clock time that does not exist during a daylight-saving transition', () => {
+    expect(() => zonedDateTime('2026-03-08T02:30', 'America/New_York'))
+      .toThrow('该时区时间不存在')
   })
 
   it('rejects incomplete rule drafts before calling the preview endpoint', () => {
