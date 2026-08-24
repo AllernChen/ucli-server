@@ -6,6 +6,9 @@ import {
   costStatusMeta, effectiveCostSource, formatProcurementPrice, parseCostWorkspaceSelection
 } from '../procurement-costs'
 import type { Page, ProcurementCostStatus, ProcurementCostWorkspaceItem } from '../types/catalog'
+import CostTimeline from '../components/CostTimeline.vue'
+import CostEvaluationPanel from '../components/CostEvaluationPanel.vue'
+import type { CostTimelineSlot } from '../procurement-costs'
 
 const route = useRoute()
 const router = useRouter()
@@ -16,6 +19,8 @@ const allowedStatuses: ProcurementCostStatus[] = [
 const loading = ref(true)
 const error = ref('')
 const selectedId = ref(initial.channelModelId)
+const selectedAt = ref(new Date().toISOString())
+const inspectedSlot = ref<CostTimelineSlot | null>(null)
 const result = ref<Page<ProcurementCostWorkspaceItem>>({ items: [], total: 0, limit: 200, offset: 0 })
 const filters = reactive({
   manufacturer: '', publicModelId: initial.publicModelId, channelId: initial.channelId,
@@ -64,6 +69,7 @@ async function syncRoute() {
   await router.replace({ query })
 }
 function select(item: ProcurementCostWorkspaceItem) { selectedId.value = item.channelModelId; void syncRoute() }
+function evaluated(value: { at: string }) { selectedAt.value = value.at }
 function hours(minutes: number) { return `${(minutes / 60).toFixed(minutes % 60 ? 1 : 0)}h` }
 function nextChange(item: ProcurementCostWorkspaceItem) {
   if (!item.nextTransition) return '未来 7 天无价格切换'
@@ -88,7 +94,7 @@ onMounted(load)
   <p v-if="loading" class="state">正在加载采购成本配置…</p><p v-else-if="error" class="state error">{{ error }}</p>
   <section v-else-if="!result.items.length" class="panel empty">没有符合条件的渠道模型</section>
   <div v-else class="cost-workspace">
-    <aside class="panel cost-object-tree">
+    <section class="panel cost-object-tree">
       <section v-for="group in grouped" :key="group.key"><h2>{{ group.name }}</h2>
         <div v-for="model in group.models" :key="model.id" class="cost-model-group"><strong>{{ model.name }}</strong><small>{{ model.id }}</small>
           <button v-for="item in model.items" :key="item.channelModelId" :class="{ active: selected?.channelModelId === item.channelModelId }" @click="select(item)">
@@ -96,16 +102,12 @@ onMounted(load)
           </button>
         </div>
       </section>
-    </aside>
+    </section>
     <main v-if="selected" class="cost-workspace-detail">
       <section class="panel cost-summary"><div class="section-header"><div><p class="muted">{{ selected.manufacturer }} · {{ selected.publicModelId }}</p><h2>{{ selected.publicModelName }} / {{ selected.channelName }}</h2><p class="muted">上游 {{ selected.upstreamModel }} · {{ selected.timezone }}</p></div><span class="chip" :class="costStatusMeta(selected.status).tone">{{ costStatusMeta(selected.status).label }}</span></div>
         <div class="detail-grid"><article class="metric-block"><span>当前生效成本</span><strong class="small-strong">{{ formatProcurementPrice(selected.currentCost) }}</strong><small>{{ effectiveCostSource(selected.currentCost) }}</small></article><article class="metric-block"><span>下次价格切换</span><strong class="small-strong">{{ nextChange(selected) }}</strong><small>按 {{ selected.timezone }} 解释</small></article><article class="metric-block"><span>渠道规则覆盖</span><strong>{{ hours(selected.coverage.channelRuleMinutes) }}</strong><small>公共兜底 {{ hours(selected.coverage.fallbackMinutes) }} · 缺口 {{ hours(selected.coverage.uncoveredMinutes) }}</small></article><article class="metric-block"><span>规则数量</span><strong>{{ selected.ruleCounts.active }}</strong><small>未来 {{ selected.ruleCounts.future }} · 停用 {{ selected.ruleCounts.disabled }}</small></article></div>
       </section>
-      <section class="panel"><div class="section-header"><div><h2>周价格时间轴</h2><p class="muted">时间轴和时间点试算将在下一阶段接入。</p></div></div><p class="empty">已选中 {{ selected.channelName }} / {{ selected.publicModelName }}</p></section>
+      <section class="panel"><div class="section-header"><div><h2>周价格时间轴</h2><p class="muted">30 分钟显示粒度；实际保存与试算保持分钟级精度。</p></div></div><CostTimeline :rules="selected.rules" :fallback="selected.fallback" :timezone="selected.timezone" :selected-at="selectedAt" @select="inspectedSlot = $event" /><CostEvaluationPanel :channel-model-id="selected.channelModelId" :timezone="selected.timezone" @evaluated="evaluated" /></section>
     </main>
   </div>
 </template>
-
-<style scoped>
-.cost-workspace-filters{display:grid;grid-template-columns:2fr repeat(4,1fr);gap:10px;margin-bottom:18px}.cost-workspace{display:grid;grid-template-columns:300px minmax(0,1fr);gap:18px}.cost-object-tree{padding:14px;max-height:calc(100vh - 230px);overflow:auto}.cost-object-tree h2{font-size:13px;color:#72e3c2;margin:12px 8px}.cost-model-group{display:grid;gap:5px;margin-bottom:14px}.cost-model-group>strong,.cost-model-group>small{padding:0 8px}.cost-model-group>small{color:#52657e}.cost-model-group button{display:grid;gap:4px;text-align:left;border:1px solid transparent;background:transparent;color:#aebbd0;border-radius:8px;padding:10px;cursor:pointer}.cost-model-group button small{color:#728199}.cost-model-group button:hover,.cost-model-group button.active{background:#16283a;border-color:#2d977f}.cost-workspace-detail{display:grid;gap:18px;min-width:0}.cost-summary h2{margin:4px 0}.chip.warning{border-color:#9a6a23;color:#f8c66a}.chip.danger{border-color:#9f3d50;color:#fb9aab}.chip.info{border-color:#31596a;color:#8fdac7}.metric-block small{color:#728199}@media(max-width:1100px){.cost-workspace-filters{grid-template-columns:1fr 1fr}.cost-workspace{grid-template-columns:240px minmax(0,1fr)}}@media(max-width:900px){.cost-workspace{grid-template-columns:1fr}.cost-object-tree{max-height:340px}.cost-workspace-filters{grid-template-columns:1fr}}
-</style>

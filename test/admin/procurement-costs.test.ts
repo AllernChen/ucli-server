@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CostRule } from '../../apps/admin/src/types/catalog.js'
 import {
-  costRuleLifecycle, costStatusMeta, formatProcurementPrice, parseCostWorkspaceSelection
+  buildWeeklyCostTimeline, costRuleLifecycle, costStatusMeta, formatProcurementPrice, parseCostWorkspaceSelection
 } from '../../apps/admin/src/procurement-costs.js'
 
 const now = new Date('2026-08-24T10:00:00.000Z')
@@ -47,5 +47,36 @@ describe('procurement cost workspace presentation', () => {
     expect(formatProcurementPrice({ inputPerMillion: '3', outputPerMillion: '6' }))
       .toBe('输入 ¥3 / 输出 ¥6 / 1M Token')
     expect(formatProcurementPrice(null)).toBe('未配置采购成本')
+  })
+
+  it('maps a higher-priority peak rule over the base rule at 30-minute visual granularity', () => {
+    const slots = buildWeeklyCostTimeline([
+      rule({ id: 'base', name: '基础价' }),
+      rule({ id: 'peak', name: '晚高峰', priority: 10, daysOfWeek: [1], startMinute: 1080, endMinute: 1380 })
+    ], null, now, 'UTC')
+
+    expect(slots.find(slot => slot.weekday === 1 && slot.startMinute === 17 * 60 + 30)).toMatchObject({ kind: 'CHANNEL_BASE', ruleId: 'base' })
+    expect(slots.find(slot => slot.weekday === 1 && slot.startMinute === 18 * 60)).toMatchObject({ kind: 'CHANNEL_OVERRIDE', ruleId: 'peak' })
+  })
+
+  it('carries a cross-midnight Friday rule into early Saturday', () => {
+    const slots = buildWeeklyCostTimeline([
+      rule({ id: 'night', priority: 10, daysOfWeek: [5], startMinute: 1380, endMinute: 120 })
+    ], null, now, 'UTC')
+
+    expect(slots.find(slot => slot.weekday === 5 && slot.startMinute === 23 * 60)).toMatchObject({ ruleId: 'night' })
+    expect(slots.find(slot => slot.weekday === 6 && slot.startMinute === 90)).toMatchObject({ ruleId: 'night' })
+    expect(slots.find(slot => slot.weekday === 6 && slot.startMinute === 120)).toMatchObject({ kind: 'UNCOVERED' })
+  })
+
+  it('marks public fallback, uncovered and the selected channel-timezone slot explicitly', () => {
+    const fallback = { id: 'fallback', currency: 'CNY' as const, inputPerMillion: '3', outputPerMillion: '6', cachedPerMillion: '0', reasoningPerMillion: '6' }
+    const fallbackSlots = buildWeeklyCostTimeline([], fallback, new Date('2026-08-24T10:15:00Z'), 'UTC')
+    const emptySlots = buildWeeklyCostTimeline([], null, now, 'UTC')
+
+    expect(fallbackSlots).toHaveLength(336)
+    expect(fallbackSlots.find(slot => slot.weekday === 1 && slot.startMinute === 600))
+      .toMatchObject({ kind: 'PUBLIC_FALLBACK', selected: true, ruleId: 'fallback' })
+    expect(emptySlots[0]).toMatchObject({ kind: 'UNCOVERED', ruleId: null })
   })
 })

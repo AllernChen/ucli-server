@@ -63,6 +63,15 @@ export interface ProcurementCostCoverage {
   uncoveredMinutes: number
 }
 
+export interface ProcurementFallbackCost {
+  id: string
+  inputPerMillion: string
+  outputPerMillion: string
+  cachedPerMillion: string
+  reasoningPerMillion: string
+  currency: 'CNY'
+}
+
 export interface ProcurementCostWorkspaceItem {
   channelModelId: string
   channelId: string
@@ -78,7 +87,7 @@ export interface ProcurementCostWorkspaceItem {
   timezone: string
   status: ProcurementCostStatus
   currentCost: ResolvedProcurementCost | null
-  fallback: (Omit<ResolvedProcurementCost, 'source' | 'timezone' | 'resolvedAt'> & { currency: 'CNY' }) | null
+  fallback: ProcurementFallbackCost | null
   coverage: ProcurementCostCoverage
   ruleCounts: { active: number; future: number; disabled: number }
   nextTransition: { at: string; cost: ResolvedProcurementCost | null } | null
