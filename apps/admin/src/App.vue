@@ -11,7 +11,7 @@ const password = ref('')
 const error = ref('')
 const loggedIn = ref(Boolean(localStorage.getItem('ucli.accessToken')))
 const navigation = [
-  ['overview', '服务总览'], ['channels', '渠道管理'], ['models', '模型目录'], ['model-test', '模型测试'],
+  ['overview', '服务总览'], ['channels', '渠道管理'], ['models', '模型目录'], ['procurement-costs', '采购成本'], ['model-test', '模型测试'],
   ['usage', '使用日志'], ['skills', '技能超市'], ['reports', '运营报告'],
   ['analytics', '统计分析'],
   ['governance', '治理'], ['organizations', '组织']

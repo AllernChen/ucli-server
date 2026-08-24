@@ -5,6 +5,8 @@ import './styles.css'
 import './forms.css'
 import './model-test.css'
 import './analytics.css'
+import './procurement-costs.css'
+import './procurement-costs-responsive.css'
 import Dashboard from './Dashboard.vue'
 import Channels from './views/Channels.vue'
 import Models from './views/Models.vue'
@@ -18,6 +20,7 @@ import InviteAccept from './views/InviteAccept.vue'
 import ChannelDetail from './views/ChannelDetail.vue'
 import ModelDetail from './views/ModelDetail.vue'
 import ModelTest from './views/ModelTest.vue'
+import ProcurementCosts from './views/ProcurementCosts.vue'
 
 const routes = [
   { path: '/', name: 'overview', component: Dashboard },
@@ -27,6 +30,7 @@ const routes = [
   { path: '/models', name: 'models', component: Models },
   { path: '/models/:id', name: 'model-detail', component: ModelDetail },
   { path: '/model-test', name: 'model-test', component: ModelTest },
+  { path: '/procurement-costs', name: 'procurement-costs', component: ProcurementCosts },
   { path: '/analytics', name: 'analytics', component: () => import('./views/Analytics.vue') },
   { path: '/skills', name: 'skills', component: Skills },
   { path: '/reports', name: 'reports', component: Reports },

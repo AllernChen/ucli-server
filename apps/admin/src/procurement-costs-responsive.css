@@ -1,0 +1,42 @@
+.shell {
+  grid-template-columns: 238px minmax(0, 1fr);
+}
+
+.content,
+.cost-workspace,
+.cost-workspace-detail,
+.cost-timeline-scroll {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.cost-tree-toggle {
+  display: none;
+}
+
+.cost-timeline-header,
+.cost-timeline-row {
+  min-width: 700px;
+}
+
+@media (max-width: 1100px) {
+  .cost-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cost-tree-toggle {
+    display: block;
+    justify-self: start;
+  }
+
+  .cost-object-tree {
+    max-height: 280px;
+  }
+
+  .cost-timeline-header,
+  .cost-timeline-row {
+    grid-template-columns: 58px repeat(48, minmax(8px, 1fr));
+    min-width: 620px;
+  }
+
+}

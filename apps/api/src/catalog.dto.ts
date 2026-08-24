@@ -12,6 +12,15 @@ export enum CatalogLifecycle {
   ALL = 'ALL'
 }
 
+export enum ProcurementCostStatus {
+  CHANNEL_RULE_ACTIVE = 'CHANNEL_RULE_ACTIVE',
+  PARTIAL_FALLBACK = 'PARTIAL_FALLBACK',
+  FALLBACK_ONLY = 'FALLBACK_ONLY',
+  NO_COST = 'NO_COST',
+  UPCOMING = 'UPCOMING',
+  DISABLED = 'DISABLED'
+}
+
 const NON_NEGATIVE_DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/
 
 @ValidatorConstraint({ name: 'isAfterValidFrom', async: false })
@@ -36,6 +45,22 @@ export class PageQueryDto {
 
 export class LifecyclePageQueryDto extends PageQueryDto {
   @IsOptional() @IsEnum(CatalogLifecycle) lifecycle: CatalogLifecycle = CatalogLifecycle.ACTIVE
+}
+
+export class ProcurementCostQueryDto extends PageQueryDto {
+  @IsOptional() @IsString() @Length(1, 100) manufacturer?: string
+  @IsOptional() @IsString() @Length(1, 200) publicModelId?: string
+  @IsOptional() @IsUUID('4') channelId?: string
+  @IsOptional() @IsEnum(ProcurementCostStatus) status?: ProcurementCostStatus
+  @IsOptional() @IsString() @Length(1, 200) search?: string
+}
+
+export class CostEvaluationDto {
+  @IsDateString({ strict: true }) at!: string
+  @Type(() => Number) @IsInt() @Min(0) inputTokens!: number
+  @Type(() => Number) @IsInt() @Min(0) outputTokens!: number
+  @Type(() => Number) @IsInt() @Min(0) cachedTokens = 0
+  @Type(() => Number) @IsInt() @Min(0) reasoningTokens = 0
 }
 
 export class CreatePublicModelDto {

@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   costRulesOverlap,
   highestReservationCost,
+  nextCostTransition,
   resolveChannelCost,
+  resolveChannelCostWithFallback,
   type ScheduledCost
 } from '../../packages/gateway-core/src/cost-schedule.js'
+import { estimateProcurementCost } from '../../packages/gateway-core/src/cost.js'
 
 const base: ScheduledCost = {
   id: 'base', priority: 0, daysOfWeek: [1, 2, 3, 4, 5, 6, 7], startMinute: 0, endMinute: 0,
@@ -82,5 +85,46 @@ describe('channel model cost schedules', () => {
     const historical = { ...base, validUntil: new Date('2026-07-01T00:00:00Z') }
     const future = { ...base, validFrom: new Date('2026-08-01T00:00:00Z') }
     expect(costRulesOverlap(historical, future)).toBe(false)
+  })
+
+  it('falls back to the public model price only when no channel rule matches', () => {
+    const fallback = {
+      id: 'public-price', currency: 'CNY' as const, inputPerMillion: '0.8', outputPerMillion: '1.6',
+      cachedPerMillion: '0.08', reasoningPerMillion: '1.6'
+    }
+    const future = { ...base, validFrom: new Date('2026-09-01T00:00:00Z') }
+
+    expect(resolveChannelCostWithFallback([base], fallback, new Date('2026-08-24T00:00:00Z'), 'UTC'))
+      .toMatchObject({ id: 'base', source: 'CHANNEL_COST_RULE' })
+    expect(resolveChannelCostWithFallback([future], fallback, new Date('2026-08-24T00:00:00Z'), 'UTC'))
+      .toMatchObject({ id: 'public-price', source: 'PUBLIC_MODEL_FALLBACK', currency: 'CNY' })
+    expect(resolveChannelCostWithFallback([future], null, new Date('2026-08-24T00:00:00Z'), 'UTC')).toBeNull()
+  })
+
+  it('finds the next instant at which the effective rule changes', () => {
+    const peak: ScheduledCost = {
+      ...base, id: 'evening-peak', name: '工作日晚高峰', priority: 10, daysOfWeek: [1, 2, 3, 4, 5],
+      startMinute: 18 * 60, endMinute: 23 * 60, inputPerMillion: '1.5', outputPerMillion: '3'
+    }
+
+    expect(nextCostTransition([base, peak], null, new Date('2026-08-24T09:59:00Z'), 'Asia/Shanghai'))
+      .toEqual({ at: '2026-08-24T10:00:00.000Z', cost: expect.objectContaining({ id: 'evening-peak' }) })
+  })
+
+  it('honors exact validity boundaries when finding the next transition', () => {
+    const expiring = { ...base, id: 'expiring', priority: 10, validUntil: new Date('2026-08-24T10:00:30Z') }
+
+    expect(nextCostTransition([base, expiring], null, new Date('2026-08-24T10:00:00Z'), 'UTC'))
+      .toEqual({ at: '2026-08-24T10:00:30.000Z', cost: expect.objectContaining({ id: 'base' }) })
+  })
+
+  it('calculates an auditable four-part CNY estimate without double charging included token totals', () => {
+    expect(estimateProcurementCost(
+      { inputPerMillion: '2', outputPerMillion: '4', cachedPerMillion: '0.5', reasoningPerMillion: '8' },
+      { inputTokens: 1_000_000, outputTokens: 500_000, cachedTokens: 200_000, reasoningTokens: 100_000 }
+    )).toEqual({
+      inputCost: '1.60000000', outputCost: '1.60000000', cachedCost: '0.10000000',
+      reasoningCost: '0.80000000', totalCost: '4.10000000', currency: 'CNY'
+    })
   })
 })

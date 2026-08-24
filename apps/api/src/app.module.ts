@@ -25,9 +25,11 @@ import { ModelBindingService } from './model-binding.service.js'
 import { ModelTestingController } from './model-testing.controller.js'
 import { AnalyticsController } from './analytics.controller.js'
 import { AnalyticsService } from './analytics.service.js'
+import { ProcurementCostsController } from './procurement-costs.controller.js'
+import { ProcurementCostsService } from './procurement-costs.service.js'
 
 @Module({
-  controllers: [AuthController, ChannelsController, ChannelModelsController, ModelTestingController, AnalyticsController, ClientController, ModelsController, UsageController, SkillsController, ReportsController, GovernanceController, MonitoringController, MetricsController, OrganizationsController],
-  providers: [PrismaService, AuthService, ChannelsService, ChannelModelsService, ModelBindingService, ModelsService, ModelTestingService, AnalyticsService, AuthGuard, ObjectStorageService, AuditInterceptor]
+  controllers: [AuthController, ChannelsController, ChannelModelsController, ProcurementCostsController, ModelTestingController, AnalyticsController, ClientController, ModelsController, UsageController, SkillsController, ReportsController, GovernanceController, MonitoringController, MetricsController, OrganizationsController],
+  providers: [PrismaService, AuthService, ChannelsService, ChannelModelsService, ProcurementCostsService, ModelBindingService, ModelsService, ModelTestingService, AnalyticsService, AuthGuard, ObjectStorageService, AuditInterceptor]
 })
 export class AppModule {}

@@ -2,6 +2,7 @@ export type HealthStatus = 'UNKNOWN' | 'HEALTHY' | 'DEGRADED' | 'UNHEALTHY' | 'D
 export type ChannelProtocol = 'OPENAI' | 'ANTHROPIC' | 'GEMINI'
 export type GatewayProtocol = 'OPENAI_RESPONSES' | 'OPENAI_CHAT' | 'ANTHROPIC_MESSAGES' | 'GEMINI'
 export type CatalogLifecycle = 'ACTIVE' | 'ARCHIVED' | 'ALL'
+export type ProcurementCostStatus = 'CHANNEL_RULE_ACTIVE' | 'PARTIAL_FALLBACK' | 'FALLBACK_ONLY' | 'NO_COST' | 'UPCOMING' | 'DISABLED'
 
 export interface Page<T> { items: T[]; total: number; limit: number; offset: number }
 
@@ -39,6 +40,76 @@ export interface CostRule {
   createdAt: string
 }
 
+export interface ResolvedProcurementCost {
+  id: string
+  source: 'CHANNEL_COST_RULE' | 'PUBLIC_MODEL_FALLBACK'
+  inputPerMillion: string
+  outputPerMillion: string
+  cachedPerMillion: string
+  reasoningPerMillion: string
+  currency: 'CNY'
+  timezone: string
+  resolvedAt: string
+  ruleName?: string
+  daysOfWeek?: number[]
+  startMinute?: number
+  endMinute?: number
+  priority?: number
+}
+
+export interface ProcurementCostCoverage {
+  channelRuleMinutes: number
+  fallbackMinutes: number
+  uncoveredMinutes: number
+}
+
+export interface ProcurementFallbackCost {
+  id: string
+  inputPerMillion: string
+  outputPerMillion: string
+  cachedPerMillion: string
+  reasoningPerMillion: string
+  currency: 'CNY'
+}
+
+export interface ProcurementCostWorkspaceItem {
+  channelModelId: string
+  channelId: string
+  channelName: string
+  publicModelId: string
+  publicModelName: string
+  manufacturer: string
+  manufacturerKey: string
+  upstreamModel: string
+  protocol: GatewayProtocol
+  health: HealthStatus
+  enabled: boolean
+  timezone: string
+  status: ProcurementCostStatus
+  currentCost: ResolvedProcurementCost | null
+  fallback: ProcurementFallbackCost | null
+  coverage: ProcurementCostCoverage
+  ruleCounts: { active: number; future: number; disabled: number }
+  nextTransition: { at: string; cost: ResolvedProcurementCost | null } | null
+  rules: CostRule[]
+}
+
+export interface CostEvaluation {
+  channelModelId: string
+  timezone: string
+  at: string
+  cost: ResolvedProcurementCost | null
+  estimate: {
+    inputCost: string
+    outputCost: string
+    cachedCost: string
+    reasoningCost: string
+    totalCost: string
+    currency: 'CNY'
+  } | null
+  nextTransition: { at: string; cost: ResolvedProcurementCost | null } | null
+}
+
 export interface ChannelModel {
   id: string
   deletedAt: string | null
@@ -58,22 +129,7 @@ export interface ChannelModel {
   lastErrorCode: string | null
   costTimezone: string
   costRules: CostRule[]
-  currentCost?: {
-    id: string
-    source: 'CHANNEL_COST_RULE' | 'PUBLIC_MODEL_FALLBACK'
-    inputPerMillion: string
-    outputPerMillion: string
-    cachedPerMillion: string
-    reasoningPerMillion: string
-    currency: 'CNY'
-    timezone: string
-    resolvedAt: string
-    ruleName?: string
-    daysOfWeek?: number[]
-    startMinute?: number
-    endMinute?: number
-    priority?: number
-  } | null
+  currentCost?: ResolvedProcurementCost | null
 }
 
 export interface ChannelSummary {
