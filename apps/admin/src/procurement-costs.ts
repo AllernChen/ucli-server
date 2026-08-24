@@ -100,3 +100,115 @@ export function buildWeeklyCostTimeline(
   }
   return slots
 }
+
+export type CostRuleTemplate = 'BASE' | 'WORKDAY_PEAK' | 'DAILY_EVENING' | 'WEEKEND' | 'CUSTOM'
+
+export interface CostRuleDraft {
+  template: CostRuleTemplate
+  name: string
+  daysOfWeek: number[]
+  allDay: boolean
+  start: string
+  end: string
+  priority: number
+  inputPerMillion: string
+  outputPerMillion: string
+  cachedPerMillion: string
+  reasoningPerMillion: string
+  validFrom: string
+  validUntil: string
+}
+
+const RULE_TEMPLATES: Record<CostRuleTemplate, Pick<CostRuleDraft, 'name' | 'daysOfWeek' | 'allDay' | 'start' | 'end' | 'priority'>> = {
+  BASE: { name: '全天基础价', daysOfWeek: [1, 2, 3, 4, 5, 6, 7], allDay: true, start: '00:00', end: '00:00', priority: 0 },
+  WORKDAY_PEAK: { name: '工作日高峰价', daysOfWeek: [1, 2, 3, 4, 5], allDay: false, start: '18:00', end: '23:00', priority: 10 },
+  DAILY_EVENING: { name: '每日晚高峰价', daysOfWeek: [1, 2, 3, 4, 5, 6, 7], allDay: false, start: '18:00', end: '23:00', priority: 10 },
+  WEEKEND: { name: '周末价', daysOfWeek: [6, 7], allDay: true, start: '00:00', end: '00:00', priority: 10 },
+  CUSTOM: { name: '自定义成本规则', daysOfWeek: [], allDay: false, start: '09:00', end: '18:00', priority: 10 }
+}
+
+export function createCostRuleDraft(template: CostRuleTemplate, validFrom: string): CostRuleDraft {
+  const preset = RULE_TEMPLATES[template]
+  return {
+    template, ...preset, daysOfWeek: [...preset.daysOfWeek], inputPerMillion: '', outputPerMillion: '',
+    cachedPerMillion: '0', reasoningPerMillion: '0', validFrom, validUntil: ''
+  }
+}
+
+function dateParts(at: Date, timezone: string) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+    second: '2-digit', hourCycle: 'h23'
+  }).formatToParts(at)
+  const value = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find(part => part.type === type)?.value)
+  return { year: value('year'), month: value('month'), day: value('day'), hour: value('hour'), minute: value('minute'), second: value('second') }
+}
+
+export function dateInTimezone(at: Date, timezone: string) {
+  const parts = dateParts(at, timezone)
+  return `${String(parts.year).padStart(4, '0')}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`
+}
+
+function zonedMidnight(date: string, timezone: string) {
+  const matched = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date)
+  if (!matched) throw new Error('请选择有效的生效日期')
+  const desired = Date.UTC(Number(matched[1]), Number(matched[2]) - 1, Number(matched[3]))
+  let candidate = desired
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const local = dateParts(new Date(candidate), timezone)
+    const represented = Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute, local.second)
+    candidate = desired - (represented - candidate)
+  }
+  const result = new Date(candidate)
+  const local = dateParts(result, timezone)
+  if (`${local.year}-${String(local.month).padStart(2, '0')}-${String(local.day).padStart(2, '0')}` !== date || local.hour !== 0 || local.minute !== 0) {
+    throw new Error('该时区日期无法换算为有效时间')
+  }
+  return result
+}
+
+function minute(value: string) {
+  const matched = /^(\d{2}):(\d{2})$/.exec(value)
+  if (!matched) throw new Error('请选择有效的起止时间')
+  const result = Number(matched[1]) * 60 + Number(matched[2])
+  if (result < 0 || result > 1439) throw new Error('请选择有效的起止时间')
+  return result
+}
+
+const NON_NEGATIVE_DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/
+
+export function costRulePayload(draft: CostRuleDraft, timezone: string) {
+  if (!draft.daysOfWeek.length) throw new Error('请至少选择一个生效日')
+  if (!draft.name.trim()) throw new Error('请填写规则名称')
+  if (!NON_NEGATIVE_DECIMAL.test(draft.inputPerMillion) || !NON_NEGATIVE_DECIMAL.test(draft.outputPerMillion)) {
+    throw new Error('请填写有效的输入和输出采购单价')
+  }
+  const cached = draft.cachedPerMillion || '0'
+  const reasoning = draft.reasoningPerMillion || '0'
+  if (!NON_NEGATIVE_DECIMAL.test(cached) || !NON_NEGATIVE_DECIMAL.test(reasoning)) throw new Error('可选采购单价不能为负数')
+  const validFrom = zonedMidnight(draft.validFrom, timezone)
+  const validUntil = draft.validUntil ? zonedMidnight(draft.validUntil, timezone) : null
+  if (validUntil && validUntil <= validFrom) throw new Error('失效日期必须晚于生效日期')
+  const startMinute = draft.allDay ? 0 : minute(draft.start)
+  const endMinute = draft.allDay ? 0 : minute(draft.end)
+  if (!draft.allDay && startMinute === endMinute) throw new Error('全天规则请开启“全天”')
+  return {
+    name: draft.name.trim(), daysOfWeek: [...draft.daysOfWeek].sort((left, right) => left - right),
+    startMinute, endMinute,
+    priority: Number(draft.priority), inputPerMillion: draft.inputPerMillion, outputPerMillion: draft.outputPerMillion,
+    cachedPerMillion: cached, reasoningPerMillion: reasoning,
+    validFrom: validFrom.toISOString(), validUntil: validUntil?.toISOString() || null
+  }
+}
+
+export function draftFromCostRule(rule: CostRule, timezone: string): CostRuleDraft {
+  return {
+    template: 'CUSTOM', name: rule.name, daysOfWeek: [...rule.daysOfWeek], allDay: rule.startMinute === rule.endMinute,
+    start: `${String(Math.floor(rule.startMinute / 60)).padStart(2, '0')}:${String(rule.startMinute % 60).padStart(2, '0')}`,
+    end: `${String(Math.floor(rule.endMinute / 60)).padStart(2, '0')}:${String(rule.endMinute % 60).padStart(2, '0')}`,
+    priority: rule.priority, inputPerMillion: rule.inputPerMillion, outputPerMillion: rule.outputPerMillion,
+    cachedPerMillion: rule.cachedPerMillion, reasoningPerMillion: rule.reasoningPerMillion,
+    validFrom: dateInTimezone(new Date(rule.validFrom), timezone),
+    validUntil: rule.validUntil ? dateInTimezone(new Date(rule.validUntil), timezone) : ''
+  }
+}

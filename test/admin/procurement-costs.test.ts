@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { CostRule } from '../../apps/admin/src/types/catalog.js'
 import {
-  buildWeeklyCostTimeline, costRuleLifecycle, costStatusMeta, formatProcurementPrice, parseCostWorkspaceSelection
+  buildWeeklyCostTimeline, costRuleLifecycle, costRulePayload, costStatusMeta, createCostRuleDraft,
+  formatProcurementPrice, parseCostWorkspaceSelection
 } from '../../apps/admin/src/procurement-costs.js'
 
 const now = new Date('2026-08-24T10:00:00.000Z')
@@ -78,5 +79,42 @@ describe('procurement cost workspace presentation', () => {
     expect(fallbackSlots.find(slot => slot.weekday === 1 && slot.startMinute === 600))
       .toMatchObject({ kind: 'PUBLIC_FALLBACK', selected: true, ruleId: 'fallback' })
     expect(emptySlots[0]).toMatchObject({ kind: 'UNCOVERED', ruleId: null })
+  })
+
+  it.each([
+    ['BASE', '全天基础价', [1, 2, 3, 4, 5, 6, 7], '00:00', '00:00', 0],
+    ['WORKDAY_PEAK', '工作日高峰价', [1, 2, 3, 4, 5], '18:00', '23:00', 10],
+    ['DAILY_EVENING', '每日晚高峰价', [1, 2, 3, 4, 5, 6, 7], '18:00', '23:00', 10],
+    ['WEEKEND', '周末价', [6, 7], '00:00', '00:00', 10]
+  ] as const)('creates safe defaults for the %s template', (template, name, daysOfWeek, start, end, priority) => {
+    expect(createCostRuleDraft(template, '2026-08-24')).toMatchObject({
+      template, name, daysOfWeek, start, end, priority, inputPerMillion: '', outputPerMillion: '',
+      cachedPerMillion: '0', reasoningPerMillion: '0', validFrom: '2026-08-24'
+    })
+  })
+
+  it('serializes an all-day rule at channel-local midnight with optional prices and an explicit open end', () => {
+    const draft = createCostRuleDraft('BASE', '2026-08-24')
+    Object.assign(draft, { inputPerMillion: '3', outputPerMillion: '6', cachedPerMillion: '', reasoningPerMillion: '' })
+
+    expect(costRulePayload(draft, 'Asia/Shanghai')).toEqual({
+      name: '全天基础价', daysOfWeek: [1, 2, 3, 4, 5, 6, 7], startMinute: 0, endMinute: 0, priority: 0,
+      inputPerMillion: '3', outputPerMillion: '6', cachedPerMillion: '0', reasoningPerMillion: '0',
+      validFrom: '2026-08-23T16:00:00.000Z', validUntil: null
+    })
+  })
+
+  it('rejects incomplete rule drafts before calling the preview endpoint', () => {
+    expect(() => costRulePayload(createCostRuleDraft('CUSTOM', '2026-08-24'), 'UTC'))
+      .toThrow('请至少选择一个生效日')
+  })
+
+  it('does not silently turn an equal-time custom window into an all-day rule', () => {
+    const draft = createCostRuleDraft('CUSTOM', '2026-08-24')
+    Object.assign(draft, {
+      daysOfWeek: [1], start: '09:00', end: '09:00', inputPerMillion: '1', outputPerMillion: '2'
+    })
+
+    expect(() => costRulePayload(draft, 'UTC')).toThrow('全天规则请开启“全天”')
   })
 })
