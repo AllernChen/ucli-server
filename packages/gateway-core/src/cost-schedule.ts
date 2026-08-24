@@ -166,8 +166,18 @@ export function nextCostTransition(
   let current = resolveWithPreparedRules(prepared, fallback, at, timezone)
   const boundaries = rules.flatMap(rule => [rule.validFrom, rule.validUntil].filter((value): value is Date => Boolean(value)))
     .filter(value => value > at).sort((left, right) => left.getTime() - right.getTime())
-  let cursor = at
-  let horizon = new Date(at.getTime() + WEEK_IN_MILLISECONDS)
+  const enabledRules = rules.filter(rule => rule.enabled)
+  if (!enabledRules.length) return null
+  if (!boundaries.length && enabledRules.every(rule => rule.startMinute === rule.endMinute && rule.daysOfWeek.length === 7)) {
+    return null
+  }
+  const validNow = enabledRules.filter(rule => rule.validFrom <= at && (!rule.validUntil || rule.validUntil > at))
+  const firstFutureBoundary = boundaries[0]
+  let cursor = validNow.length || !firstFutureBoundary ? at : new Date(firstFutureBoundary.getTime() - 1)
+  let horizon = validNow.length || !firstFutureBoundary
+    ? new Date(at.getTime() + WEEK_IN_MILLISECONDS)
+    : new Date(firstFutureBoundary.getTime() + WEEK_IN_MILLISECONDS)
+  if (cursor !== at) current = resolveWithPreparedRules(prepared, fallback, cursor, timezone)
   while (true) {
     for (const candidate of transitionCandidates(cursor, horizon, boundaries)) {
       const next = resolveWithPreparedRules(prepared, fallback, candidate, timezone)
