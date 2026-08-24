@@ -25,7 +25,9 @@ export class UsageController {
   }
   @Get('logs') logs(@Req() request: any, @Query() query: any) {
     return this.prisma.usageLog.findMany({ where: this.where(request, query), orderBy: { startedAt: 'desc' },
-      take: Math.min(200, Math.max(1, Number(query.limit) || 50)), skip: Math.max(0, Number(query.offset) || 0), include: { routes: true } })
+      take: Math.min(200, Math.max(1, Number(query.limit) || 50)), skip: Math.max(0, Number(query.offset) || 0), include: {
+        account: { select: { displayName: true, email: true } }, routes: true
+      } })
   }
   @Get('summary') async summary(@Req() request: any, @Query() query: any) {
     const logs = await this.prisma.usageLog.findMany({ where: this.where(request, query), select: {

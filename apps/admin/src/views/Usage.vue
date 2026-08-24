@@ -51,11 +51,12 @@ onMounted(load)
   <template v-else>
     <section class="panel">
       <table v-if="rows.length">
-        <thead><tr><th>时间</th><th>模型</th><th>上游</th><th>输入/输出 tokens</th><th>费用</th><th>延迟</th><th>状态</th><th>切换</th><th>路由</th></tr></thead>
+        <thead><tr><th>时间</th><th>员工</th><th>模型</th><th>上游</th><th>输入/输出 tokens</th><th>费用</th><th>延迟</th><th>状态</th><th>切换</th><th>路由</th></tr></thead>
         <tbody>
           <template v-for="row in rows" :key="row.requestId">
             <tr>
               <td>{{ row.startedAt?.slice(0, 19).replace('T', ' ') }}</td>
+              <td><strong>{{ row.account?.displayName || row.account?.email || row.accountId }}</strong><br><small v-if="row.account?.displayName">{{ row.account.email }}</small></td>
               <td class="mono">{{ row.publicModelId }}</td>
               <td class="mono">{{ row.upstreamModel }}</td>
               <td>{{ fmt(row.inputTokens) }} / {{ fmt(row.outputTokens) }}</td>
@@ -66,7 +67,7 @@ onMounted(load)
               <td><button @click="toggle(row.requestId)">{{ row.routeAttempts || 1 }} 次</button></td>
             </tr>
             <tr v-if="expanded === row.requestId">
-              <td colspan="9">
+              <td colspan="10">
                 <div class="keys">
                   <span v-for="(attempt, i) in (row.routes || [])" :key="i" class="key-chip">#{{ attempt.attempt }} 渠道 {{ (attempt.channelId || '').slice(0, 8) }} · {{ attempt.durationMs }}ms · {{ attempt.statusCode ?? '—' }}</span>
                   <span v-if="!row.routes?.length" class="mono">无路由详情</span>
