@@ -7,6 +7,7 @@ import './model-test.css'
 import './analytics.css'
 import './procurement-costs.css'
 import './procurement-costs-responsive.css'
+import './device-grants.css'
 import Dashboard from './Dashboard.vue'
 import Channels from './views/Channels.vue'
 import Models from './views/Models.vue'
@@ -20,6 +21,9 @@ import ChannelDetail from './views/ChannelDetail.vue'
 import ModelDetail from './views/ModelDetail.vue'
 import ModelTest from './views/ModelTest.vue'
 import ProcurementCosts from './views/ProcurementCosts.vue'
+import Users from './views/Users.vue'
+import UserDetail from './views/UserDetail.vue'
+import DeviceGrants from './views/DeviceGrants.vue'
 
 const routes = [
   { path: '/', name: 'overview', component: Dashboard },
@@ -33,6 +37,9 @@ const routes = [
   { path: '/analytics', name: 'analytics', component: () => import('./views/Analytics.vue') },
   { path: '/skills', name: 'skills', component: Skills },
   { path: '/reports', name: 'reports', component: Reports },
+  { path: '/users', name: 'users', component: Users },
+  { path: '/users/:id', name: 'user-detail', component: UserDetail },
+  { path: '/device-grants', name: 'device-grants', component: DeviceGrants },
   { path: '/governance', name: 'governance', component: Governance },
   { path: '/organizations', name: 'organizations', component: Organizations },
   { path: '/connect', name: 'connect', component: Connect, meta: { public: true } }

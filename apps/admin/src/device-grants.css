@@ -1,0 +1,9 @@
+.user-toolbar,.grant-toolbar{display:grid;grid-template-columns:minmax(240px,2fr) minmax(150px,1fr) auto;gap:10px;align-items:center;margin-bottom:18px}
+.user-toolbar{grid-template-columns:minmax(240px,1fr) auto}
+.grant-groups{display:grid;gap:18px}
+.grant-group{overflow-x:auto}
+.grant-group .section-header{min-width:640px}
+.grant-group table{min-width:960px}
+.warning-text{color:#f8c66a;font-weight:700}
+.modal textarea{min-height:104px;resize:vertical;background:#0a1420;border:1px solid #223046;border-radius:8px;padding:11px 13px;color:#e7ecf4;font:12px Consolas,monospace;width:100%}
+@media(max-width:900px){.user-toolbar,.grant-toolbar{grid-template-columns:1fr}.grant-group .section-header{min-width:0}}
