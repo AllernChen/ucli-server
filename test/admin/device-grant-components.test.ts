@@ -26,6 +26,11 @@ const user = (id: string, displayName = id) => ({
 
 async function settle() { await nextTick(); await flushPromises(); await nextTick() }
 
+function setupValue(setupState: Record<string, unknown>, key: string) {
+  const value = setupState[key] as { value?: unknown } | unknown
+  return value && typeof value === 'object' && 'value' in value ? (value as { value: unknown }).value : value
+}
+
 describe('admin dialog components', () => {
   afterEach(() => { document.body.innerHTML = ''; vi.restoreAllMocks() })
 
@@ -140,9 +145,13 @@ describe('UserDetail mounted async behavior', () => {
     const lateGet = deferred<any>()
     state.api.mockReturnValueOnce(lateGet.promise)
     const loading = mount(UserDetail, { attachTo: document.body })
+    const loadingState = (loading.vm as any).$.setupState as Record<string, unknown>
     loading.unmount()
     lateGet.resolve(user('user-1', '不应显示'))
     await settle()
+    expect(setupValue(loadingState, 'user')).toBeNull()
+    expect(state.api).toHaveBeenCalledTimes(1)
+    expect(state.api).toHaveBeenLastCalledWith('/api/v1/admin/users/user-1')
     expect(document.body.textContent).not.toContain('不应显示')
 
     const initial = deferred<any>()
@@ -150,6 +159,7 @@ describe('UserDetail mounted async behavior', () => {
     state.api.mockReset()
     state.api.mockReturnValueOnce(initial.promise).mockReturnValueOnce(post.promise)
     const creating = mount(UserDetail, { attachTo: document.body })
+    const creatingState = (creating.vm as any).$.setupState as Record<string, unknown>
     initial.resolve(user('user-1', '用户一'))
     await settle()
     await creating.get('header .actions button.primary').trigger('click')
@@ -159,6 +169,12 @@ describe('UserDetail mounted async behavior', () => {
     creating.unmount()
     post.resolve({ token: 'late-secret', connectionUrl: 'https://example/#token=late-secret' })
     await settle()
+    expect(setupValue(creatingState, 'createdSecret')).toBeNull()
+    expect(state.api).toHaveBeenCalledTimes(2)
+    expect(state.api.mock.calls.map(([path]) => path)).toEqual([
+      '/api/v1/admin/users/user-1',
+      '/api/v1/admin/users/user-1/device-grants'
+    ])
     expect(document.body.textContent).not.toContain('late-secret')
   })
 })

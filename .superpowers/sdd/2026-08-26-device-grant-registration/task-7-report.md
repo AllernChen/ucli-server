@@ -45,6 +45,7 @@
 - 增加 `@vue/test-utils` 与 `happy-dom`，Vitest 保持默认 Node 环境；仅真实组件测试通过文件级 `happy-dom` 环境挂载 Vue 与 Teleport。
 - 真实挂载 `Drawer`、`ConfirmDialog` 验证初始关闭不移动焦点、打开后初始聚焦、关闭只恢复一次、关闭后卸载不重复恢复、打开时卸载恢复，以及 Tab 焦点环绕和受 `closeDisabled` 约束的 Escape。
 - 真实挂载 `UserDetail` 并用 deferred API Promise 与响应式路由驱动 DOM：同用户刷新期间的 POST 仍展示一次性 secret，后续 GET 失败不清除 secret；路由变更时旧 POST 被丢弃；乱序 GET 只应用最新响应；卸载后的 GET/POST 均不写回页面或 secret。
+- 卸载断言保留卸载前可观察的组件 `setupState`，直接验证晚到 GET 不写入 `user`、晚到 POST 不写入 `createdSecret`，并精确验证晚到 POST 不会发起后续详情加载。Mutation sanity 临时绕过 request gate 与详情页的 current guard 后，路由切换和卸载晚 POST 用例均按预期失败；随后已恢复，未提交生产改动。
 - 行为级：`npx vitest run test/admin/device-grant-components.test.ts`（1 file / 4 tests passed）。
 - 管理端全量：`npx vitest run test/admin`（12 files / 95 tests passed）；全量：`npm test`（72 passed files / 433 passed tests，1 skipped）。
 - 类型检查：`npm run typecheck`（passed）；管理端构建：`npm run admin:build`（passed；仅 Vite Analytics chunk 大小警告）。
