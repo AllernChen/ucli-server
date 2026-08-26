@@ -34,3 +34,10 @@
 - 仅最新状态为 `AVAILABLE` 时继续跳转或写入剪贴板；最新状态为禁用、已绑定、已过期、已删除、未知或预览失败时均安全关闭，不执行动作。
 - 重验 helper 吞掉上游异常并返回不含令牌的未知不可操作状态；服务端 redeem 校验仍是最后的并发竞态防线。
 - 验证：`npx vitest run test/admin/device-grant-connect.test.ts`（9 passed）、`npm run typecheck`、`npm run admin:build` 均通过。
+
+## 终态复审修复：并发动作互斥
+
+- 连接和复制链接共用 `createExclusiveGrantActionGate`；任一重验进行中，第二个动作立即返回 false，不会产生第二个预览请求或乱序状态覆盖。
+- 页面以 `actionPending` 镜像 gate 状态，两个动作按钮在重验期间均 disabled；动作开始时再次确认内存令牌存在。
+- gate 和页面动作均在 `finally` 释放；组件卸载后，完成中的预览不会继续更新状态、跳转或写入剪贴板。
+- deferred Promise 测试覆盖并发抑制、终态/异常释放和后续重新尝试；验证：focused 10 passed、`npm run typecheck`、`npm run admin:build` 均通过。

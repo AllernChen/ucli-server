@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { publicApi } from '../api'
-import { buildUcliConnectUrl, connectionStateForGrantStatus, readGrantToken, revalidateGrantAction } from '../device-grant-connect'
+import { buildUcliConnectUrl, connectionStateForGrantStatus, createExclusiveGrantActionGate, readGrantToken, revalidateGrantAction } from '../device-grant-connect'
 
 type GrantPreview = {
   account: { displayName: string }
@@ -16,7 +16,10 @@ const notice = ref('')
 const preview = ref<GrantPreview | null>(null)
 const serverOrigin = ref('')
 const connectionState = ref(connectionStateForGrantStatus(''))
+const actionPending = ref(false)
+const actionGate = createExclusiveGrantActionGate()
 let grantToken = ''
+let disposed = false
 
 function connectionUrl() {
   return buildUcliConnectUrl(serverOrigin.value, grantToken)
@@ -34,11 +37,19 @@ function updatePreview(latest: GrantPreview) {
 }
 
 async function revalidateAction() {
-  if (!grantToken) return false
-  const latest = await revalidateGrantAction(grantToken, previewGrant)
-  connectionState.value = latest.state
-  if (latest.preview) preview.value = latest.preview
-  return latest.state.canConnect
+  return actionGate.run(async () => {
+    if (!grantToken || disposed) return false
+    actionPending.value = true
+    try {
+      const latest = await revalidateGrantAction(grantToken, previewGrant)
+      if (disposed) return false
+      connectionState.value = latest.state
+      if (latest.preview) preview.value = latest.preview
+      return latest.state.canConnect
+    } finally {
+      actionPending.value = false
+    }
+  })
 }
 
 async function connect() {
@@ -79,6 +90,8 @@ onMounted(async () => {
     loading.value = false
   }
 })
+
+onUnmounted(() => { disposed = true })
 </script>
 
 <template>
@@ -99,9 +112,9 @@ onMounted(async () => {
         </dl>
         <p class="state">{{ connectionState.message }}</p>
         <template v-if="connectionState.canConnect">
-          <button class="primary" @click="connect">连接 UCLI</button>
+          <button class="primary" :disabled="actionPending" @click="connect">连接 UCLI</button>
           <p v-if="notice" class="state">{{ notice }}</p>
-          <details><summary>未安装 UCLI？</summary><p>安装 UCLI 后重新打开此页面，或复制连接链接后在 UCLI 中打开。</p><button @click="copyConnectionLink">复制连接链接</button></details>
+          <details><summary>未安装 UCLI？</summary><p>安装 UCLI 后重新打开此页面，或复制连接链接后在 UCLI 中打开。</p><button :disabled="actionPending" @click="copyConnectionLink">复制连接链接</button></details>
         </template>
       </template>
     </section>

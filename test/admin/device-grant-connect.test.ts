@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { buildUcliConnectUrl, connectionStateForGrantStatus, readGrantToken, revalidateGrantAction } from '../../apps/admin/src/device-grant-connect.js'
+import { buildUcliConnectUrl, connectionStateForGrantStatus, createExclusiveGrantActionGate, readGrantToken, revalidateGrantAction } from '../../apps/admin/src/device-grant-connect.js'
 import { publicApi } from '../../apps/admin/src/api.js'
 
 describe('device grant browser connection', () => {
@@ -69,6 +69,27 @@ describe('device grant browser connection', () => {
     expect(JSON.stringify(result)).not.toContain(token)
   })
 
+  it('serializes concurrent grant actions and releases the gate after completion, rejection, or denial', async () => {
+    let completeFirst: (allowed: boolean) => void = () => {}
+    const firstPreview = new Promise<boolean>(resolve => { completeFirst = resolve })
+    const gate = createExclusiveGrantActionGate()
+    let fetchCalls = 0
+
+    const first = gate.run(async () => { fetchCalls++; return firstPreview })
+    expect(gate.pending).toBe(true)
+    expect(await gate.run(async () => { fetchCalls++; return true })).toBe(false)
+    expect(fetchCalls).toBe(1)
+
+    completeFirst(true)
+    expect(await first).toBe(true)
+    expect(gate.pending).toBe(false)
+    expect(await gate.run(async () => false)).toBe(false)
+    expect(gate.pending).toBe(false)
+    expect(await gate.run(async () => { throw new Error('preview unavailable') })).toBe(false)
+    expect(gate.pending).toBe(false)
+    expect(await gate.run(async () => true)).toBe(true)
+  })
+
   it('sends preview requests without administrator authentication or login side effects', async () => {
     let requestInit: RequestInit | undefined
     const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -101,6 +122,8 @@ describe('device grant browser connection', () => {
     expect(source).toContain('v-if="connectionState.canConnect"')
     expect(source).toContain('{{ connectionState.label }}')
     expect(source).toContain('{{ connectionState.message }}')
+    expect(source).toContain('createExclusiveGrantActionGate()')
+    expect(source.match(/:disabled="actionPending"/g)).toHaveLength(2)
     const availableActions = source.split('<template v-if="connectionState.canConnect">')[1]
     expect(availableActions).toContain('连接 UCLI')
     expect(availableActions).toContain('复制连接链接')

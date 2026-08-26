@@ -35,3 +35,21 @@ export async function revalidateGrantAction<T extends { status: string }>(
     return { state: connectionStateForGrantStatus('') }
   }
 }
+
+export function createExclusiveGrantActionGate() {
+  let pending = false
+  return {
+    get pending() { return pending },
+    async run(action: () => Promise<boolean>): Promise<boolean> {
+      if (pending) return false
+      pending = true
+      try {
+        return await action()
+      } catch {
+        return false
+      } finally {
+        pending = false
+      }
+    }
+  }
+}
