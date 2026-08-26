@@ -89,6 +89,8 @@ describe('device grant release contract', () => {
     expect(protocol).toMatch(/`clientVersion`[^。]*1–32/)
     expect(protocol).toContain('服务端响应头 `Cache-Control: no-store`')
     expect(protocol).not.toMatch(/POST \/api\/v1\/auth\/device-grants\/(?:preview|redeem)\nContent-Type: application\/json\nCache-Control/)
+    expect(design.replace(/\r\n/g, '\n')).not.toMatch(/POST \/api\/v1\/auth\/device-grants\/preview\nContent-Type: application\/json\nCache-Control: no-store/)
+    expect(design).toContain('响应使用 `Cache-Control: no-store`')
 
     for (const status of ['AVAILABLE', 'BOUND', 'DISABLED', 'EXPIRED', 'DELETED']) expect(protocol).toContain(status)
     for (const code of [
@@ -124,7 +126,8 @@ describe('device grant release contract', () => {
     expect(deploy).toContain('可信公司内网')
     expect(deploy).toContain('staging rehearsal')
     expect(deploy).toContain('pg_depend')
-    expect(deploy).toContain("'public.DeviceCodeStatus'::regtype::oid")
+    expect(deploy).toContain("'public.\"DeviceCodeStatus\"'::regtype::oid")
+    expect(deploy).not.toContain("'public.DeviceCodeStatus'::regtype::oid")
     expect(deploy).toContain('pg_describe_object')
     expect(deploy).toContain('device_authorizations')
     expect(deploy).toContain('pg_attrdef')

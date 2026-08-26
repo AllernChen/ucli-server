@@ -389,7 +389,7 @@ it('returns a connection URL once while storing only hash and hint', async () =>
   const token = new URL(result.connectionUrl).hash.slice('#token='.length)
   expect(result.connectionUrl).toBe(`http://10.0.0.8:3000/connect#token=${token}`)
   expect(result).not.toHaveProperty('token')
-  expect(state.grants[0].tokenHash).not.toContain(token)
+  expect(state.grants[0].tokenHash).toBe(hashOpaqueToken(token))
   expect(state.grants[0].tokenHint).toMatch(/^••••/)
 })
 

@@ -24,7 +24,7 @@
 
    ```sql
    WITH target_type AS (
-     SELECT 'public.DeviceCodeStatus'::regtype::oid AS type_oid
+     SELECT 'public."DeviceCodeStatus"'::regtype::oid AS type_oid
    ), known_dependencies AS (
      SELECT d.classid, d.objid, d.objsubid
      FROM pg_depend AS d

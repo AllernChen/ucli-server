@@ -186,7 +186,6 @@ http://10.0.0.8:3000/connect#token=<secret>
 ```http
 POST /api/v1/auth/device-grants/preview
 Content-Type: application/json
-Cache-Control: no-store
 
 {"token":"<secret>"}
 ```

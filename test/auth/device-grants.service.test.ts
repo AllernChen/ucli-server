@@ -2,6 +2,7 @@ import 'reflect-metadata'
 import { describe, expect, it } from 'vitest'
 import { DeviceGrantsService } from '../../apps/api/src/device-grants.service.js'
 import { DeviceGrantFilter } from '../../apps/api/src/device-grants.dto.js'
+import { hashOpaqueToken } from '../../packages/security/src/tokens.js'
 
 type Grant = {
   id: string
@@ -148,7 +149,7 @@ describe('device grants', () => {
       expect(result.connectionUrl).toBe(`http://10.0.0.8:3000/connect#token=${token}`)
       expect(token).not.toBe('')
       expect(result).not.toHaveProperty('token')
-      expect(state.grants.at(-1)?.tokenHash).not.toContain(token)
+      expect(state.grants.at(-1)?.tokenHash).toBe(hashOpaqueToken(token))
       expect(state.grants.at(-1)?.tokenHint).toMatch(/^••••/)
       expect(JSON.stringify(result)).not.toContain('tokenHash')
     } finally {
