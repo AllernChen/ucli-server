@@ -22,7 +22,7 @@ type Grant = {
 
 function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string; accountStatus?: string; secondUser?: boolean; bindOnLock?: boolean } = {}) {
   const createdAt = new Date('2026-08-26T00:00:00.000Z')
-  const state: { accounts: any[]; memberships: any[]; grants: Grant[]; devices: any[] } = {
+  const state: { accounts: any[]; memberships: any[]; grants: Grant[]; devices: any[]; audits: any[] } = {
     accounts: [{ id: 'account-1', email: 'member@example.com', displayName: 'Member', status: options.accountStatus || 'ACTIVE' }],
     memberships: [{ organizationId: 'org-1', accountId: 'account-1', role: 'MEMBER', status: options.membershipStatus || 'ACTIVE' }],
     grants: [{
@@ -30,7 +30,7 @@ function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string;
       expiresAt: null, disabledAt: null, deletedAt: null, boundAt: options.bound ? createdAt : null,
       deviceId: options.bound ? 'device-1' : null, createdById: 'admin-1', createdAt, updatedAt: createdAt
     }],
-    devices: options.bound ? [{ id: 'device-1', organizationId: 'org-1', accountId: 'account-1', name: 'Member laptop', platform: 'windows', clientVersion: '1.0.0', revokedAt: null, lastSeenAt: null, createdAt }] : []
+    devices: options.bound ? [{ id: 'device-1', organizationId: 'org-1', accountId: 'account-1', name: 'Member laptop', platform: 'windows', clientVersion: '1.0.0', revokedAt: null, lastSeenAt: null, createdAt }] : [], audits: []
   }
   const calls = { rowLocks: [] as unknown[][], grantReadsAfterLock: [] as boolean[] }
   let lockHeld = false
@@ -70,6 +70,7 @@ function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string;
     state.memberships.find(membership => membership.organizationId === organizationId && membership.accountId === accountId) || null
   const serializeGrant = (grant: Grant) => ({ ...grant, device: deviceFor(grant.deviceId) })
   const prisma: any = {
+    auditLog: { create: async ({ data }: any) => { state.audits.push(data); return data } },
     membership: {
       findUnique: async ({ where }: any) => {
         const key = where.organizationId_accountId
@@ -152,6 +153,8 @@ describe('device grants', () => {
       expect(state.grants.at(-1)?.tokenHash).toBe(hashOpaqueToken(token))
       expect(state.grants.at(-1)?.tokenHint).toMatch(/^••••/)
       expect(JSON.stringify(result)).not.toContain('tokenHash')
+      expect(state.audits).toContainEqual(expect.objectContaining({ action: 'device_grant.create', resourceType: 'device_grant', resourceId: result.id, organizationId: 'org-1' }))
+      expect(JSON.stringify(state.audits)).not.toContain(token)
     } finally {
       if (previousPublicUrl === undefined) delete process.env.PUBLIC_URL
       else process.env.PUBLIC_URL = previousPublicUrl
@@ -172,25 +175,39 @@ describe('device grants', () => {
     await expect(service.create('org-1', 'admin-1', 'account-1', { expiresAt: new Date().toISOString() })).rejects.toMatchObject({ status: 400 })
   })
 
+  it('rejects a missing public origin before creating a grant', async () => {
+    const { service, state } = makeGrantHarness()
+    const previousPublicUrl = process.env.PUBLIC_URL
+    delete process.env.PUBLIC_URL
+    try {
+      await expect(service.create('org-1', 'admin-1', 'account-1', { expiresAt: null })).rejects.toThrow('PUBLIC_URL is required')
+      expect(state.grants).toHaveLength(1)
+    } finally {
+      if (previousPublicUrl === undefined) delete process.env.PUBLIC_URL
+      else process.env.PUBLIC_URL = previousPublicUrl
+    }
+  })
+
   it('disables reversibly without revoking the device', async () => {
     const { service, state } = makeGrantHarness({ bound: true })
-    await service.disable('org-1', 'grant-1')
+    await service.disable('org-1', 'admin-1', 'grant-1')
     expect(state.grants[0].disabledAt).toBeInstanceOf(Date)
     expect(state.devices[0].revokedAt).toBeNull()
-    await service.enable('org-1', 'grant-1')
+    await service.enable('org-1', 'admin-1', 'grant-1')
     expect(state.grants[0].disabledAt).toBeNull()
   })
 
   it('soft deletes and permanently revokes the bound device', async () => {
     const { service, state } = makeGrantHarness({ bound: true })
-    await service.delete('org-1', 'grant-1')
+    await service.delete('org-1', 'admin-1', 'grant-1')
     expect(state.grants[0].deletedAt).toBeInstanceOf(Date)
     expect(state.devices[0].revokedAt).toBeInstanceOf(Date)
+    expect(state.audits).toContainEqual(expect.objectContaining({ action: 'device_grant.delete', resourceType: 'device_grant', resourceId: 'grant-1' }))
   })
 
   it('locks before reading the grant and revokes a device bound while delete waits for that lock', async () => {
     const { service, state, calls } = makeGrantHarness({ bindOnLock: true })
-    await service.delete('org-1', 'grant-1')
+    await service.delete('org-1', 'admin-1', 'grant-1')
     expect(calls.rowLocks).toEqual([['grant-1', 'org-1']])
     expect(calls.grantReadsAfterLock).toEqual([true])
     expect(state.devices[0].revokedAt).toBeInstanceOf(Date)
@@ -198,9 +215,9 @@ describe('device grants', () => {
 
   it('does not enable or extend a deleted grant', async () => {
     const { service } = makeGrantHarness()
-    await service.delete('org-1', 'grant-1')
-    await expect(service.enable('org-1', 'grant-1')).rejects.toMatchObject({ status: 404 })
-    await expect(service.updateExpiration('org-1', 'grant-1', new Date(Date.now() + 3_600_000).toISOString())).rejects.toMatchObject({ status: 404 })
+    await service.delete('org-1', 'admin-1', 'grant-1')
+    await expect(service.enable('org-1', 'admin-1', 'grant-1')).rejects.toMatchObject({ status: 404 })
+    await expect(service.updateExpiration('org-1', 'admin-1', 'grant-1', new Date(Date.now() + 3_600_000).toISOString())).rejects.toMatchObject({ status: 404 })
   })
 
   it('paginates grouped grant results by user and never serializes token hashes', async () => {

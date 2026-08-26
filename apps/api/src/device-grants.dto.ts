@@ -1,17 +1,17 @@
 import { Transform, Type } from 'class-transformer'
-import { IsDateString, IsEmail, IsEnum, IsIn, IsOptional, IsString, IsUUID, Length, ValidateIf, ValidateNested } from 'class-validator'
+import { Allow, IsDateString, IsEmail, IsEnum, IsOptional, IsString, Length, ValidateIf } from 'class-validator'
 import { PageQueryDto } from './catalog.dto.js'
 
 export class CreateManagedUserDto {
-  @Transform(({ value }) => String(value).trim().toLowerCase())
+  @Transform(({ value }) => typeof value === 'string' ? value.trim().toLowerCase() : value)
   @IsEmail() @Length(3, 320) email!: string
 
-  @Transform(({ value }) => String(value).trim())
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString() @Length(1, 120) displayName!: string
 }
 
 export class ManagedUserPageQueryDto extends PageQueryDto {
-  @IsOptional() @Transform(({ value }) => String(value).trim()) @IsString() @Length(1, 200) q?: string
+  @IsOptional() @Transform(({ value }) => typeof value === 'string' ? value.trim() : value) @IsString() @Length(1, 200) q?: string
 }
 
 export class CreateDeviceGrantDto {
@@ -25,22 +25,19 @@ export class UpdateDeviceGrantDto {
 }
 
 export class DeviceRegistrationDto {
-  @IsUUID('4') installationId!: string
-
-  @Transform(({ value }) => String(value).trim())
-  @IsString() @Length(1, 120) name!: string
-
-  @IsIn(['windows', 'macos', 'linux']) platform!: string
-
-  @IsString() @Length(1, 32) clientVersion!: string
+  // Public endpoints deliberately defer malformed input to stable domain codes.
+  @Allow() installationId!: unknown
+  @Allow() name!: unknown
+  @Allow() platform!: unknown
+  @Allow() clientVersion!: unknown
 }
 
 export class PreviewDeviceGrantDto {
-  @IsString() @Length(32, 128) token!: string
+  @Allow() token!: unknown
 }
 
 export class RedeemDeviceGrantDto extends PreviewDeviceGrantDto {
-  @ValidateNested() @Type(() => DeviceRegistrationDto) device!: DeviceRegistrationDto
+  @Allow() device!: unknown
 }
 
 export enum DeviceGrantFilter {
@@ -54,5 +51,5 @@ export enum DeviceGrantFilter {
 
 export class DeviceGrantPageQueryDto extends PageQueryDto {
   @IsOptional() @IsEnum(DeviceGrantFilter) status: DeviceGrantFilter = DeviceGrantFilter.ALL
-  @IsOptional() @Transform(({ value }) => String(value).trim()) @IsString() @Length(1, 200) q?: string
+  @IsOptional() @Transform(({ value }) => typeof value === 'string' ? value.trim() : value) @IsString() @Length(1, 200) q?: string
 }

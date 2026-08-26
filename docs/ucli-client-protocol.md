@@ -66,7 +66,7 @@ Content-Type: application/json
 
 ## 设备兑换
 
-`installationId` 必须是 UUID v4；`name` 为去空格后的 1–120 字符；`platform` 仅允许 `windows`、`macos`、`linux`；`clientVersion` 为 1–32 字符。不符合这些约束时返回 `invalid_device`。
+`installationId` 必须是 UUID v4；`name` 为去空格后的 1–120 字符；`platform` 仅允许 `windows`、`macos`、`linux`；`clientVersion` 为 1–32 字符。不符合这些约束时返回 `invalid_device`。同一服务端在任一时刻只允许一个未永久撤销的设备使用同一持久化 `installationId`；旧授权被删除并永久撤销旧设备后，新授权才可用相同安装 ID 重新注册，旧设备记录仍作为历史保留。
 
 ### Redeem HTTP
 

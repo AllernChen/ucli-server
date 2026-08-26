@@ -86,7 +86,7 @@ UCLI 可以独立安装和使用，不依赖 UCLI Server。用户可在 UCLI 设
 
 现有 `Device` 保留并扩展：
 
-- 新增全局唯一的 `installationId`，由 UCLI 首次注册前生成并持久化。
+- 新增持久化 `installationId`，由 UCLI 首次注册前生成并持久化；数据库仅对 `revokedAt IS NULL` 的设备保持唯一。旧授权删除并永久撤销旧设备后，新授权可使用相同安装 ID 重新注册，历史设备行保留。
 - 保存 `platform` 和 `clientVersion`，用于平台展示与后续兼容判断。
 - 与 `DeviceGrant` 建立一对一关系。
 - 继续保存 refresh token 摘要、最后活跃时间和永久撤销时间。

@@ -3,7 +3,7 @@ import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
 import { toast } from '../toast'
-import { createExclusiveAsyncRequestGate, type ManagedUser, type Page } from '../device-grants'
+import { createExclusiveAsyncRequestGate, createRequestLifecycle, type ManagedUser, type Page } from '../device-grants'
 import Drawer from '../components/Drawer.vue'
 import Pagination from '../components/Pagination.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
@@ -20,18 +20,23 @@ const result = ref<Page<ManagedUser>>({ items: [], total: 0, limit: 20, offset: 
 const filters = reactive({ q: '', limit: 20, offset: 0 })
 const createForm = reactive({ email: '', displayName: '' })
 const createGate = createExclusiveAsyncRequestGate(pending => { createPending.value = pending })
+const loadLifecycle = createRequestLifecycle()
 
 async function load() {
+  const generation = loadLifecycle.next()
   loading.value = true
   error.value = ''
   const query = new URLSearchParams({ limit: String(filters.limit), offset: String(filters.offset) })
   if (filters.q.trim()) query.set('q', filters.q.trim())
   try {
-    result.value = await api<Page<ManagedUser>>(`/api/v1/admin/users?${query}`)
+    const loaded = await api<Page<ManagedUser>>(`/api/v1/admin/users?${query}`)
+    if (!loadLifecycle.isCurrent(generation)) return
+    result.value = loaded
   } catch (value: any) {
+    if (!loadLifecycle.isCurrent(generation)) return
     error.value = value.message
   } finally {
-    loading.value = false
+    if (loadLifecycle.isCurrent(generation)) loading.value = false
   }
 }
 
@@ -97,7 +102,7 @@ function setOffset(offset: number) {
 }
 
 onMounted(load)
-onUnmounted(() => createGate.dispose())
+onUnmounted(() => { createGate.dispose(); loadLifecycle.dispose() })
 </script>
 
 <template>
@@ -105,8 +110,8 @@ onUnmounted(() => createGate.dispose())
     <div class="actions"><button type="button" @click="load">刷新</button><button type="button" class="primary" @click="openCreate">创建用户</button></div></header>
   <form class="panel toolbar user-toolbar" @submit.prevent="search"><input v-model="filters.q" aria-label="搜索用户" placeholder="搜索邮箱或显示名"><button type="submit">搜索</button></form>
   <p v-if="loading" class="state">正在加载用户…</p><p v-else-if="error" class="state error">{{ error }}</p>
-  <section v-else class="panel table-panel"><table v-if="result.items.length"><thead><tr><th>用户</th><th>组织状态</th><th>角色</th><th>设备</th><th>授权</th><th>创建时间</th><th>操作</th></tr></thead>
-    <tbody><tr v-for="user in result.items" :key="user.id" class="clickable-row" @click="router.push(`/users/${user.id}`)"><td><strong>{{ user.displayName }}</strong><small>{{ user.email }}</small></td><td><span class="chip" :class="{ success: user.status === 'ACTIVE' }">{{ user.status === 'ACTIVE' ? '正常' : '已禁用' }}</span></td><td>{{ user.role }}</td><td>{{ user.deviceCount }}</td><td>{{ user.deviceGrantCount }}</td><td>{{ new Date(user.createdAt).toLocaleString() }}</td><td><div class="actions" @click.stop><button type="button" @click="router.push(`/users/${user.id}`)">查看</button><button v-if="user.role === 'MEMBER'" type="button" :class="{ 'danger-link': user.status === 'ACTIVE', primary: user.status === 'DISABLED' }" :disabled="actionPending" @click="pendingUser = user">{{ user.status === 'ACTIVE' ? '禁用' : '启用' }}</button></div></td></tr></tbody>
+  <section v-else class="panel table-panel"><table v-if="result.items.length"><thead><tr><th>用户</th><th>组织状态</th><th>角色</th><th>设备</th><th>授权</th><th>最近使用</th><th>操作</th></tr></thead>
+    <tbody><tr v-for="user in result.items" :key="user.id" class="clickable-row" @click="router.push(`/users/${user.id}`)"><td><strong>{{ user.displayName }}</strong><small>{{ user.email }}</small></td><td><span class="chip" :class="{ success: user.status === 'ACTIVE' }">{{ user.status === 'ACTIVE' ? '正常' : '已禁用' }}</span></td><td>{{ user.role }}</td><td>{{ user.deviceCount }}</td><td>{{ user.deviceGrantCount }}</td><td>{{ user.lastSeenAt ? new Date(user.lastSeenAt).toLocaleString() : '—' }}</td><td><div class="actions" @click.stop><button type="button" @click="router.push(`/users/${user.id}`)">查看</button><button v-if="user.role === 'MEMBER'" type="button" :class="{ 'danger-link': user.status === 'ACTIVE', primary: user.status === 'DISABLED' }" :disabled="actionPending" @click="pendingUser = user">{{ user.status === 'ACTIVE' ? '禁用' : '启用' }}</button></div></td></tr></tbody>
   </table><p v-else class="empty">没有符合条件的用户</p><Pagination v-bind="result" @change="setOffset" /></section>
 
   <Drawer :open="createOpen" title="创建用户" :close-disabled="createPending" @close="closeCreate"><form class="stack-form" @submit.prevent="createUser"><label>显示名<input v-model="createForm.displayName" required maxlength="120" autocomplete="name"></label><label>邮箱<input v-model="createForm.email" type="email" required maxlength="320" autocomplete="email"></label><p v-if="formError" class="state error">{{ formError }}</p><button type="submit" class="primary" :disabled="createPending">{{ createPending ? '正在创建…' : '创建用户' }}</button></form></Drawer>

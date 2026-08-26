@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
-import { deviceGrantQuery, grantActions, grantExpiryPayload, grantStatusLabel, type DeviceGrantSummary, type DeviceGrantUserGroup, type Page } from '../device-grants'
+import { createRequestLifecycle, deviceGrantQuery, grantActions, grantExpiryPayload, grantStatusLabel, type DeviceGrantSummary, type DeviceGrantUserGroup, type Page } from '../device-grants'
 import { toast } from '../toast'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import Pagination from '../components/Pagination.vue'
@@ -18,6 +18,7 @@ const filters = reactive({ status: 'ALL', q: '', limit: 20, offset: 0 })
 const editingGrant = ref<DeviceGrantSummary | null>(null)
 const pendingAction = ref<{ grant: DeviceGrantSummary; action: 'disable' | 'delete' } | null>(null)
 const expiryForm = reactive({ permanent: true, expiresAt: '' })
+const loadLifecycle = createRequestLifecycle()
 
 function localDateTime(value: string | null) {
   if (!value) return ''
@@ -27,14 +28,18 @@ function localDateTime(value: string | null) {
 }
 
 async function load() {
+  const generation = loadLifecycle.next()
   loading.value = true
   error.value = ''
   try {
-    result.value = await api<Page<DeviceGrantUserGroup>>(`/api/v1/admin/device-grants?${deviceGrantQuery(filters)}`)
+    const loaded = await api<Page<DeviceGrantUserGroup>>(`/api/v1/admin/device-grants?${deviceGrantQuery(filters)}`)
+    if (!loadLifecycle.isCurrent(generation)) return
+    result.value = loaded
   } catch (value: any) {
+    if (!loadLifecycle.isCurrent(generation)) return
     error.value = value.message
   } finally {
-    loading.value = false
+    if (loadLifecycle.isCurrent(generation)) loading.value = false
   }
 }
 
@@ -119,6 +124,7 @@ async function enable(grant: DeviceGrantSummary) {
 }
 
 onMounted(load)
+onUnmounted(() => loadLifecycle.dispose())
 </script>
 
 <template>

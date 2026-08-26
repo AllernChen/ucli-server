@@ -22,21 +22,21 @@ export class DeviceGrantsController {
 
   @Patch('device-grants/:id')
   update(@Req() req: any, @Param('id', UuidPipe) id: string, @Body() body: UpdateDeviceGrantDto) {
-    return this.grants.updateExpiration(req.principal.organizationId, id, body.expiresAt)
+    return this.grants.updateExpiration(req.principal.organizationId, req.principal.sub, id, body.expiresAt)
   }
 
   @Post('device-grants/:id/disable')
   disable(@Req() req: any, @Param('id', UuidPipe) id: string) {
-    return this.grants.disable(req.principal.organizationId, id)
+    return this.grants.disable(req.principal.organizationId, req.principal.sub, id)
   }
 
   @Post('device-grants/:id/enable')
   enable(@Req() req: any, @Param('id', UuidPipe) id: string) {
-    return this.grants.enable(req.principal.organizationId, id)
+    return this.grants.enable(req.principal.organizationId, req.principal.sub, id)
   }
 
   @Delete('device-grants/:id')
   delete(@Req() req: any, @Param('id', UuidPipe) id: string) {
-    return this.grants.delete(req.principal.organizationId, id)
+    return this.grants.delete(req.principal.organizationId, req.principal.sub, id)
   }
 }

@@ -43,7 +43,7 @@ function makeRedeemHarness(options: HarnessOptions = {}) {
     devices: options.boundInstallationId ? [{
       id: 'device-1', organizationId: 'org-1', accountId: 'account-1', installationId: options.boundInstallationId,
       name: 'Existing device', platform: 'windows', clientVersion: '1.0.0', refreshTokenHash: 'old-refresh-hash', revokedAt: null, lastSeenAt: null, createdAt
-    }] : [] as any[]
+    }] : [] as any[], audits: [] as any[]
   }
   if (options.additionalGrant) {
     state.grants.push({
@@ -68,6 +68,7 @@ function makeRedeemHarness(options: HarnessOptions = {}) {
   }
 
   const prisma: any = {
+    auditLog: { create: async ({ data }: any) => { state.audits.push(data); return data } },
     deviceGrant: {
       findUnique: async ({ where }: any) => {
         calls.grantReadsAfterLock.push(lockHeld)
@@ -88,8 +89,9 @@ function makeRedeemHarness(options: HarnessOptions = {}) {
     },
     device: {
       findUnique: async ({ where }: any) => state.devices.find(device => device.installationId === where.installationId) || null,
+      findFirst: async ({ where }: any) => state.devices.find(device => device.installationId === where.installationId && (where.revokedAt === undefined || device.revokedAt === where.revokedAt)) || null,
       create: async ({ data }: any) => {
-        if (state.devices.some(device => device.installationId === data.installationId)) {
+        if (state.devices.some(device => device.installationId === data.installationId && device.revokedAt === null)) {
           throw { code: 'P2002', meta: { modelName: 'Device', target: ['installation_id'] } }
         }
         const device = { id: `device-${state.devices.length + 1}`, revokedAt: null, lastSeenAt: null, createdAt: new Date(), ...data }
@@ -177,6 +179,15 @@ describe('device grant redemption', () => {
     expect(calls.grantReadsAfterLock).toEqual([true])
     expect(JSON.stringify(result)).not.toContain(state.grants[0].tokenHash)
     expect(JSON.stringify(result)).not.toContain(state.devices[0].refreshTokenHash)
+    expect(state.audits).toContainEqual(expect.objectContaining({ action: 'device_grant.redeem', resourceType: 'device_grant', resourceId: 'grant-1', metadata: expect.objectContaining({ outcome: 'success', mode: 'first_bind' }) }))
+  })
+
+  it('permits a new grant to reuse an installation after its historical device was permanently revoked', async () => {
+    const { service, state } = makeRedeemHarness()
+    state.devices.push({ id: 'historical-device', organizationId: 'org-1', accountId: 'account-1', installationId,
+      name: 'Old device', platform: 'windows', clientVersion: '1.0.0', refreshTokenHash: 'old', revokedAt: new Date(), lastSeenAt: null, createdAt })
+    await expect(service.redeem(redeemInput())).resolves.toMatchObject({ account: { id: 'account-1' } })
+    expect(state.devices.filter(device => device.installationId === installationId)).toHaveLength(2)
   })
 
   it('allows the same installation to retry within ten minutes and rotates its refresh token', async () => {
@@ -198,12 +209,19 @@ describe('device grant redemption', () => {
   it.each([
     ['inactive account', { accountStatus: 'DISABLED' }, 'account_inactive'],
     ['inactive organization', { organizationEnabled: false }, 'organization_inactive'],
-    ['inactive membership', { membershipStatus: 'DISABLED' }, 'invalid_grant'],
+    ['inactive membership', { membershipStatus: 'DISABLED' }, 'account_inactive'],
     ['non-member membership', { membershipRole: 'ORG_ADMIN' }, 'invalid_grant']
   ])('rejects %s without disclosing grant state', async (_, options, code) => {
     const { service } = makeRedeemHarness(options)
     await expect(service.preview(token)).rejects.toSatisfy(error => errorCode(error) === code)
     await expect(service.redeem(redeemInput())).rejects.toSatisfy(error => errorCode(error) === code)
+  })
+
+  it('records an attributable failed redemption without recording the raw token', async () => {
+    const { service, state } = makeRedeemHarness({ membershipStatus: 'DISABLED' })
+    await expect(service.redeem(redeemInput())).rejects.toSatisfy(error => errorCode(error) === 'account_inactive')
+    expect(state.audits).toContainEqual(expect.objectContaining({ action: 'device_grant.redeem', resourceType: 'device_grant', resourceId: 'grant-1', metadata: expect.objectContaining({ outcome: 'failure', code: 'account_inactive', tokenHint: '••••secret' }) }))
+    expect(JSON.stringify(state.audits)).not.toContain(token)
   })
 
   it('rejects malformed device metadata with a stable error code', async () => {

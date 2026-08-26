@@ -11,6 +11,7 @@ export interface ManagedDevice {
   revokedAt: string | null
   lastSeenAt: string | null
   createdAt: string
+  grant: UserDetailGrant | null
 }
 
 export interface DeviceGrantSummary {
@@ -24,6 +25,7 @@ export interface DeviceGrantSummary {
   deviceId: string | null
   createdById: string
   createdAt: string
+  lastSeenAt: string | null
   updatedAt: string
   status: DeviceGrantStatus
   device?: ManagedDevice | null

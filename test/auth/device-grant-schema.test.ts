@@ -17,4 +17,12 @@ describe('device grant schema', () => {
     expect(migration).toContain('DROP TABLE "device_authorizations"')
     expect(migration).toContain('UPDATE "devices" SET "revoked_at"')
   })
+
+  it('keeps historical revoked installations while enforcing one active registration', () => {
+    const device = schema.slice(schema.indexOf('model Device {'), schema.indexOf('model DeviceGrant {'))
+    expect(device).toContain('installationId   String?')
+    expect(device).not.toMatch(/installationId\s+String\?\s+@unique/)
+    expect(migration).toContain('DROP INDEX IF EXISTS "devices_installation_id_key"')
+    expect(migration).toMatch(/CREATE UNIQUE INDEX "devices_active_installation_id_key"[\s\S]*WHERE "revoked_at" IS NULL/)
+  })
 })

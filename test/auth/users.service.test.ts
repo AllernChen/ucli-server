@@ -49,7 +49,9 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
         select: undefined,
         devices: state.devices.filter((device: any) => device.accountId === membership.accountId && device.organizationId === membership.organizationId).length,
         deviceGrants: state.grants.filter((grant: any) => grant.accountId === membership.accountId && grant.organizationId === membership.organizationId).length
-      }
+      },
+      devices: state.devices.filter((device: any) => device.accountId === membership.accountId && device.organizationId === membership.organizationId)
+        .map((device: any) => ({ lastSeenAt: device.lastSeenAt || null }))
     }
   })
   const prisma: any = {
@@ -95,7 +97,7 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
             devices: state.devices.filter((device: any) => device.accountId === account.id && device.organizationId === membership.organizationId)
               .map((device: any) => ({
                 id: device.id, name: 'Existing device', installationId: null, platform: null, clientVersion: null,
-                revokedAt: null, lastSeenAt: null, createdAt: account.createdAt
+                revokedAt: null, lastSeenAt: null, createdAt: account.createdAt, grant: null
               })),
             deviceGrants: state.grants.filter((grant: any) => grant.accountId === account.id && grant.organizationId === membership.organizationId)
               .map((grant: any) => ({

@@ -23,6 +23,11 @@
 - Remove the old invitation and device-code flows without a compatibility endpoint.
 - Preserve accounts, memberships, organizations, quotas, usage history, audit history, and other non-authentication business data.
 
+## Completion record (2026-08-26)
+
+- Device-grant registration implementation and final review fixes are complete: active-only installation uniqueness, safe lifecycle/redemption audits, stable public validation codes, membership status mapping, user usage/grant data, and mandatory `PUBLIC_URL` origin validation.
+- Legacy invitation/device-code descriptions in `docs/acceptance.md` are explicitly historical; no compatibility endpoints are restored.
+
 ---
 
 ## File Structure

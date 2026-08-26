@@ -19,7 +19,11 @@ ALTER TABLE "devices" ADD COLUMN "installation_id" UUID;
 ALTER TABLE "devices" ADD COLUMN "platform" TEXT;
 ALTER TABLE "devices" ADD COLUMN "client_version" TEXT;
 
-CREATE UNIQUE INDEX "devices_installation_id_key" ON "devices"("installation_id");
+-- A revoked device remains historical evidence, while only a live installation
+-- may be registered once at a time.
+DROP INDEX IF EXISTS "devices_installation_id_key";
+CREATE UNIQUE INDEX "devices_active_installation_id_key"
+  ON "devices"("installation_id") WHERE "revoked_at" IS NULL;
 
 CREATE TABLE "device_grants" (
     "id" UUID NOT NULL,

@@ -137,7 +137,7 @@ model Device {
   organizationId   String       @map("organization_id") @db.Uuid
   accountId        String       @map("account_id") @db.Uuid
   name             String
-  installationId   String?      @unique @map("installation_id") @db.Uuid
+  installationId   String?      @map("installation_id") @db.Uuid
   platform         String?
   clientVersion    String?      @map("client_version")
   refreshTokenHash String       @unique @map("refresh_token_hash")

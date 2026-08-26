@@ -12,6 +12,7 @@ export interface ManagedUser {
   status: 'ACTIVE' | 'DISABLED'
   role: Role
   createdAt: Date
+  lastSeenAt: Date | null
   deviceCount: number
   deviceGrantCount: number
 }
@@ -26,6 +27,16 @@ export interface ManagedUserDetail extends ManagedUser {
     revokedAt: Date | null
     lastSeenAt: Date | null
     createdAt: Date
+    grant: {
+      id: string
+      tokenHint: string
+      expiresAt: Date | null
+      disabledAt: Date | null
+      deletedAt: Date | null
+      boundAt: Date | null
+      deviceId: string | null
+      status: DeviceGrantStatus
+    } | null
   }>
   deviceGrants: Array<{
     id: string
@@ -63,7 +74,7 @@ export class UsersService {
         } })
         return {
           id: account.id, organizationId: membership.organizationId, email: account.email, displayName: account.displayName,
-          status: membership.status, role: membership.role, createdAt: account.createdAt, deviceCount: 0, deviceGrantCount: 0
+          status: membership.status, role: membership.role, createdAt: account.createdAt, lastSeenAt: null, deviceCount: 0, deviceGrantCount: 0
         }
       })
     } catch (error) {
@@ -88,7 +99,8 @@ export class UsersService {
           organizationId: true, role: true, status: true,
           account: { select: {
             id: true, email: true, displayName: true, createdAt: true,
-            _count: { select: { devices: { where: { organizationId } }, deviceGrants: { where: { organizationId } } } }
+            _count: { select: { devices: { where: { organizationId } }, deviceGrants: { where: { organizationId } } } },
+            devices: { where: { organizationId }, orderBy: { lastSeenAt: { sort: 'desc', nulls: 'last' } }, take: 1, select: { lastSeenAt: true } }
           } }
         }
       }),
@@ -99,7 +111,7 @@ export class UsersService {
         id: membership.account.id, organizationId: membership.organizationId, email: membership.account.email,
         displayName: membership.account.displayName, status: membership.status, role: membership.role,
         createdAt: membership.account.createdAt, deviceCount: membership.account._count.devices,
-        deviceGrantCount: membership.account._count.deviceGrants
+        deviceGrantCount: membership.account._count.deviceGrants, lastSeenAt: membership.account.devices[0]?.lastSeenAt || null
       })),
       total, limit: query.limit, offset: query.offset
     }
@@ -115,7 +127,8 @@ export class UsersService {
           id: true, email: true, displayName: true, createdAt: true,
           devices: { where: { organizationId }, select: {
             id: true, name: true, installationId: true, platform: true, clientVersion: true,
-            revokedAt: true, lastSeenAt: true, createdAt: true
+            revokedAt: true, lastSeenAt: true, createdAt: true,
+            grant: { select: { id: true, tokenHint: true, expiresAt: true, disabledAt: true, deletedAt: true, boundAt: true, deviceId: true } }
           } },
           deviceGrants: { where: { organizationId }, select: {
             id: true, tokenHint: true, expiresAt: true, disabledAt: true, deletedAt: true,
@@ -128,9 +141,9 @@ export class UsersService {
     const { account } = membership
     return {
       id: account.id, organizationId: membership.organizationId, email: account.email, displayName: account.displayName,
-      status: membership.status, role: membership.role, createdAt: account.createdAt,
+      status: membership.status, role: membership.role, createdAt: account.createdAt, lastSeenAt: account.devices.reduce<Date | null>((latest, device) => !latest || (device.lastSeenAt && device.lastSeenAt > latest) ? device.lastSeenAt : latest, null),
       deviceCount: account.devices.length, deviceGrantCount: account.deviceGrants.length,
-      devices: account.devices,
+      devices: account.devices.map(device => ({ ...device, grant: device.grant ? { ...device.grant, status: deriveDeviceGrantStatus(device.grant, now) } : null })),
       deviceGrants: account.deviceGrants.map(grant => ({ ...grant, status: deriveDeviceGrantStatus(grant, now) }))
     }
   }
