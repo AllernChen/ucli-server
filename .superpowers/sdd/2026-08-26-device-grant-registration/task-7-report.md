@@ -13,7 +13,7 @@
 
 - TDD RED：`npx vitest run test/admin/device-grant-management.test.ts test/admin/device-grant-views.test.ts` 在 helper 和视图不存在时失败。
 - Focused：`npx vitest run test/admin/device-grant-management.test.ts test/admin/device-grant-views.test.ts test/admin/model-form-errors.test.ts`（3 files / 12 tests passed）。
-- 相关管理端全量：`npx vitest run test/admin`（11 files / 91 tests passed）。
+- 相关管理端全量：`npx vitest run test/admin`（12 files / 95 tests passed）。
 - 类型检查：`npm run typecheck`（passed）。
 - 管理端构建：`npm run admin:build`（passed；Vite 仅报告既有 Analytics chunk 大小警告）。
 - 静态检查：`git diff --check`（无 whitespace errors）；治理页不再包含旧邀请、成员或设备管理 endpoint，新增视图无 console/storage/URL secret 路径。
@@ -39,3 +39,12 @@
 - Dialog focus lifecycle 只在实际捕获触发控件后才允许恢复；初始关闭不会抢占页面焦点，关闭后卸载不会二次恢复，打开时卸载仍恢复一次。关闭 watcher 在 `nextTick` 后检查该状态再恢复。
 - 用户详情将 route lifecycle 与 GET load sequence 拆开：刷新只淘汰旧 GET，不能淘汰同一用户正在创建的授权；仅路由切换或卸载会使在途创建失效。授权创建成功先保留一次性 secret，再刷新详情；刷新失败不会清空 secret。
 - 最终 focused：`npx vitest run test/admin/dialog-focus.test.ts test/admin/device-grant-management.test.ts test/admin/device-grant-views.test.ts`（3 files / 18 tests passed）。
+
+## 行为级 Vue 测试闭环
+
+- 增加 `@vue/test-utils` 与 `happy-dom`，Vitest 保持默认 Node 环境；仅真实组件测试通过文件级 `happy-dom` 环境挂载 Vue 与 Teleport。
+- 真实挂载 `Drawer`、`ConfirmDialog` 验证初始关闭不移动焦点、打开后初始聚焦、关闭只恢复一次、关闭后卸载不重复恢复、打开时卸载恢复，以及 Tab 焦点环绕和受 `closeDisabled` 约束的 Escape。
+- 真实挂载 `UserDetail` 并用 deferred API Promise 与响应式路由驱动 DOM：同用户刷新期间的 POST 仍展示一次性 secret，后续 GET 失败不清除 secret；路由变更时旧 POST 被丢弃；乱序 GET 只应用最新响应；卸载后的 GET/POST 均不写回页面或 secret。
+- 行为级：`npx vitest run test/admin/device-grant-components.test.ts`（1 file / 4 tests passed）。
+- 管理端全量：`npx vitest run test/admin`（12 files / 95 tests passed）；全量：`npm test`（72 passed files / 433 passed tests，1 skipped）。
+- 类型检查：`npm run typecheck`（passed）；管理端构建：`npm run admin:build`（passed；仅 Vite Analytics chunk 大小警告）。
