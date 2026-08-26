@@ -58,28 +58,30 @@ export class AuthService {
 
   async refresh(refreshToken: string) {
     const oldRefreshTokenHash = hashOpaqueToken(refreshToken)
-    const device = await this.prisma.device.findUnique({
-      where: { refreshTokenHash: oldRefreshTokenHash },
-      include: { grant: true, organization: true, account: { include: { memberships: true } } }
+    return this.prisma.$transaction(async transaction => {
+      const device = await transaction.device.findUnique({
+        where: { refreshTokenHash: oldRefreshTokenHash },
+        include: { grant: true, organization: true, account: { include: { memberships: true } } }
+      })
+      if (!device?.grant) throw authorizationFailure('invalid_grant')
+      const now = new Date()
+      const failure = deviceGrantFailure(device.grant, now)
+      if (failure) throw authorizationFailure(failure)
+      if (device.revokedAt) throw authorizationFailure('invalid_device')
+      if (device.account.status !== 'ACTIVE') throw authorizationFailure('account_inactive')
+      if (!device.organization.enabled) throw authorizationFailure('organization_inactive')
+      const membership = device.account.memberships.find(item => item.organizationId === device.organizationId)
+      if (!membership || membership.role !== Role.MEMBER || membership.status !== 'ACTIVE') throw authorizationFailure('account_inactive')
+      const nextRefreshToken = randomBytes(32).toString('base64url')
+      const rotated = await transaction.device.updateMany({ where: { id: device.id, refreshTokenHash: oldRefreshTokenHash }, data: {
+        refreshTokenHash: hashOpaqueToken(nextRefreshToken), lastSeenAt: now
+      } })
+      if (rotated.count !== 1) throw authorizationFailure('invalid_grant')
+      return {
+        accessToken: signAccessToken({ sub: device.accountId, organizationId: device.organizationId, deviceId: device.id, role: membership.role, tokenVersion: device.account.tokenVersion }),
+        refreshToken: nextRefreshToken, expiresIn: 900,
+        authorization: { expiresAt: device.grant.expiresAt?.toISOString() ?? null, serverTime: now.toISOString() }
+      }
     })
-    if (!device?.grant) throw authorizationFailure('invalid_grant')
-    const now = new Date()
-    const failure = deviceGrantFailure(device.grant, now)
-    if (failure) throw authorizationFailure(failure)
-    if (device.revokedAt) throw authorizationFailure('invalid_device')
-    if (device.account.status !== 'ACTIVE') throw authorizationFailure('account_inactive')
-    if (!device.organization.enabled) throw authorizationFailure('organization_inactive')
-    const membership = device.account.memberships.find(item => item.organizationId === device.organizationId)
-    if (!membership || membership.role !== Role.MEMBER || membership.status !== 'ACTIVE') throw authorizationFailure('account_inactive')
-    const nextRefreshToken = randomBytes(32).toString('base64url')
-    const rotated = await this.prisma.device.updateMany({ where: { id: device.id, refreshTokenHash: oldRefreshTokenHash }, data: {
-      refreshTokenHash: hashOpaqueToken(nextRefreshToken), lastSeenAt: now
-    } })
-    if (rotated.count !== 1) throw authorizationFailure('invalid_grant')
-    return {
-      accessToken: signAccessToken({ sub: device.accountId, organizationId: device.organizationId, deviceId: device.id, role: membership.role, tokenVersion: device.account.tokenVersion }),
-      refreshToken: nextRefreshToken, expiresIn: 900,
-      authorization: { expiresAt: device.grant.expiresAt?.toISOString() ?? null, serverTime: now.toISOString() }
-    }
   }
 }

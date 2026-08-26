@@ -14,7 +14,9 @@ const past = new Date('2026-08-25T00:00:00.000Z')
 
 const messages = {
   invalid_grant: 'Device grant is invalid',
+  grant_disabled: 'Device grant is disabled',
   grant_expired: 'Device grant has expired',
+  grant_deleted: 'Device grant has been deleted',
   account_inactive: 'Account or membership is inactive',
   organization_inactive: 'Organization is inactive',
   invalid_device: 'Device is invalid'
@@ -28,6 +30,7 @@ type AuthorizationOptions = {
   organizationEnabled?: boolean
   membershipStatus?: string
   membershipRole?: string
+  membershipMissing?: boolean
   accountTokenVersion?: number
   deviceAccountId?: string
   deviceOrganizationId?: string
@@ -47,11 +50,15 @@ function makeRefreshHarness(options: AuthorizationOptions = {}, synchronizeReads
   const membership = {
     organizationId: 'org-1', accountId: 'account-1', role: options.membershipRole ?? 'MEMBER', status: options.membershipStatus ?? 'ACTIVE'
   }
-  const account = { id: 'account-1', status: options.accountStatus ?? 'ACTIVE', tokenVersion: options.accountTokenVersion ?? 1, memberships: [membership] }
+  const account = {
+    id: 'account-1', status: options.accountStatus ?? 'ACTIVE', tokenVersion: options.accountTokenVersion ?? 1,
+    memberships: options.membershipMissing ? [] : [membership]
+  }
   const organization = { id: 'org-1', enabled: options.organizationEnabled ?? true }
   const device = {
     id: 'device-1', accountId: options.deviceAccountId ?? 'account-1', organizationId: options.deviceOrganizationId ?? 'org-1',
-    refreshTokenHash: oldRefreshHash, revokedAt: options.revokedAt ?? null, grant: options.grant === undefined ? activeGrant() : options.grant
+    refreshTokenHash: oldRefreshHash, revokedAt: options.revokedAt ?? null, lastSeenAt: null as Date | null,
+    grant: options.grant === undefined ? activeGrant() : options.grant
   }
   let reads = 0
   let releaseReads: (() => void) | undefined
@@ -73,7 +80,30 @@ function makeRefreshHarness(options: AuthorizationOptions = {}, synchronizeReads
       updateMany: async ({ where, data }: any) => {
         if (where.id !== device.id || where.refreshTokenHash !== device.refreshTokenHash) return { count: 0 }
         device.refreshTokenHash = data.refreshTokenHash
+        device.lastSeenAt = data.lastSeenAt
         return { count: 1 }
+      }
+    },
+    $transaction: async (operation: any) => {
+      const before = { refreshTokenHash: device.refreshTokenHash, lastSeenAt: device.lastSeenAt }
+      let changed = false
+      const transaction = {
+        ...prisma,
+        device: {
+          ...prisma.device,
+          updateMany: async (args: any) => {
+            const result = await prisma.device.updateMany(args)
+            changed = result.count === 1
+            return result
+          }
+        }
+      }
+      try { return await operation(transaction) } catch (error) {
+        if (changed) {
+          device.refreshTokenHash = before.refreshTokenHash
+          device.lastSeenAt = before.lastSeenAt
+        }
+        throw error
       }
     }
   }
@@ -85,7 +115,10 @@ function makeGuardHarness(options: AuthorizationOptions = {}) {
     organizationId: 'org-1', accountId: 'account-1', role: options.membershipRole ?? 'MEMBER', status: options.membershipStatus ?? 'ACTIVE',
     organization: { enabled: options.organizationEnabled ?? true }
   }
-  const account = { id: 'account-1', status: options.accountStatus ?? 'ACTIVE', tokenVersion: options.accountTokenVersion ?? 1, memberships: [membership] }
+  const account = {
+    id: 'account-1', status: options.accountStatus ?? 'ACTIVE', tokenVersion: options.accountTokenVersion ?? 1,
+    memberships: options.membershipMissing ? [] : [membership]
+  }
   const device = {
     id: 'device-1', accountId: options.deviceAccountId ?? 'account-1', organizationId: options.deviceOrganizationId ?? 'org-1',
     revokedAt: options.revokedAt ?? null, grant: options.grant === undefined ? activeGrant() : options.grant
@@ -143,10 +176,14 @@ describe('refresh token rotation', () => {
 
   it.each([
     ['missing grant', { grant: null }, 'invalid_grant'],
+    ['disabled grant', { grant: activeGrant({ disabledAt: new Date() }) }, 'grant_disabled'],
+    ['deleted grant', { grant: activeGrant({ deletedAt: new Date() }) }, 'grant_deleted'],
+    ['expired grant', { grant: activeGrant({ expiresAt: past }) }, 'grant_expired'],
     ['permanently revoked device', { revokedAt: new Date() }, 'invalid_device'],
     ['inactive account', { accountStatus: 'DISABLED' }, 'account_inactive'],
     ['inactive organization', { organizationEnabled: false }, 'organization_inactive'],
     ['non-member membership', { membershipRole: 'ORG_ADMIN' }, 'account_inactive'],
+    ['missing membership', { membershipMissing: true }, 'account_inactive'],
     ['inactive membership', { membershipStatus: 'DISABLED' }, 'account_inactive']
   ] as const)('returns the stable %s error during refresh', async (_name, options, code) => {
     const { service } = makeRefreshHarness(options)
@@ -160,6 +197,18 @@ describe('refresh token rotation', () => {
     expect(JSON.stringify(result)).not.toContain(oldRefreshHash)
     expect(JSON.stringify(result)).not.toContain(device.refreshTokenHash)
   })
+
+  it('does not consume an old refresh token when access-token signing fails', async () => {
+    const { service, device } = makeRefreshHarness()
+    const before = { refreshTokenHash: device.refreshTokenHash, lastSeenAt: device.lastSeenAt }
+    delete process.env.JWT_SECRET
+
+    await expect(service.refresh(oldRefreshToken)).rejects.toThrow('JWT_SECRET is required')
+    expect(device).toMatchObject(before)
+
+    process.env.JWT_SECRET = 'test-secret'
+    await expect(service.refresh(oldRefreshToken)).resolves.toMatchObject({ refreshToken: expect.any(String) })
+  })
 })
 
 describe('device JWT authorization matrix', () => {
@@ -167,10 +216,16 @@ describe('device JWT authorization matrix', () => {
     ['missing device', {}, { deviceId: 'missing-device' }, 'invalid_device'],
     ['cross-account device', { deviceAccountId: 'other-account' }, {}, 'invalid_device'],
     ['cross-organization device', { deviceOrganizationId: 'other-org' }, {}, 'invalid_device'],
+    ['missing grant', { grant: null }, {}, 'invalid_grant'],
+    ['disabled grant', { grant: activeGrant({ disabledAt: new Date() }) }, {}, 'grant_disabled'],
+    ['deleted grant', { grant: activeGrant({ deletedAt: new Date() }) }, {}, 'grant_deleted'],
     ['expired grant', { grant: activeGrant({ expiresAt: past }) }, {}, 'grant_expired'],
     ['permanently revoked device', { revokedAt: new Date() }, {}, 'invalid_device'],
+    ['inactive account', { accountStatus: 'DISABLED' }, {}, 'account_inactive'],
     ['changed token version', { accountTokenVersion: 2 }, {}, 'account_inactive'],
     ['inactive organization', { organizationEnabled: false }, {}, 'organization_inactive'],
+    ['missing membership', { membershipMissing: true }, {}, 'account_inactive'],
+    ['non-member membership', { membershipRole: 'ORG_ADMIN' }, {}, 'account_inactive'],
     ['inactive membership', { membershipStatus: 'DISABLED' }, {}, 'account_inactive']
   ] as const)('returns the stable %s error', async (_name, options, tokenOverrides, code) => {
     const { guard } = makeGuardHarness(options)
