@@ -1,12 +1,13 @@
 import 'reflect-metadata'
 import { GUARDS_METADATA, HEADERS_METADATA, METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants'
 import { RequestMethod } from '@nestjs/common'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthController } from '../../apps/api/src/auth.controller.js'
 import { DeviceGrantsService } from '../../apps/api/src/device-grants.service.js'
 import { hashOpaqueToken } from '../../packages/security/src/tokens.js'
 
 const token = 'g'.repeat(32)
+const otherGrantToken = 'h'.repeat(32)
 const installationId = '10000000-0000-4000-8000-000000000001'
 const otherInstallationId = '10000000-0000-4000-8000-000000000002'
 const createdAt = new Date('2026-08-26T04:00:00.000Z')
@@ -21,10 +22,11 @@ type HarnessOptions = {
   expiresAt?: Date | null
   boundInstallationId?: string
   retryUntil?: Date | null
+  additionalGrant?: boolean
 }
 
-function redeemInput(id = installationId) {
-  return { token, device: { installationId: id, name: '张三的工作站', platform: 'windows', clientVersion: '1.2.0' } }
+function redeemInput(id = installationId, grantToken = token) {
+  return { token: grantToken, device: { installationId: id, name: '张三的工作站', platform: 'windows', clientVersion: '1.2.0' } }
 }
 
 function makeRedeemHarness(options: HarnessOptions = {}) {
@@ -43,9 +45,16 @@ function makeRedeemHarness(options: HarnessOptions = {}) {
       name: 'Existing device', platform: 'windows', clientVersion: '1.0.0', refreshTokenHash: 'old-refresh-hash', revokedAt: null, lastSeenAt: null, createdAt
     }] : [] as any[]
   }
+  if (options.additionalGrant) {
+    state.grants.push({
+      id: 'grant-2', organizationId: 'org-1', accountId: 'account-1', tokenHash: hashOpaqueToken(otherGrantToken), tokenHint: '••••other',
+      expiresAt: null, disabledAt: null, deletedAt: null, boundAt: null, redeemRetryUntil: null,
+      deviceId: null, createdById: 'admin-1', createdAt, updatedAt: createdAt
+    })
+  }
   const calls = { rowLocks: [] as unknown[][], grantReadsAfterLock: [] as boolean[] }
   let lockHeld = false
-  let queued = Promise.resolve()
+  const rowLockQueues = new Map<string, Promise<void>>()
 
   const accountFor = (id: string) => state.accounts.find(account => account.id === id) || null
   const deviceFor = (id: string | null) => state.devices.find(device => device.id === id) || null
@@ -80,6 +89,9 @@ function makeRedeemHarness(options: HarnessOptions = {}) {
     device: {
       findUnique: async ({ where }: any) => state.devices.find(device => device.installationId === where.installationId) || null,
       create: async ({ data }: any) => {
+        if (state.devices.some(device => device.installationId === data.installationId)) {
+          throw { code: 'P2002', meta: { modelName: 'Device', target: ['installation_id'] } }
+        }
         const device = { id: `device-${state.devices.length + 1}`, revokedAt: null, lastSeenAt: null, createdAt: new Date(), ...data }
         state.devices.push(device)
         return device
@@ -92,20 +104,21 @@ function makeRedeemHarness(options: HarnessOptions = {}) {
       }
     },
     $transaction: async (operation: any) => {
-      const waitFor = queued
-      let release!: () => void
-      queued = new Promise<void>(resolve => { release = resolve })
+      let release: (() => void) | undefined
       const transaction = {
         ...prisma,
         $queryRaw: async (query: any) => {
+          const tokenHash = query.values[0] as string
+          const waitFor = rowLockQueues.get(tokenHash) || Promise.resolve()
+          rowLockQueues.set(tokenHash, new Promise<void>(resolve => { release = resolve }))
           await waitFor
           lockHeld = true
           calls.rowLocks.push(query.values)
-          const matched = state.grants.find(grant => grant.tokenHash === query.values[0])
+          const matched = state.grants.find(grant => grant.tokenHash === tokenHash)
           return matched ? [{ id: matched.id }] : []
         }
       }
-      try { return await operation(transaction) } finally { release() }
+      try { return await operation(transaction) } finally { release?.() }
     }
   }
   return { service: new DeviceGrantsService(prisma), state, calls }
@@ -114,6 +127,16 @@ function makeRedeemHarness(options: HarnessOptions = {}) {
 function errorCode(error: unknown) {
   return (error as any).getResponse().code
 }
+
+let initialJwtSecret: string | undefined
+beforeEach(() => {
+  initialJwtSecret = process.env.JWT_SECRET
+  process.env.JWT_SECRET = 'test-secret'
+})
+afterEach(() => {
+  if (initialJwtSecret === undefined) delete process.env.JWT_SECRET
+  else process.env.JWT_SECRET = initialJwtSecret
+})
 
 describe('device grant redemption', () => {
   it('previews a known grant without consuming it', async () => {
@@ -129,8 +152,8 @@ describe('device grant redemption', () => {
 
   it.each([
     ['grant_disabled', { disabledAt: createdAt }, 'DISABLED'],
-    ['grant_expired', { expiresAt: new Date('2026-08-26T03:59:59.000Z') }, 'EXPIRED'],
-    ['grant_deleted', { deletedAt: createdAt }, 'DELETED']
+    ['grant_expired', { expiresAt: new Date('2026-08-26T03:59:59.000Z'), membershipStatus: 'DISABLED' }, 'EXPIRED'],
+    ['grant_deleted', { deletedAt: createdAt, accountStatus: 'DISABLED' }, 'DELETED']
   ])('previews known %s grants with their derived status but refuses redemption', async (code, options, status) => {
     const { service, state } = makeRedeemHarness(options)
     await expect(service.preview(token)).resolves.toMatchObject({ status })
@@ -204,6 +227,16 @@ describe('device grant redemption', () => {
     expect(results.find(result => result.status === 'rejected')).toMatchObject({ reason: expect.anything() })
     expect(errorCode((results.find(result => result.status === 'rejected') as PromiseRejectedResult).reason)).toBe('grant_already_bound')
     expect(state.grants[0].deviceId).toBe('device-1')
+  })
+
+  it('maps a cross-grant installation-id race to invalid_device', async () => {
+    const { service, state } = makeRedeemHarness({ additionalGrant: true })
+    const results = await Promise.allSettled([
+      service.redeem(redeemInput(installationId, token)), service.redeem(redeemInput(installationId, otherGrantToken))
+    ])
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+    expect(errorCode((results.find(result => result.status === 'rejected') as PromiseRejectedResult).reason)).toBe('invalid_device')
+    expect(state.grants.filter(grant => grant.deviceId !== null)).toHaveLength(1)
   })
 })
 

@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
-import { Prisma, Role } from '@prisma/client'
+import { Prisma, Role, type Membership } from '@prisma/client'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import { deriveDeviceGrantStatus, deviceGrantFailure } from '../../../packages/security/src/device-grants.js'
 import { signAccessToken } from '../../../packages/security/src/auth.js'
@@ -30,6 +30,13 @@ type GrantRecord = {
     createdAt: Date
   } | null
 }
+
+const previewGrantInclude = Prisma.validator<Prisma.DeviceGrantInclude>()({ account: true, organization: true })
+const redemptionGrantInclude = Prisma.validator<Prisma.DeviceGrantInclude>()({ account: true, organization: true, device: true })
+type PreviewGrant = Prisma.DeviceGrantGetPayload<{ include: typeof previewGrantInclude }>
+type RedemptionGrant = Prisma.DeviceGrantGetPayload<{ include: typeof redemptionGrantInclude }>
+type EligibleGrant = PreviewGrant | RedemptionGrant
+type GrantMembership = Pick<Membership, 'role' | 'status'>
 
 function parseExpiry(value: string | null | undefined, required: boolean): Date | null {
   if (value === undefined) {
@@ -83,6 +90,13 @@ function validateDevice(input: RedeemDeviceGrantDto['device']) {
   }
 }
 
+function isInstallationIdConflict(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('code' in error) || (error as { code?: unknown }).code !== 'P2002') return false
+  const target = (error as { meta?: { target?: unknown } }).meta?.target
+  const fields = Array.isArray(target) ? target : [target]
+  return fields.some(field => typeof field === 'string' && (field === 'installation_id' || field === 'installationId' || field.includes('installation_id')))
+}
+
 @Injectable()
 export class DeviceGrantsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -110,14 +124,17 @@ export class DeviceGrantsService {
   async preview(token: string) {
     const grant = await this.prisma.deviceGrant.findUnique({
       where: { tokenHash: hashOpaqueToken(token) },
-      include: { account: true, organization: true }
+      include: previewGrantInclude
     })
     if (!grant) throw grantException('invalid_grant')
-    const membership = await this.prisma.membership.findUnique({
-      where: { organizationId_accountId: { organizationId: grant.organizationId, accountId: grant.accountId } }
-    })
-    this.assertEligibleGrant(grant, membership, false)
     const now = new Date()
+    const failure = deviceGrantFailure(grant, now)
+    if (!failure) {
+      const membership = await this.prisma.membership.findUnique({
+        where: { organizationId_accountId: { organizationId: grant.organizationId, accountId: grant.accountId } }
+      })
+      this.assertEligibleGrant(grant, membership, false)
+    }
     return {
       account: { id: grant.account.id, displayName: grant.account.displayName },
       organization: { id: grant.organization.id, name: grant.organization.name },
@@ -129,53 +146,58 @@ export class DeviceGrantsService {
   async redeem(input: RedeemDeviceGrantDto) {
     validateDevice(input.device)
     const tokenHash = hashOpaqueToken(input.token)
-    return this.prisma.$transaction(async transaction => {
-      const locked = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    try {
+      return await this.prisma.$transaction(async transaction => {
+        const locked = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
         SELECT "id"
         FROM "device_grants"
         WHERE "token_hash" = ${tokenHash}
         FOR UPDATE
-      `)
-      if (!locked[0]) throw grantException('invalid_grant')
-      const grant = await transaction.deviceGrant.findUnique({
-        where: { id: locked[0].id },
-        include: { account: true, organization: true, device: true }
-      })
-      if (!grant) throw grantException('invalid_grant')
-      const membership = await transaction.membership.findUnique({
-        where: { organizationId_accountId: { organizationId: grant.organizationId, accountId: grant.accountId } }
-      })
-      const role = this.assertEligibleGrant(grant, membership)
+        `)
+        if (!locked[0]) throw grantException('invalid_grant')
+        const grant = await transaction.deviceGrant.findUnique({
+          where: { id: locked[0].id },
+          include: redemptionGrantInclude
+        })
+        if (!grant) throw grantException('invalid_grant')
+        const membership = await transaction.membership.findUnique({
+          where: { organizationId_accountId: { organizationId: grant.organizationId, accountId: grant.accountId } }
+        })
+        const role = this.assertEligibleGrant(grant, membership)
 
-      const now = new Date()
-      let device = grant.device
-      if (!grant.deviceId) {
-        const existingDevice = await transaction.device.findUnique({ where: { installationId: input.device.installationId } })
-        if (existingDevice) throw grantException('invalid_device')
+        const now = new Date()
+        let device = grant.device
+        if (!grant.deviceId) {
+          const existingDevice = await transaction.device.findUnique({ where: { installationId: input.device.installationId } })
+          if (existingDevice) throw grantException('invalid_device')
+          const refreshToken = createOpaqueToken()
+          device = await transaction.device.create({ data: {
+            organizationId: grant.organizationId, accountId: grant.accountId,
+            installationId: input.device.installationId, name: input.device.name.trim(), platform: input.device.platform,
+            clientVersion: input.device.clientVersion, refreshTokenHash: hashOpaqueToken(refreshToken)
+          } })
+          await transaction.deviceGrant.update({ where: { id: grant.id }, data: {
+            deviceId: device.id, boundAt: now, redeemRetryUntil: new Date(now.getTime() + 10 * 60_000)
+          } })
+          return this.credentials(grant, role, device.id, refreshToken, now)
+        }
+
+        if (!device || device.installationId !== input.device.installationId || !grant.redeemRetryUntil || grant.redeemRetryUntil <= now) {
+          throw grantException('grant_already_bound')
+        }
         const refreshToken = createOpaqueToken()
-        device = await transaction.device.create({ data: {
-          organizationId: grant.organizationId, accountId: grant.accountId,
-          installationId: input.device.installationId, name: input.device.name.trim(), platform: input.device.platform,
-          clientVersion: input.device.clientVersion, refreshTokenHash: hashOpaqueToken(refreshToken)
-        } })
-        await transaction.deviceGrant.update({ where: { id: grant.id }, data: {
-          deviceId: device.id, boundAt: now, redeemRetryUntil: new Date(now.getTime() + 10 * 60_000)
+        await transaction.device.update({ where: { id: device.id }, data: {
+          refreshTokenHash: hashOpaqueToken(refreshToken), lastSeenAt: now
         } })
         return this.credentials(grant, role, device.id, refreshToken, now)
-      }
-
-      if (!device || device.installationId !== input.device.installationId || !grant.redeemRetryUntil || grant.redeemRetryUntil <= now) {
-        throw grantException('grant_already_bound')
-      }
-      const refreshToken = createOpaqueToken()
-      await transaction.device.update({ where: { id: device.id }, data: {
-        refreshTokenHash: hashOpaqueToken(refreshToken), lastSeenAt: now
-      } })
-      return this.credentials(grant, role, device.id, refreshToken, now)
-    })
+      })
+    } catch (error) {
+      if (isInstallationIdConflict(error)) throw grantException('invalid_device')
+      throw error
+    }
   }
 
-  private assertEligibleGrant(grant: any, membership: { role: Role; status: string } | null, enforceLifecycle = true): Role {
+  private assertEligibleGrant(grant: EligibleGrant, membership: GrantMembership | null, enforceLifecycle = true): Role {
     const failure = deviceGrantFailure(grant)
     if (enforceLifecycle && failure) throw grantException(failure)
     if (grant.account.status !== 'ACTIVE') throw grantException('account_inactive')
@@ -184,7 +206,7 @@ export class DeviceGrantsService {
     return membership.role
   }
 
-  private credentials(grant: any, role: Role, deviceId: string, refreshToken: string, now: Date) {
+  private credentials(grant: RedemptionGrant, role: Role, deviceId: string, refreshToken: string, now: Date) {
     return {
       accessToken: signAccessToken({
         sub: grant.accountId, organizationId: grant.organizationId, deviceId, role, tokenVersion: grant.account.tokenVersion
