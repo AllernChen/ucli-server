@@ -1,9 +1,13 @@
 import 'reflect-metadata'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { plainToInstance } from 'class-transformer'
 import { validate } from 'class-validator'
 import { UsersService } from '../../apps/api/src/users.service.js'
 import { CreateManagedUserDto } from '../../apps/api/src/device-grants.dto.js'
+
+const schema = readFileSync('prisma/schema.prisma', 'utf8')
+const migration = readFileSync('prisma/migrations/202608260001_device_grants/migration.sql', 'utf8')
 
 function makeUsersHarness(options: { role?: string; secondOrganization?: boolean; sharedAccount?: boolean; otherRole?: string } = {}) {
   const state: any = {
@@ -11,7 +15,7 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
       id: 'account-1', email: 'existing@example.com', displayName: 'Existing user', passwordHash: null,
       status: 'ACTIVE', tokenVersion: 1, createdAt: new Date('2026-08-26T00:00:00Z')
     }],
-    memberships: [{ organizationId: 'org-1', accountId: 'account-1', role: options.role || 'MEMBER' }],
+    memberships: [{ organizationId: 'org-1', accountId: 'account-1', role: options.role || 'MEMBER', status: 'ACTIVE' }],
     devices: [{ id: 'device-1', organizationId: 'org-1', accountId: 'account-1' }],
     grants: [{ id: 'grant-1', organizationId: 'org-1', accountId: 'account-1', tokenHash: 'secret-hash' }]
   }
@@ -20,10 +24,10 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
       id: 'account-2', email: 'other@example.com', displayName: 'Other user', passwordHash: null,
       status: 'ACTIVE', tokenVersion: 1, createdAt: new Date('2026-08-26T00:00:00Z')
     })
-    state.memberships.push({ organizationId: 'org-2', accountId: 'account-2', role: 'MEMBER' })
+    state.memberships.push({ organizationId: 'org-2', accountId: 'account-2', role: 'MEMBER', status: 'ACTIVE' })
   }
   if (options.sharedAccount) state.memberships.push({
-    organizationId: 'org-2', accountId: 'account-1', role: options.otherRole || 'MEMBER'
+    organizationId: 'org-2', accountId: 'account-1', role: options.otherRole || 'MEMBER', status: 'ACTIVE'
   })
 
   const accountFor = (accountId: string) => state.accounts.find((account: any) => account.id === accountId)
@@ -98,6 +102,12 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
               }))
           }
         }
+      },
+      update: async ({ where, data }: any) => {
+        const key = where.organizationId_accountId
+        const membership = state.memberships.find((item: any) => item.organizationId === key.organizationId && item.accountId === key.accountId)
+        Object.assign(membership, data)
+        return membership
       }
     },
     $transaction: async (operation: any) => operation(prisma)
@@ -111,7 +121,7 @@ describe('managed users', () => {
     const result = await service.create('org-1', { email: ' User@Example.com ', displayName: ' 张三 ' })
     expect(result).toMatchObject({ email: 'user@example.com', displayName: '张三', role: 'MEMBER' })
     expect(state.accounts[1].passwordHash).toBeNull()
-    expect(state.memberships[1]).toMatchObject({ organizationId: 'org-1', role: 'MEMBER' })
+    expect(state.memberships[1]).toMatchObject({ organizationId: 'org-1', role: 'MEMBER', status: 'ACTIVE' })
   })
 
   it('reports duplicate emails without exposing database details', async () => {
@@ -120,33 +130,45 @@ describe('managed users', () => {
       .rejects.toMatchObject({ status: 409, message: 'Account email already exists' })
   })
 
-  it('refuses to disable a platform administrator through member routes', async () => {
-    const { service } = makeUsersHarness({ role: 'PLATFORM_ADMIN' })
-    await expect(service.disable('org-1', 'account-1')).rejects.toMatchObject({ status: 403 })
+  it('refuses lifecycle updates for every non-MEMBER target membership', async () => {
+    for (const role of ['ORG_ADMIN', 'PLATFORM_ADMIN']) {
+      const { service } = makeUsersHarness({ role })
+      await expect(service.disable('org-1', 'account-1')).rejects.toMatchObject({ status: 403 })
+      await expect(service.enable('org-1', 'account-1')).rejects.toMatchObject({ status: 403 })
+    }
   })
 
-  it('does not change a member account shared by multiple organizations', async () => {
+  it('changes only the current organization membership for a shared account', async () => {
     const { service, state } = makeUsersHarness({ sharedAccount: true })
-    await expect(service.disable('org-1', 'account-1')).rejects.toMatchObject({ status: 403 })
+    await expect(service.disable('org-1', 'account-1')).resolves.toEqual({ status: 'DISABLED' })
+    expect(state.memberships).toEqual(expect.arrayContaining([
+      expect.objectContaining({ organizationId: 'org-1', status: 'DISABLED' }),
+      expect.objectContaining({ organizationId: 'org-2', status: 'ACTIVE' })
+    ]))
     expect(state.accounts[0].status).toBe('ACTIVE')
-
-    state.accounts[0].status = 'DISABLED'
-    await expect(service.enable('org-1', 'account-1')).rejects.toMatchObject({ status: 403 })
-    expect(state.accounts[0].status).toBe('DISABLED')
   })
 
-  it('does not change a current-organization member with a platform-admin role elsewhere', async () => {
+  it('does not affect an administrator membership in another organization', async () => {
     const { service, state } = makeUsersHarness({ sharedAccount: true, otherRole: 'PLATFORM_ADMIN' })
-    await expect(service.disable('org-1', 'account-1')).rejects.toMatchObject({ status: 403 })
-    expect(state.accounts[0].status).toBe('ACTIVE')
+    await expect(service.disable('org-1', 'account-1')).resolves.toEqual({ status: 'DISABLED' })
+    expect(state.memberships).toEqual(expect.arrayContaining([
+      expect.objectContaining({ organizationId: 'org-1', role: 'MEMBER', status: 'DISABLED' }),
+      expect.objectContaining({ organizationId: 'org-2', role: 'PLATFORM_ADMIN', status: 'ACTIVE' })
+    ]))
   })
 
   it('disables and enables an account with exactly one MEMBER membership', async () => {
     const { service, state } = makeUsersHarness()
     await expect(service.disable('org-1', 'account-1')).resolves.toEqual({ status: 'DISABLED' })
-    expect(state.accounts[0]).toMatchObject({ status: 'DISABLED', tokenVersion: 2 })
+    expect(state.memberships[0].status).toBe('DISABLED')
+    expect(state.accounts[0]).toMatchObject({ status: 'ACTIVE', tokenVersion: 1 })
     await expect(service.enable('org-1', 'account-1')).resolves.toEqual({ status: 'ACTIVE' })
-    expect(state.accounts[0].status).toBe('ACTIVE')
+    expect(state.memberships[0].status).toBe('ACTIVE')
+  })
+
+  it('persists membership lifecycle status with an ACTIVE default', () => {
+    expect(schema).toMatch(/model Membership[\s\S]*status\s+AccountStatus\s+@default\(ACTIVE\)/)
+    expect(migration).toContain('ALTER TABLE "memberships" ADD COLUMN "status" "AccountStatus" NOT NULL DEFAULT \'ACTIVE\';')
   })
 
   it('does not return users from another organization', async () => {
@@ -154,6 +176,15 @@ describe('managed users', () => {
     const result = await service.list('org-1', { limit: 50, offset: 0, q: undefined })
     expect(result.items.every(item => item.organizationId === 'org-1')).toBe(true)
     expect(result).toMatchObject({ total: 1, limit: 50, offset: 0 })
+  })
+
+  it('returns status from the current organization membership', async () => {
+    const { service, state } = makeUsersHarness()
+    state.memberships[0].status = 'DISABLED'
+    await expect(service.list('org-1', { limit: 50, offset: 0, q: undefined }))
+      .resolves.toMatchObject({ items: [expect.objectContaining({ status: 'DISABLED' })] })
+    await expect(service.detail('org-1', 'account-1'))
+      .resolves.toMatchObject({ status: 'DISABLED' })
   })
 
   it('returns user detail without password or grant token fields', async () => {

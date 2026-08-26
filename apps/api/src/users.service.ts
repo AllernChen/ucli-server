@@ -1,5 +1,5 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
-import { Role } from '@prisma/client'
+import { AccountStatus, Role } from '@prisma/client'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import type { CreateManagedUserDto, ManagedUserPageQueryDto } from './device-grants.dto.js'
 
@@ -57,11 +57,11 @@ export class UsersService {
       return await this.prisma.$transaction(async transaction => {
         const account = await transaction.account.create({ data: { ...normalized, passwordHash: null } })
         const membership = await transaction.membership.create({ data: {
-          organizationId, accountId: account.id, role: Role.MEMBER
+          organizationId, accountId: account.id, role: Role.MEMBER, status: AccountStatus.ACTIVE
         } })
         return {
           id: account.id, organizationId: membership.organizationId, email: account.email, displayName: account.displayName,
-          status: account.status, role: membership.role, createdAt: account.createdAt, deviceCount: 0, deviceGrantCount: 0
+          status: membership.status, role: membership.role, createdAt: account.createdAt, deviceCount: 0, deviceGrantCount: 0
         }
       })
     } catch (error) {
@@ -83,9 +83,9 @@ export class UsersService {
       this.prisma.membership.findMany({
         where, skip: query.offset, take: query.limit, orderBy: { account: { createdAt: 'desc' } },
         select: {
-          organizationId: true, role: true,
+          organizationId: true, role: true, status: true,
           account: { select: {
-            id: true, email: true, displayName: true, status: true, createdAt: true,
+            id: true, email: true, displayName: true, createdAt: true,
             _count: { select: { devices: { where: { organizationId } }, deviceGrants: { where: { organizationId } } } }
           } }
         }
@@ -95,7 +95,7 @@ export class UsersService {
     return {
       items: memberships.map(membership => ({
         id: membership.account.id, organizationId: membership.organizationId, email: membership.account.email,
-        displayName: membership.account.displayName, status: membership.account.status, role: membership.role,
+        displayName: membership.account.displayName, status: membership.status, role: membership.role,
         createdAt: membership.account.createdAt, deviceCount: membership.account._count.devices,
         deviceGrantCount: membership.account._count.deviceGrants
       })),
@@ -107,9 +107,9 @@ export class UsersService {
     const membership = await this.prisma.membership.findUnique({
       where: { organizationId_accountId: { organizationId, accountId } },
       select: {
-        organizationId: true, role: true,
+        organizationId: true, role: true, status: true,
         account: { select: {
-          id: true, email: true, displayName: true, status: true, createdAt: true,
+          id: true, email: true, displayName: true, createdAt: true,
           devices: { where: { organizationId }, select: {
             id: true, name: true, installationId: true, platform: true, clientVersion: true,
             revokedAt: true, lastSeenAt: true, createdAt: true
@@ -125,7 +125,7 @@ export class UsersService {
     const { account } = membership
     return {
       id: account.id, organizationId: membership.organizationId, email: account.email, displayName: account.displayName,
-      status: account.status, role: membership.role, createdAt: account.createdAt,
+      status: membership.status, role: membership.role, createdAt: account.createdAt,
       deviceCount: account.devices.length, deviceGrantCount: account.deviceGrants.length,
       devices: account.devices, deviceGrants: account.deviceGrants
     }
@@ -143,16 +143,15 @@ export class UsersService {
 
   private async updateStatus(organizationId: string, accountId: string, status: 'ACTIVE' | 'DISABLED') {
     await this.prisma.$transaction(async transaction => {
-      const memberships = await transaction.membership.findMany({
-        where: { accountId }, select: { organizationId: true, role: true, accountId: true }
+      const membership = await transaction.membership.findUnique({
+        where: { organizationId_accountId: { organizationId, accountId } }, select: { role: true }
       })
-      const membership = memberships.find(item => item.organizationId === organizationId)
       if (!membership) throw new NotFoundException('Managed user not found')
-      if (memberships.length !== 1 || membership.role !== Role.MEMBER) {
+      if (membership.role !== Role.MEMBER) {
         throw new ForbiddenException('Managed user cannot be updated')
       }
-      await transaction.account.update({
-        where: { id: membership.accountId }, data: { status, ...(status === 'DISABLED' ? { tokenVersion: { increment: 1 } } : {}) }
+      await transaction.membership.update({
+        where: { organizationId_accountId: { organizationId, accountId } }, data: { status }
       })
     })
   }

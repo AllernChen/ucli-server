@@ -124,6 +124,7 @@ model Membership {
   organizationId String       @map("organization_id") @db.Uuid
   accountId      String       @map("account_id") @db.Uuid
   role           Role
+  status         AccountStatus @default(ACTIVE)
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   account        Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
 

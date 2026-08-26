@@ -9,6 +9,7 @@ DROP TABLE "invitations";
 DROP TABLE "device_authorizations";
 
 ALTER TABLE "accounts" ALTER COLUMN "password_hash" DROP NOT NULL;
+ALTER TABLE "memberships" ADD COLUMN "status" "AccountStatus" NOT NULL DEFAULT 'ACTIVE';
 
 ALTER TABLE "devices" ADD COLUMN "installation_id" UUID;
 ALTER TABLE "devices" ADD COLUMN "platform" TEXT;
