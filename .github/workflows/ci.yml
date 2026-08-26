@@ -36,3 +36,4 @@ jobs:
           JWT_SECRET: ci-build-placeholder
           SETUP_SECRET: ci-build-placeholder
           MASTER_KEY: ci-build-placeholder
+          PUBLIC_URL: http://localhost:3000
