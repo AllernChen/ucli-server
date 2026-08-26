@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
-import { Role } from '@prisma/client'
+import { Prisma, Role } from '@prisma/client'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import { deriveDeviceGrantStatus } from '../../../packages/security/src/device-grants.js'
 import { createOpaqueToken, hashOpaqueToken, opaqueTokenHint } from '../../../packages/security/src/tokens.js'
@@ -173,10 +173,16 @@ export class DeviceGrantsService {
   async delete(organizationId: string, grantId: string) {
     const deletedAt = new Date()
     return this.prisma.$transaction(async transaction => {
+      await transaction.$queryRaw(Prisma.sql`
+        SELECT "id"
+        FROM "device_grants"
+        WHERE "id" = ${grantId}::uuid AND "organization_id" = ${organizationId}::uuid
+        FOR UPDATE
+      `)
       const grant = await transaction.deviceGrant.findFirst({
-        where: { id: grantId, organizationId, deletedAt: null }, select: { id: true, deviceId: true }
+        where: { id: grantId, organizationId }, select: { id: true, deviceId: true, deletedAt: true }
       })
-      if (!grant) throw new NotFoundException('Device grant not found')
+      if (!grant || grant.deletedAt) throw new NotFoundException('Device grant not found')
       const updated = await transaction.deviceGrant.updateMany({
         where: { id: grantId, organizationId, deletedAt: null }, data: { deletedAt }
       })

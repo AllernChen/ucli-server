@@ -19,7 +19,7 @@ type Grant = {
   updatedAt: Date
 }
 
-function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string; accountStatus?: string; secondUser?: boolean } = {}) {
+function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string; accountStatus?: string; secondUser?: boolean; bindOnLock?: boolean } = {}) {
   const createdAt = new Date('2026-08-26T00:00:00.000Z')
   const state: { accounts: any[]; memberships: any[]; grants: Grant[]; devices: any[] } = {
     accounts: [{ id: 'account-1', email: 'member@example.com', displayName: 'Member', status: options.accountStatus || 'ACTIVE' }],
@@ -31,6 +31,8 @@ function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string;
     }],
     devices: options.bound ? [{ id: 'device-1', organizationId: 'org-1', accountId: 'account-1', name: 'Member laptop', platform: 'windows', clientVersion: '1.0.0', revokedAt: null, lastSeenAt: null, createdAt }] : []
   }
+  const calls = { rowLocks: [] as unknown[][], grantReadsAfterLock: [] as boolean[] }
+  let lockHeld = false
   if (options.secondUser) {
     state.accounts.push({ id: 'account-2', email: 'other@example.com', displayName: 'Other', status: 'ACTIVE' })
     state.memberships.push({ organizationId: 'org-1', accountId: 'account-2', role: 'MEMBER', status: 'ACTIVE' })
@@ -95,6 +97,7 @@ function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string;
         return serializeGrant(grant)
       },
       findFirst: async ({ where }: any) => {
+        calls.grantReadsAfterLock.push(lockHeld)
         const grant = state.grants.find(item => matchesGrant(item, where))
         return grant ? serializeGrant(grant) : null
       },
@@ -112,9 +115,26 @@ function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string;
         return { count: devices.length }
       }
     },
+    $queryRaw: async (query: any) => {
+      const sql = query.strings?.join('') || ''
+      if (sql.includes('device_grants') && sql.includes('FOR UPDATE')) {
+        lockHeld = true
+        calls.rowLocks.push(query.values)
+        if (options.bindOnLock && state.grants[0].deviceId === null) {
+          const device = {
+            id: 'device-bound-during-delete', organizationId: 'org-1', accountId: 'account-1', name: 'Bound during delete',
+            platform: 'windows', clientVersion: '1.0.0', revokedAt: null, lastSeenAt: null, createdAt
+          }
+          state.devices.push(device)
+          state.grants[0].deviceId = device.id
+          state.grants[0].boundAt = new Date()
+        }
+      }
+      return []
+    },
     $transaction: async (operation: any) => operation(prisma)
   }
-  return { service: new DeviceGrantsService(prisma), state }
+  return { service: new DeviceGrantsService(prisma), state, calls }
 }
 
 describe('device grants', () => {
@@ -164,6 +184,14 @@ describe('device grants', () => {
     expect(state.devices[0].revokedAt).toBeInstanceOf(Date)
   })
 
+  it('locks before reading the grant and revokes a device bound while delete waits for that lock', async () => {
+    const { service, state, calls } = makeGrantHarness({ bindOnLock: true })
+    await service.delete('org-1', 'grant-1')
+    expect(calls.rowLocks).toEqual([['grant-1', 'org-1']])
+    expect(calls.grantReadsAfterLock).toEqual([true])
+    expect(state.devices[0].revokedAt).toBeInstanceOf(Date)
+  })
+
   it('does not enable or extend a deleted grant', async () => {
     const { service } = makeGrantHarness()
     await service.delete('org-1', 'grant-1')
@@ -177,5 +205,28 @@ describe('device grants', () => {
     expect(result).toMatchObject({ total: 2, limit: 1, offset: 0, items: [{ id: 'account-1', deviceGrants: [{ id: 'grant-1' }, { id: 'grant-2' }] }] })
     expect(JSON.stringify(result)).not.toContain('secret-hash')
     expect(JSON.stringify(result)).not.toContain('refreshTokenHash')
+  })
+
+  it('applies mutually exclusive status filters and excludes deleted grants from ALL', async () => {
+    const { service, state } = makeGrantHarness({ bound: true })
+    const createdAt = state.grants[0].createdAt
+    state.grants.push(
+      { id: 'grant-available', organizationId: 'org-1', accountId: 'account-1', tokenHash: 'available-hash', tokenHint: '••••available', expiresAt: null, disabledAt: null, deletedAt: null, boundAt: null, deviceId: null, createdById: 'admin-1', createdAt, updatedAt: createdAt },
+      { id: 'grant-disabled', organizationId: 'org-1', accountId: 'account-1', tokenHash: 'disabled-hash', tokenHint: '••••disabled', expiresAt: null, disabledAt: new Date(), deletedAt: null, boundAt: null, deviceId: null, createdById: 'admin-1', createdAt, updatedAt: createdAt },
+      { id: 'grant-expired', organizationId: 'org-1', accountId: 'account-1', tokenHash: 'expired-hash', tokenHint: '••••expired', expiresAt: new Date(Date.now() - 1_000), disabledAt: null, deletedAt: null, boundAt: null, deviceId: null, createdById: 'admin-1', createdAt, updatedAt: createdAt },
+      { id: 'grant-deleted', organizationId: 'org-1', accountId: 'account-1', tokenHash: 'deleted-hash', tokenHint: '••••deleted', expiresAt: null, disabledAt: null, deletedAt: new Date(), boundAt: null, deviceId: null, createdById: 'admin-1', createdAt, updatedAt: createdAt }
+    )
+    const expected: Array<[DeviceGrantFilter, string[]]> = [
+      [DeviceGrantFilter.AVAILABLE, ['grant-available']],
+      [DeviceGrantFilter.BOUND, ['grant-1']],
+      [DeviceGrantFilter.DISABLED, ['grant-disabled']],
+      [DeviceGrantFilter.EXPIRED, ['grant-expired']],
+      [DeviceGrantFilter.DELETED, ['grant-deleted']],
+      [DeviceGrantFilter.ALL, ['grant-1', 'grant-available', 'grant-disabled', 'grant-expired']]
+    ]
+    for (const [status, grantIds] of expected) {
+      const result = await service.listGrouped('org-1', { limit: 50, offset: 0, status })
+      expect(result.items.flatMap(item => item.deviceGrants.map(grant => grant.id))).toEqual(grantIds)
+    }
   })
 })

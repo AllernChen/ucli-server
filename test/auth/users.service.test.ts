@@ -99,8 +99,8 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
               })),
             deviceGrants: state.grants.filter((grant: any) => grant.accountId === account.id && grant.organizationId === membership.organizationId)
               .map((grant: any) => ({
-                id: grant.id, tokenHint: '••••secret', expiresAt: null, disabledAt: null, deletedAt: null,
-                boundAt: null, deviceId: null, createdAt: account.createdAt, updatedAt: account.createdAt
+                id: grant.id, tokenHint: '••••secret', expiresAt: grant.expiresAt || null, disabledAt: grant.disabledAt || null, deletedAt: grant.deletedAt || null,
+                boundAt: grant.boundAt || null, deviceId: grant.deviceId || null, createdAt: account.createdAt, updatedAt: account.createdAt
               }))
           }
         }
@@ -208,6 +208,14 @@ describe('managed users', () => {
     const result = await service.detail('org-1', 'account-1')
     expect(result).toMatchObject({ id: 'account-1', organizationId: 'org-1', role: 'MEMBER' })
     expect(JSON.stringify(result)).not.toContain('passwordHash')
+    expect(JSON.stringify(result)).not.toContain('secret-hash')
+  })
+
+  it('derives user-detail grant statuses from one captured lifecycle time', async () => {
+    const { service, state } = makeUsersHarness()
+    state.grants[0].disabledAt = new Date()
+    const result = await service.detail('org-1', 'account-1')
+    expect(result.deviceGrants).toEqual([expect.objectContaining({ id: 'grant-1', status: 'DISABLED' })])
     expect(JSON.stringify(result)).not.toContain('secret-hash')
   })
 

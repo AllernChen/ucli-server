@@ -1,6 +1,7 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { AccountStatus, Role } from '@prisma/client'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
+import { deriveDeviceGrantStatus, type DeviceGrantStatus } from '../../../packages/security/src/device-grants.js'
 import type { CreateManagedUserDto, ManagedUserPageQueryDto } from './device-grants.dto.js'
 
 export interface ManagedUser {
@@ -36,6 +37,7 @@ export interface ManagedUserDetail extends ManagedUser {
     deviceId: string | null
     createdAt: Date
     updatedAt: Date
+    status: DeviceGrantStatus
   }>
 }
 
@@ -104,6 +106,7 @@ export class UsersService {
   }
 
   async detail(organizationId: string, accountId: string): Promise<ManagedUserDetail> {
+    const now = new Date()
     const membership = await this.prisma.membership.findUnique({
       where: { organizationId_accountId: { organizationId, accountId } },
       select: {
@@ -127,7 +130,8 @@ export class UsersService {
       id: account.id, organizationId: membership.organizationId, email: account.email, displayName: account.displayName,
       status: membership.status, role: membership.role, createdAt: account.createdAt,
       deviceCount: account.devices.length, deviceGrantCount: account.deviceGrants.length,
-      devices: account.devices, deviceGrants: account.deviceGrants
+      devices: account.devices,
+      deviceGrants: account.deviceGrants.map(grant => ({ ...grant, status: deriveDeviceGrantStatus(grant, now) }))
     }
   }
 
