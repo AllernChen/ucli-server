@@ -3,7 +3,7 @@ import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
 import { toast } from '../toast'
-import type { ManagedUser, Page } from '../device-grants'
+import { createExclusiveAsyncRequestGate, type ManagedUser, type Page } from '../device-grants'
 import Drawer from '../components/Drawer.vue'
 import Pagination from '../components/Pagination.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
@@ -19,8 +19,7 @@ const pendingUser = ref<ManagedUser | null>(null)
 const result = ref<Page<ManagedUser>>({ items: [], total: 0, limit: 20, offset: 0 })
 const filters = reactive({ q: '', limit: 20, offset: 0 })
 const createForm = reactive({ email: '', displayName: '' })
-let createGeneration = 0
-let disposed = false
+const createGate = createExclusiveAsyncRequestGate(pending => { createPending.value = pending })
 
 async function load() {
   loading.value = true
@@ -52,20 +51,21 @@ function closeCreate() {
 
 async function createUser() {
   if (createPending.value) return
-  const generation = ++createGeneration
+  let operation = 0
   formError.value = ''
-  createPending.value = true
   try {
-    await api('/api/v1/admin/users', { method: 'POST', body: JSON.stringify(createForm) })
-    if (disposed || generation !== createGeneration) return
+    const created = await createGate.run(async requestOperation => {
+      operation = requestOperation
+      await api('/api/v1/admin/users', { method: 'POST', body: JSON.stringify(createForm) })
+      return true
+    })
+    if (!created || !createGate.isCurrent(operation)) return
     createOpen.value = false
     toast('用户已创建')
     await load()
   } catch (value: unknown) {
-    if (disposed || generation !== createGeneration) return
+    if (!createGate.isCurrent(operation)) return
     formError.value = value instanceof Error && value.message ? value.message : '创建用户失败'
-  } finally {
-    if (!disposed && generation === createGeneration) createPending.value = false
   }
 }
 
@@ -97,7 +97,7 @@ function setOffset(offset: number) {
 }
 
 onMounted(load)
-onUnmounted(() => { disposed = true; createGeneration++; createPending.value = false })
+onUnmounted(() => createGate.dispose())
 </script>
 
 <template>

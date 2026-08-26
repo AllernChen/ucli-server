@@ -34,6 +34,8 @@ watch(() => props.open, async open => {
     await nextTick()
     focusInitialDialogElement(dialog.value)
   } else {
+    await nextTick()
+    if (props.open) return
     restoreFocus()
   }
 }, { immediate: true })

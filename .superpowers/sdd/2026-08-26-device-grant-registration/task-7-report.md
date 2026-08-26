@@ -13,7 +13,7 @@
 
 - TDD RED：`npx vitest run test/admin/device-grant-management.test.ts test/admin/device-grant-views.test.ts` 在 helper 和视图不存在时失败。
 - Focused：`npx vitest run test/admin/device-grant-management.test.ts test/admin/device-grant-views.test.ts test/admin/model-form-errors.test.ts`（3 files / 12 tests passed）。
-- 相关管理端全量：`npx vitest run test/admin`（10 files / 83 tests passed）。
+- 相关管理端全量：`npx vitest run test/admin`（11 files / 90 tests passed）。
 - 类型检查：`npm run typecheck`（passed）。
 - 管理端构建：`npm run admin:build`（passed；Vite 仅报告既有 Analytics chunk 大小警告）。
 - 静态检查：`git diff --check`（无 whitespace errors）；治理页不再包含旧邀请、成员或设备管理 endpoint，新增视图无 console/storage/URL secret 路径。
@@ -26,3 +26,10 @@
 - `Drawer` 与 `ConfirmDialog` 统一提供可访问 dialog 语义、唯一标题/描述关联、初始焦点、Tab 焦点循环、Escape 关闭（支持 pending 禁止关闭）及关闭后焦点恢复；详情页两个弹层复用该组件。
 - 用户详情授权的响应类型与聚合授权摘要拆分，避免将详情接口未返回的 `accountId`、`createdById`、`device` 误声明为必填。
 - 回归测试覆盖五种授权状态的标签/动作、路由切换/卸载时的晚响应抑制、重复创建门控与弹层 ARIA/焦点/Escape 契约。
+
+## 复审收口
+
+- Dialog 焦点恢复改为在关闭后的 `nextTick` 执行；若原触发控件因确认操作已禁用、断开或隐藏，会跳过它并聚焦页面首个稳定可聚焦控件。初始焦点同样跳过禁用目标。
+- Drawer 增加可见 `description` 与唯一的 `aria-describedby`；创建授权和一次性连接链接 drawer 分别关联创建说明与“关闭后无法再次查看完整令牌”。
+- 用户创建与详情授权创建共同改用可测试的互斥异步 request gate：第二次提交不会发起请求，成功或失败都会在 `finally` 释放；切换用户或卸载会使旧操作失效，不应用晚到的用户或 secret 响应。
+- 新增 deferred Promise、pending 回调和 fake-DOM 焦点测试，验证互斥、失败后重试、旧 GET/POST 丢弃、Tab 环绕、初始禁用焦点跳过及确认/取消后的焦点恢复。

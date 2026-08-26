@@ -112,3 +112,39 @@ export function createRequestLifecycle() {
     dispose() { disposed = true; generation++ }
   }
 }
+
+export function createExclusiveAsyncRequestGate(onPending: (pending: boolean) => void = () => {}) {
+  let pending = false
+  let generation = 0
+  let disposed = false
+  const setPending = (value: boolean) => {
+    if (pending === value) return
+    pending = value
+    onPending(value)
+  }
+  const isCurrent = (operation: number) => !disposed && operation === generation
+  const invalidate = () => {
+    generation++
+    setPending(false)
+  }
+  return {
+    get pending() { return pending },
+    isCurrent,
+    async run<T>(action: (operation: number) => Promise<T>): Promise<T | null> {
+      if (pending || disposed) return null
+      const operation = ++generation
+      setPending(true)
+      try {
+        const value = await action(operation)
+        return isCurrent(operation) ? value : null
+      } finally {
+        if (operation === generation) setPending(false)
+      }
+    },
+    invalidate,
+    dispose() {
+      disposed = true
+      invalidate()
+    }
+  }
+}

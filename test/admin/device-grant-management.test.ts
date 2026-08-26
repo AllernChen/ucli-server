@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest'
-import { createRequestLifecycle, deviceGrantQuery, grantActions, grantExpiryPayload, grantStatusLabel } from '../../apps/admin/src/device-grants.js'
+import { describe, expect, it, vi } from 'vitest'
+import { createExclusiveAsyncRequestGate, createRequestLifecycle, deviceGrantQuery, grantActions, grantExpiryPayload, grantStatusLabel } from '../../apps/admin/src/device-grants.js'
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => { resolve = resolvePromise; reject = rejectPromise })
+  return { promise, resolve, reject }
+}
 
 describe('device grant administration helpers', () => {
   it('offers reversible actions for disabled grants and no actions for deleted grants', () => {
@@ -35,17 +42,40 @@ describe('device grant administration helpers', () => {
     }
   })
 
-  it('rejects stale and disposed responses after a user-detail route change', () => {
+  it('rejects late user-detail GET and POST effects after a route change or unmount', async () => {
     const lifecycle = createRequestLifecycle()
     const userOneRequest = lifecycle.next()
-    const userTwoRequest = lifecycle.next()
+    const oldGet = deferred<void>()
+    const oldPost = deferred<void>()
     const applied: string[] = []
-
-    if (lifecycle.isCurrent(userOneRequest)) applied.push('old-user-secret')
+    const completeGet = oldGet.promise.then(() => { if (lifecycle.isCurrent(userOneRequest)) applied.push('old-user') })
+    const completePost = oldPost.promise.then(() => { if (lifecycle.isCurrent(userOneRequest)) applied.push('old-user-secret') })
+    const userTwoRequest = lifecycle.next()
+    oldGet.resolve()
+    oldPost.resolve()
+    await Promise.all([completeGet, completePost])
     if (lifecycle.isCurrent(userTwoRequest)) applied.push('new-user')
     lifecycle.dispose()
     if (lifecycle.isCurrent(userTwoRequest)) applied.push('after-unmount')
 
     expect(applied).toEqual(['new-user'])
+  })
+
+  it('runs one create request at a time and releases after success or failure', async () => {
+    const pending = vi.fn()
+    const gate = createExclusiveAsyncRequestGate(pending)
+    const firstRequest = deferred<string>()
+    const first = gate.run(() => firstRequest.promise)
+    const blocked = await gate.run(async () => 'second')
+
+    expect(blocked).toBeNull()
+    expect(gate.pending).toBe(true)
+    firstRequest.resolve('created')
+    expect(await first).toBe('created')
+    expect(gate.pending).toBe(false)
+    await expect(gate.run(async () => { throw new Error('conflict') })).rejects.toThrow('conflict')
+    expect(gate.pending).toBe(false)
+    expect(await gate.run(async () => 'retry')).toBe('retry')
+    expect(pending.mock.calls.map(([value]) => value)).toEqual([true, false, true, false, true, false])
   })
 })

@@ -47,9 +47,13 @@ describe('device grant admin views', () => {
       expect(source).toContain('restoreDialogFocus')
     }
     expect(drawer).toContain('aria-label="关闭"')
+    expect(drawer).toContain('description?: string')
+    expect(drawer).toContain('aria-describedby')
     expect(confirm).toContain('aria-describedby')
     expect(detailView).toContain('<Drawer :open="grantOpen"')
     expect(detailView).toContain('<Drawer :open="Boolean(createdSecret)"')
+    expect(detailView).toContain('description="创建后会显示一次完整连接链接')
+    expect(detailView).toContain('description="关闭后无法再次查看完整令牌"')
   })
 
   it('manages grouped grants through lifecycle endpoints', () => {
