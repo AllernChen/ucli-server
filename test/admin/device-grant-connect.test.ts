@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { buildUcliConnectUrl, readGrantToken } from '../../apps/admin/src/device-grant-connect.js'
+import { buildUcliConnectUrl, connectionStateForGrantStatus, readGrantToken } from '../../apps/admin/src/device-grant-connect.js'
 import { publicApi } from '../../apps/admin/src/api.js'
 
 describe('device grant browser connection', () => {
@@ -20,6 +20,25 @@ describe('device grant browser connection', () => {
 
   it('rejects non-http server protocols', () => {
     expect(() => buildUcliConnectUrl('file:///tmp/server', 'secret')).toThrow('Unsupported server protocol')
+  })
+
+  it('only enables browser connection actions for available grants', () => {
+    expect(connectionStateForGrantStatus('AVAILABLE')).toMatchObject({ canConnect: true })
+    expect(connectionStateForGrantStatus('DISABLED')).toEqual({
+      canConnect: false, label: '已禁用', message: '授权已被管理员禁用，请联系管理员重新启用。'
+    })
+    expect(connectionStateForGrantStatus('EXPIRED')).toEqual({
+      canConnect: false, label: '已过期', message: '授权已到期，请联系管理员续期。'
+    })
+    expect(connectionStateForGrantStatus('DELETED')).toEqual({
+      canConnect: false, label: '已删除', message: '授权已被删除，不能再用于连接 UCLI。'
+    })
+    expect(connectionStateForGrantStatus('BOUND')).toEqual({
+      canConnect: false, label: '已绑定', message: '授权已绑定设备，不能用于其他设备。'
+    })
+    expect(connectionStateForGrantStatus('unexpected')).toEqual({
+      canConnect: false, label: '状态未知', message: '授权状态无法识别，请联系管理员。'
+    })
   })
 
   it('sends preview requests without administrator authentication or login side effects', async () => {
@@ -47,5 +66,15 @@ describe('device grant browser connection', () => {
     expect(source).not.toMatch(/\{\{\s*(?:grant)?token\s*\}\}/i)
     expect(source).not.toMatch(/console\.[^(]+\([^)]*token/i)
     expect(source).not.toMatch(/route\.query|location\.search/i)
+  })
+
+  it('guards launch and copy actions behind the available status', async () => {
+    const source = await readFile(resolve('apps/admin/src/views/Connect.vue'), 'utf8')
+    expect(source).toContain('v-if="connectionState.canConnect"')
+    expect(source).toContain('{{ connectionState.label }}')
+    expect(source).toContain('{{ connectionState.message }}')
+    const availableActions = source.split('<template v-if="connectionState.canConnect">')[1]
+    expect(availableActions).toContain('连接 UCLI')
+    expect(availableActions).toContain('复制连接链接')
   })
 })

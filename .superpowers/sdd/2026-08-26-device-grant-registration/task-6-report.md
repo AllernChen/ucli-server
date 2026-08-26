@@ -20,3 +20,10 @@
 ## 备注
 
 一次与构建、类型检查并行执行的全量测试使 `archive-line-endings` 在 5 秒内超时；该测试单独复现通过，随后串行全量测试全部通过，因此未修改无关部署测试。
+
+## 审查修复：浏览器动作状态门控
+
+- 新增纯状态映射：仅 `AVAILABLE` 返回可连接状态；`DISABLED`、`EXPIRED`、`DELETED`、`BOUND` 和未知状态均返回不可操作的中文说明。
+- `BOUND` 明确提示“授权已绑定设备，不能用于其他设备。”；浏览器页不再提供连接或复制动作，已唤起 UCLI 的同安装 ID 重试仍由客户端处理。
+- 页面使用中文状态标签和说明，不再仅展示后端枚举；连接和复制操作同时在模板和事件处理函数中受 `canConnect` 限制。
+- 验证：`npx vitest run test/admin/device-grant-connect.test.ts`（7 passed）、`npm run typecheck`、`npm run admin:build` 均通过。

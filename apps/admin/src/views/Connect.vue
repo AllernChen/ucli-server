@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { publicApi } from '../api'
-import { buildUcliConnectUrl, readGrantToken } from '../device-grant-connect'
+import { buildUcliConnectUrl, connectionStateForGrantStatus, readGrantToken } from '../device-grant-connect'
 
 type GrantPreview = {
   account: { displayName: string }
@@ -15,6 +15,7 @@ const error = ref('')
 const notice = ref('')
 const preview = ref<GrantPreview | null>(null)
 const serverOrigin = ref('')
+const connectionState = computed(() => connectionStateForGrantStatus(preview.value?.status || ''))
 let grantToken = ''
 
 function connectionUrl() {
@@ -22,11 +23,11 @@ function connectionUrl() {
 }
 
 function connect() {
-  if (grantToken) window.location.href = connectionUrl()
+  if (connectionState.value.canConnect && grantToken) window.location.href = connectionUrl()
 }
 
 async function copyConnectionLink() {
-  if (!grantToken) return
+  if (!connectionState.value.canConnect || !grantToken) return
   try {
     await navigator.clipboard.writeText(connectionUrl())
     notice.value = '连接链接已复制，可在安装 UCLI 后打开。'
@@ -75,12 +76,15 @@ onMounted(async () => {
           <div><dt>服务端</dt><dd>{{ serverOrigin }}</dd></div>
           <div><dt>组织</dt><dd>{{ preview.organization.name }}</dd></div>
           <div><dt>用户</dt><dd>{{ preview.account.displayName }}</dd></div>
-          <div><dt>授权状态</dt><dd>{{ preview.status }}</dd></div>
+          <div><dt>授权状态</dt><dd>{{ connectionState.label }}</dd></div>
           <div><dt>有效期</dt><dd>{{ expiryLabel(preview.authorization.expiresAt) }}</dd></div>
         </dl>
-        <button class="primary" @click="connect">连接 UCLI</button>
-        <p v-if="notice" class="state">{{ notice }}</p>
-        <details><summary>未安装 UCLI？</summary><p>安装 UCLI 后重新打开此页面，或复制连接链接后在 UCLI 中打开。</p><button @click="copyConnectionLink">复制连接链接</button></details>
+        <p class="state">{{ connectionState.message }}</p>
+        <template v-if="connectionState.canConnect">
+          <button class="primary" @click="connect">连接 UCLI</button>
+          <p v-if="notice" class="state">{{ notice }}</p>
+          <details><summary>未安装 UCLI？</summary><p>安装 UCLI 后重新打开此页面，或复制连接链接后在 UCLI 中打开。</p><button @click="copyConnectionLink">复制连接链接</button></details>
+        </template>
       </template>
     </section>
   </main>
