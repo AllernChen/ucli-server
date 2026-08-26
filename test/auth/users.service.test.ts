@@ -5,7 +5,7 @@ import { validate } from 'class-validator'
 import { UsersService } from '../../apps/api/src/users.service.js'
 import { CreateManagedUserDto } from '../../apps/api/src/device-grants.dto.js'
 
-function makeUsersHarness(options: { role?: string; secondOrganization?: boolean } = {}) {
+function makeUsersHarness(options: { role?: string; secondOrganization?: boolean; sharedAccount?: boolean; otherRole?: string } = {}) {
   const state: any = {
     accounts: [{
       id: 'account-1', email: 'existing@example.com', displayName: 'Existing user', passwordHash: null,
@@ -22,6 +22,9 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
     })
     state.memberships.push({ organizationId: 'org-2', accountId: 'account-2', role: 'MEMBER' })
   }
+  if (options.sharedAccount) state.memberships.push({
+    organizationId: 'org-2', accountId: 'account-1', role: options.otherRole || 'MEMBER'
+  })
 
   const accountFor = (accountId: string) => state.accounts.find((account: any) => account.id === accountId)
   const matchesAccount = (account: any, filter: any) => {
@@ -30,7 +33,8 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
     return ['email', 'displayName'].every(field => !filter[field] || account[field].toLowerCase().includes(filter[field].contains.toLowerCase()))
   }
   const matchesMembership = (membership: any, where: any) =>
-    (!where.organizationId || membership.organizationId === where.organizationId) && matchesAccount(accountFor(membership.accountId), where.account)
+    (!where.organizationId || membership.organizationId === where.organizationId) &&
+    (!where.accountId || membership.accountId === where.accountId) && matchesAccount(accountFor(membership.accountId), where.account)
   const membershipWithAccount = (membership: any) => ({
     ...membership,
     account: {
@@ -56,7 +60,8 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
       },
       update: async ({ where, data }: any) => {
         const account = accountFor(where.id)
-        Object.assign(account, data)
+        const { tokenVersion, ...fields } = data
+        Object.assign(account, fields)
         if (data.tokenVersion?.increment) account.tokenVersion += data.tokenVersion.increment
         return account
       }
@@ -68,8 +73,10 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
         return membership
       },
       count: async ({ where }: any) => state.memberships.filter((membership: any) => matchesMembership(membership, where)).length,
-      findMany: async ({ where, skip, take }: any) => state.memberships.filter((membership: any) => matchesMembership(membership, where))
-        .slice(skip, skip + take).map(membershipWithAccount),
+      findMany: async ({ where, skip, take }: any) => {
+        const items = state.memberships.filter((membership: any) => matchesMembership(membership, where))
+        return items.slice(skip || 0, take === undefined ? undefined : (skip || 0) + take).map(membershipWithAccount)
+      },
       findUnique: async ({ where }: any) => {
         const key = where.organizationId_accountId
         const membership = state.memberships.find((item: any) => item.organizationId === key.organizationId && item.accountId === key.accountId)
@@ -116,6 +123,30 @@ describe('managed users', () => {
   it('refuses to disable a platform administrator through member routes', async () => {
     const { service } = makeUsersHarness({ role: 'PLATFORM_ADMIN' })
     await expect(service.disable('org-1', 'account-1')).rejects.toMatchObject({ status: 403 })
+  })
+
+  it('does not change a member account shared by multiple organizations', async () => {
+    const { service, state } = makeUsersHarness({ sharedAccount: true })
+    await expect(service.disable('org-1', 'account-1')).rejects.toMatchObject({ status: 403 })
+    expect(state.accounts[0].status).toBe('ACTIVE')
+
+    state.accounts[0].status = 'DISABLED'
+    await expect(service.enable('org-1', 'account-1')).rejects.toMatchObject({ status: 403 })
+    expect(state.accounts[0].status).toBe('DISABLED')
+  })
+
+  it('does not change a current-organization member with a platform-admin role elsewhere', async () => {
+    const { service, state } = makeUsersHarness({ sharedAccount: true, otherRole: 'PLATFORM_ADMIN' })
+    await expect(service.disable('org-1', 'account-1')).rejects.toMatchObject({ status: 403 })
+    expect(state.accounts[0].status).toBe('ACTIVE')
+  })
+
+  it('disables and enables an account with exactly one MEMBER membership', async () => {
+    const { service, state } = makeUsersHarness()
+    await expect(service.disable('org-1', 'account-1')).resolves.toEqual({ status: 'DISABLED' })
+    expect(state.accounts[0]).toMatchObject({ status: 'DISABLED', tokenVersion: 2 })
+    await expect(service.enable('org-1', 'account-1')).resolves.toEqual({ status: 'ACTIVE' })
+    expect(state.accounts[0].status).toBe('ACTIVE')
   })
 
   it('does not return users from another organization', async () => {

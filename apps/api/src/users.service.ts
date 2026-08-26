@@ -142,13 +142,18 @@ export class UsersService {
   }
 
   private async updateStatus(organizationId: string, accountId: string, status: 'ACTIVE' | 'DISABLED') {
-    const membership = await this.prisma.membership.findUnique({
-      where: { organizationId_accountId: { organizationId, accountId } }, select: { role: true, accountId: true }
-    })
-    if (!membership) throw new NotFoundException('Managed user not found')
-    if (membership.role === Role.PLATFORM_ADMIN) throw new ForbiddenException('Platform administrators cannot be managed here')
-    await this.prisma.account.update({
-      where: { id: membership.accountId }, data: { status, ...(status === 'DISABLED' ? { tokenVersion: { increment: 1 } } : {}) }
+    await this.prisma.$transaction(async transaction => {
+      const memberships = await transaction.membership.findMany({
+        where: { accountId }, select: { organizationId: true, role: true, accountId: true }
+      })
+      const membership = memberships.find(item => item.organizationId === organizationId)
+      if (!membership) throw new NotFoundException('Managed user not found')
+      if (memberships.length !== 1 || membership.role !== Role.MEMBER) {
+        throw new ForbiddenException('Managed user cannot be updated')
+      }
+      await transaction.account.update({
+        where: { id: membership.accountId }, data: { status, ...(status === 'DISABLED' ? { tokenVersion: { increment: 1 } } : {}) }
+      })
     })
   }
 }
