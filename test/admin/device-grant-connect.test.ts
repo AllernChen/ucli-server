@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { buildUcliConnectUrl, connectionStateForGrantStatus, createExclusiveGrantActionGate, readGrantToken, revalidateGrantAction } from '../../apps/admin/src/device-grant-connect.js'
+import { buildUcliConnectUrl, connectionStateForGrantStatus, createExclusiveGrantActionGate, createGrantActionLifecycle, readGrantToken, revalidateGrantAction } from '../../apps/admin/src/device-grant-connect.js'
 import { publicApi } from '../../apps/admin/src/api.js'
 
 describe('device grant browser connection', () => {
@@ -90,6 +90,34 @@ describe('device grant browser connection', () => {
     expect(await gate.run(async () => true)).toBe(true)
   })
 
+  it('suppresses state, navigation, clipboard, and notice callbacks after disposal', async () => {
+    let resolvePreview: () => void = () => {}
+    const preview = new Promise<void>(resolve => { resolvePreview = resolve })
+    const lifecycle = createGrantActionLifecycle()
+    const calls = { state: 0, navigate: 0, clipboard: 0, notice: 0 }
+    const waitForPreview = (async () => {
+      await preview
+      lifecycle.apply(() => { calls.state++; calls.navigate++; calls.clipboard++ })
+    })()
+
+    lifecycle.dispose()
+    resolvePreview()
+    await waitForPreview
+    expect(calls).toEqual({ state: 0, navigate: 0, clipboard: 0, notice: 0 })
+
+    let resolveClipboard: () => void = () => {}
+    const clipboard = new Promise<void>(resolve => { resolveClipboard = resolve })
+    const copyLifecycle = createGrantActionLifecycle()
+    const waitForClipboard = (async () => {
+      await clipboard
+      copyLifecycle.apply(() => { calls.notice++ })
+    })()
+    copyLifecycle.dispose()
+    resolveClipboard()
+    await waitForClipboard
+    expect(calls.notice).toBe(0)
+  })
+
   it('sends preview requests without administrator authentication or login side effects', async () => {
     let requestInit: RequestInit | undefined
     const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -123,7 +151,14 @@ describe('device grant browser connection', () => {
     expect(source).toContain('{{ connectionState.label }}')
     expect(source).toContain('{{ connectionState.message }}')
     expect(source).toContain('createExclusiveGrantActionGate()')
+    expect(source).toContain('createGrantActionLifecycle()')
     expect(source.match(/:disabled="actionPending"/g)).toHaveLength(2)
+    expect(source).toContain('if (lifecycle.disposed) return')
+    expect(source).toContain('if (!(await revalidateAction()) || lifecycle.disposed) return false\n    window.location.href = connectionUrl()')
+    expect(source).toContain('await navigator.clipboard.writeText(connectionUrl())\n      if (lifecycle.disposed) return false\n      notice.value')
+    expect(source).toContain('const initialPreview = await previewGrant(grantToken)\n    if (lifecycle.disposed) return\n    updatePreview(initialPreview)')
+    expect(source).toContain('lifecycle.apply(() => { actionPending.value = value })')
+    expect(source).toContain('lifecycle.apply(() => { loading.value = false })')
     const availableActions = source.split('<template v-if="connectionState.canConnect">')[1]
     expect(availableActions).toContain('连接 UCLI')
     expect(availableActions).toContain('复制连接链接')

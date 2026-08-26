@@ -41,3 +41,10 @@
 - 页面以 `actionPending` 镜像 gate 状态，两个动作按钮在重验期间均 disabled；动作开始时再次确认内存令牌存在。
 - gate 和页面动作均在 `finally` 释放；组件卸载后，完成中的预览不会继续更新状态、跳转或写入剪贴板。
 - deferred Promise 测试覆盖并发抑制、终态/异常释放和后续重新尝试；验证：focused 10 passed、`npm run typecheck`、`npm run admin:build` 均通过。
+
+## 终态复审修复：组件卸载竞态
+
+- 新增可测试的 `createGrantActionLifecycle`；卸载时立即标记 disposed，后续 pending、加载、预览状态和提示写入均被拒绝。
+- 重验、导航、剪贴板写入及其完成提示均在每个 await 后重新检查 disposed；初始预览的成功、异常和 finally 回写亦受守卫保护。
+- 互斥 gate 现在覆盖完整动作（包含剪贴板 Promise），并在 finally 中通过 lifecycle guard 释放 pending。
+- deferred 测试验证卸载后的预览/剪贴板完成不会触发状态、导航、复制或提示回调；组件源断言覆盖实际副作用守卫。验证：focused 11 passed、`npm run typecheck`、`npm run admin:build` 均通过。

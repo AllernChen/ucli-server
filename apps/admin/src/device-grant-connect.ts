@@ -53,3 +53,16 @@ export function createExclusiveGrantActionGate() {
     }
   }
 }
+
+export function createGrantActionLifecycle() {
+  let disposed = false
+  return {
+    get disposed() { return disposed },
+    dispose() { disposed = true },
+    apply(effect: () => void) {
+      if (disposed) return false
+      effect()
+      return true
+    }
+  }
+}

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { publicApi } from '../api'
-import { buildUcliConnectUrl, connectionStateForGrantStatus, createExclusiveGrantActionGate, readGrantToken, revalidateGrantAction } from '../device-grant-connect'
+import { buildUcliConnectUrl, connectionStateForGrantStatus, createExclusiveGrantActionGate, createGrantActionLifecycle, readGrantToken, revalidateGrantAction } from '../device-grant-connect'
 
 type GrantPreview = {
   account: { displayName: string }
@@ -18,8 +18,8 @@ const serverOrigin = ref('')
 const connectionState = ref(connectionStateForGrantStatus(''))
 const actionPending = ref(false)
 const actionGate = createExclusiveGrantActionGate()
+const lifecycle = createGrantActionLifecycle()
 let grantToken = ''
-let disposed = false
 
 function connectionUrl() {
   return buildUcliConnectUrl(serverOrigin.value, grantToken)
@@ -36,35 +36,53 @@ function updatePreview(latest: GrantPreview) {
   connectionState.value = connectionStateForGrantStatus(latest.status)
 }
 
+function setActionPending(value: boolean) {
+  lifecycle.apply(() => { actionPending.value = value })
+}
+
 async function revalidateAction() {
+  if (!grantToken || lifecycle.disposed) return false
+  const latest = await revalidateGrantAction(grantToken, previewGrant)
+  if (lifecycle.disposed) return false
+  connectionState.value = latest.state
+  if (latest.preview) preview.value = latest.preview
+  return latest.state.canConnect
+}
+
+async function runAction(action: () => Promise<boolean>) {
   return actionGate.run(async () => {
-    if (!grantToken || disposed) return false
-    actionPending.value = true
+    if (!grantToken || lifecycle.disposed) return false
+    setActionPending(true)
     try {
-      const latest = await revalidateGrantAction(grantToken, previewGrant)
-      if (disposed) return false
-      connectionState.value = latest.state
-      if (latest.preview) preview.value = latest.preview
-      return latest.state.canConnect
+      return await action()
     } finally {
-      actionPending.value = false
+      setActionPending(false)
     }
   })
 }
 
 async function connect() {
-  if (!(await revalidateAction())) return
-  window.location.href = connectionUrl()
+  await runAction(async () => {
+    if (!(await revalidateAction()) || lifecycle.disposed) return false
+    window.location.href = connectionUrl()
+    return true
+  })
 }
 
 async function copyConnectionLink() {
-  if (!(await revalidateAction())) return
-  try {
-    await navigator.clipboard.writeText(connectionUrl())
-    notice.value = '连接链接已复制，可在安装 UCLI 后打开。'
-  } catch {
-    notice.value = '无法自动复制连接链接，请在安装 UCLI 后重新打开此授权页。'
-  }
+  await runAction(async () => {
+    if (!(await revalidateAction()) || lifecycle.disposed) return false
+    try {
+      await navigator.clipboard.writeText(connectionUrl())
+      if (lifecycle.disposed) return false
+      notice.value = '连接链接已复制，可在安装 UCLI 后打开。'
+      return true
+    } catch {
+      if (lifecycle.disposed) return false
+      notice.value = '无法自动复制连接链接，请在安装 UCLI 后重新打开此授权页。'
+      return false
+    }
+  })
 }
 
 function expiryLabel(expiresAt: string | null) {
@@ -83,15 +101,18 @@ onMounted(async () => {
     return
   }
   try {
-    updatePreview(await previewGrant(grantToken))
+    const initialPreview = await previewGrant(grantToken)
+    if (lifecycle.disposed) return
+    updatePreview(initialPreview)
   } catch {
+    if (lifecycle.disposed) return
     error.value = '无法加载授权预览，请检查链接是否有效。'
   } finally {
-    loading.value = false
+    lifecycle.apply(() => { loading.value = false })
   }
 })
 
-onUnmounted(() => { disposed = true })
+onUnmounted(() => { lifecycle.dispose() })
 </script>
 
 <template>
