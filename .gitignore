@@ -11,3 +11,4 @@ conf/.env
 images/*.tar
 images/*.tar.gz
 releases/
+.worktrees/
