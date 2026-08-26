@@ -255,6 +255,12 @@ describe('device grant redemption', () => {
     expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
     expect(errorCode((results.find(result => result.status === 'rejected') as PromiseRejectedResult).reason)).toBe('invalid_device')
     expect(state.grants.filter(grant => grant.deviceId !== null)).toHaveLength(1)
+    const failureAudit = state.audits.find(audit => audit.metadata.outcome === 'failure')
+    expect(failureAudit).toMatchObject({ resourceType: 'device_grant', action: 'device_grant.redeem', metadata: { code: 'invalid_device' } })
+    expect(JSON.stringify(failureAudit)).not.toContain(token)
+    expect(JSON.stringify(failureAudit)).not.toContain(otherGrantToken)
+    expect(JSON.stringify(failureAudit)).not.toContain(hashOpaqueToken(token))
+    expect(JSON.stringify(failureAudit)).not.toContain(hashOpaqueToken(otherGrantToken))
   })
 })
 

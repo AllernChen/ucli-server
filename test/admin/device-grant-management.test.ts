@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createExclusiveAsyncRequestGate, createRequestLifecycle, deviceGrantQuery, grantActions, grantExpiryPayload, grantStatusLabel } from '../../apps/admin/src/device-grants.js'
+import { createExclusiveAsyncRequestGate, createRequestLifecycle, deviceGrantQuery, grantActions, grantExpiryPayload, grantStatusLabel, type DeviceGrantSummary, type ManagedUser } from '../../apps/admin/src/device-grants.js'
+
+type Expect<T extends true> = T
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
+type _ManagedUserHasLastSeenAt = Expect<Equal<'lastSeenAt' extends keyof ManagedUser ? true : false, true>>
+type _DeviceGrantHasNoTopLevelLastSeenAt = Expect<Equal<'lastSeenAt' extends keyof DeviceGrantSummary ? true : false, false>>
 
 function deferred<T>() {
   let resolve!: (value: T) => void

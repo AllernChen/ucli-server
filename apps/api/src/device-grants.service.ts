@@ -219,9 +219,9 @@ export class DeviceGrantsService {
         return this.credentials(grant, role, device.id, refreshToken, now)
       })
     } catch (error) {
-      if (knownGrant) await this.writeFailureAudit(knownGrant, error)
-      if (isInstallationIdConflict(error)) throw grantException('invalid_device')
-      throw error
+      const finalError = isInstallationIdConflict(error) ? grantException('invalid_device') : error
+      if (knownGrant) await this.writeFailureAudit(knownGrant, finalError)
+      throw finalError
     }
   }
 

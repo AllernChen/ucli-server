@@ -25,7 +25,6 @@ export interface DeviceGrantSummary {
   deviceId: string | null
   createdById: string
   createdAt: string
-  lastSeenAt: string | null
   updatedAt: string
   status: DeviceGrantStatus
   device?: ManagedDevice | null
@@ -52,6 +51,7 @@ export interface ManagedUser {
   status: ManagedUserStatus
   role: ManagedUserRole
   createdAt: string
+  lastSeenAt: string | null
   deviceCount: number
   deviceGrantCount: number
 }
