@@ -123,6 +123,8 @@ UCLI 可以独立安装和使用，不依赖 UCLI Server。用户可在 UCLI 设
 POST /api/v1/admin/users
 GET  /api/v1/admin/users
 GET  /api/v1/admin/users/:userId
+POST /api/v1/admin/users/:userId/disable
+POST /api/v1/admin/users/:userId/enable
 ```
 
 创建普通成员请求：
@@ -134,7 +136,7 @@ GET  /api/v1/admin/users/:userId
 }
 ```
 
-创建操作以邮箱小写形式判重，在同一事务内创建账号和当前组织的 `MEMBER` 成员关系。详情接口返回用户基本信息、账号状态、授权摘要和设备摘要，但不返回任何凭证明文或摘要字段。
+创建操作以邮箱小写形式判重，在同一事务内创建账号和当前组织的 `MEMBER` 成员关系。详情接口返回用户基本信息、账号状态、授权摘要和设备摘要，但不返回任何凭证明文或摘要字段。禁用和启用接口只作用于当前组织内的普通成员；不得通过这些接口修改平台管理员账号。
 
 ### 设备授权
 
