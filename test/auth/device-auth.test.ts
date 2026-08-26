@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { createDeviceCode, hashOpaqueToken, verifyOpaqueToken } from '../../packages/security/src/tokens.js'
+import { createOpaqueToken, hashOpaqueToken, opaqueTokenHint, verifyOpaqueToken } from '../../packages/security/src/tokens.js'
 
 describe('device authentication tokens', () => {
-  it('creates user-friendly device codes without ambiguous characters', () => {
-    const code = createDeviceCode(() => Buffer.alloc(8, 3))
-    expect(code.userCode).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/)
-    expect(code.deviceCode.length).toBeGreaterThan(30)
+  it('creates an opaque base64url token and a non-secret hint', () => {
+    const token = createOpaqueToken(() => Buffer.alloc(32, 3))
+    expect(token).toBe(Buffer.alloc(32, 3).toString('base64url'))
+    expect(opaqueTokenHint(token)).toBe(`••••${token.slice(-6)}`)
   })
 
   it('stores opaque credentials as hashes', () => {
