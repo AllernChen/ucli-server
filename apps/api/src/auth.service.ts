@@ -57,8 +57,9 @@ export class AuthService {
   }
 
   async refresh(refreshToken: string) {
+    const oldRefreshTokenHash = hashOpaqueToken(refreshToken)
     const device = await this.prisma.device.findUnique({
-      where: { refreshTokenHash: hashOpaqueToken(refreshToken) },
+      where: { refreshTokenHash: oldRefreshTokenHash },
       include: { grant: true, organization: true, account: { include: { memberships: true } } }
     })
     if (!device?.grant) throw authorizationFailure('invalid_grant')
@@ -71,9 +72,10 @@ export class AuthService {
     const membership = device.account.memberships.find(item => item.organizationId === device.organizationId)
     if (!membership || membership.role !== Role.MEMBER || membership.status !== 'ACTIVE') throw authorizationFailure('account_inactive')
     const nextRefreshToken = randomBytes(32).toString('base64url')
-    await this.prisma.device.update({ where: { id: device.id }, data: {
+    const rotated = await this.prisma.device.updateMany({ where: { id: device.id, refreshTokenHash: oldRefreshTokenHash }, data: {
       refreshTokenHash: hashOpaqueToken(nextRefreshToken), lastSeenAt: now
     } })
+    if (rotated.count !== 1) throw authorizationFailure('invalid_grant')
     return {
       accessToken: signAccessToken({ sub: device.accountId, organizationId: device.organizationId, deviceId: device.id, role: membership.role, tokenVersion: device.account.tokenVersion }),
       refreshToken: nextRefreshToken, expiresIn: 900,

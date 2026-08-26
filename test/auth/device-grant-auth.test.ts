@@ -43,7 +43,8 @@ function makeAuthHarness(options: HarnessOptions = {}) {
     device: {
       findUnique: vi.fn(async () => ({ ...device, account, organization })),
       findFirst: vi.fn(async () => device),
-      update: vi.fn(async () => device)
+      update: vi.fn(async () => device),
+      updateMany: vi.fn(async () => ({ count: 1 }))
     }
   }
   return { service: new AuthService(prisma), prisma, verify: vi.mocked(argon2.verify) }
