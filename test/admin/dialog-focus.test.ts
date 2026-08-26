@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { focusInitialDialogElement, restoreDialogFocus, trapDialogFocus } from '../../apps/admin/src/components/dialog-focus.js'
+import { createDialogFocusLifecycle, focusInitialDialogElement, restoreDialogFocus, trapDialogFocus } from '../../apps/admin/src/components/dialog-focus.js'
 
 function focusTarget(overrides: Record<string, unknown> = {}) {
   return { disabled: false, hidden: false, isConnected: true, focus: vi.fn(), ...overrides }
@@ -47,5 +47,22 @@ describe('dialog focus helpers', () => {
     expect(trigger.focus).toHaveBeenCalledOnce()
     expect(disabledTrigger.focus).not.toHaveBeenCalled()
     expect(fallback.focus).toHaveBeenCalledOnce()
+  })
+
+  it('restores focus only once after a real open, including unmount while open', () => {
+    const trigger = focusTarget()
+    const lifecycle = createDialogFocusLifecycle()
+
+    lifecycle.restore()
+    expect(trigger.focus).not.toHaveBeenCalled()
+
+    lifecycle.open(trigger as unknown as HTMLElement)
+    lifecycle.restore()
+    lifecycle.restore()
+    expect(trigger.focus).toHaveBeenCalledOnce()
+
+    lifecycle.open(trigger as unknown as HTMLElement)
+    lifecycle.restore()
+    expect(trigger.focus).toHaveBeenCalledTimes(2)
   })
 })

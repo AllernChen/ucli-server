@@ -40,3 +40,24 @@ export function restoreDialogFocus(trigger: HTMLElement | null, fallback?: HTMLE
   const target = isUsableFocusTarget(trigger) ? trigger : isUsableFocusTarget(fallback) ? fallback : pageFallback
   target?.focus()
 }
+
+export function createDialogFocusLifecycle() {
+  let hasOpened = false
+  let shouldRestore = false
+  let trigger: HTMLElement | null = null
+  return {
+    get shouldRestore() { return hasOpened && shouldRestore },
+    open(nextTrigger: HTMLElement | null) {
+      hasOpened = true
+      trigger = nextTrigger
+      shouldRestore = Boolean(nextTrigger)
+    },
+    restore(fallback?: HTMLElement | null) {
+      if (!hasOpened || !shouldRestore || !trigger) return false
+      restoreDialogFocus(trigger, fallback)
+      trigger = null
+      shouldRestore = false
+      return true
+    }
+  }
+}

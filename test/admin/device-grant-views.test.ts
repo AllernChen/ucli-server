@@ -23,7 +23,8 @@ describe('device grant admin views', () => {
     expect(detailView).toContain("createdSecret.value = null")
     expect(detailView).toContain('copyError.value')
     expect(detailView).toContain('watch(userId')
-    expect(detailView).toContain('requestLifecycle.isCurrent')
+    expect(detailView).toContain('routeLifecycle.isCurrent')
+    expect(detailView).toContain('loadLifecycle.isCurrent')
     expect(detailView).toContain('if (grantPending.value) return')
     expect(detailView).toContain('UserDetailGrant')
   })
@@ -44,7 +45,7 @@ describe('device grant admin views', () => {
       expect(source).toContain('aria-labelledby')
       expect(source).toContain('trapDialogFocus')
       expect(source).toContain("event.key === 'Escape'")
-      expect(source).toContain('restoreDialogFocus')
+      expect(source).toContain('createDialogFocusLifecycle')
     }
     expect(drawer).toContain('aria-label="关闭"')
     expect(drawer).toContain('description?: string')

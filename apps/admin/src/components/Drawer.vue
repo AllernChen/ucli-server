@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { focusInitialDialogElement, restoreDialogFocus, trapDialogFocus } from './dialog-focus'
+import { createDialogFocusLifecycle, focusInitialDialogElement, trapDialogFocus } from './dialog-focus'
 
 let dialogIndex = 0
 const props = withDefaults(defineProps<{ open: boolean; title: string; description?: string; width?: string; closeDisabled?: boolean }>(), { closeDisabled: false })
@@ -9,6 +9,7 @@ const dialog = ref<HTMLElement | null>(null)
 const titleId = `drawer-title-${++dialogIndex}`
 const descriptionId = `drawer-description-${dialogIndex}`
 let returnFocus: HTMLElement | null = null
+const focusLifecycle = createDialogFocusLifecycle()
 
 function requestClose() {
   if (!props.closeDisabled) emit('close')
@@ -24,23 +25,24 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 function restoreFocus() {
-  restoreDialogFocus(returnFocus)
+  focusLifecycle.restore()
   returnFocus = null
 }
 
 watch(() => props.open, async open => {
   if (open) {
     returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    focusLifecycle.open(returnFocus)
     await nextTick()
     focusInitialDialogElement(dialog.value)
-  } else {
+  } else if (focusLifecycle.shouldRestore) {
     await nextTick()
     if (props.open) return
     restoreFocus()
   }
 }, { immediate: true })
 
-onBeforeUnmount(restoreFocus)
+onBeforeUnmount(() => { if (focusLifecycle.shouldRestore) restoreFocus() })
 </script>
 
 <template>

@@ -13,7 +13,7 @@
 
 - TDD RED：`npx vitest run test/admin/device-grant-management.test.ts test/admin/device-grant-views.test.ts` 在 helper 和视图不存在时失败。
 - Focused：`npx vitest run test/admin/device-grant-management.test.ts test/admin/device-grant-views.test.ts test/admin/model-form-errors.test.ts`（3 files / 12 tests passed）。
-- 相关管理端全量：`npx vitest run test/admin`（11 files / 90 tests passed）。
+- 相关管理端全量：`npx vitest run test/admin`（11 files / 91 tests passed）。
 - 类型检查：`npm run typecheck`（passed）。
 - 管理端构建：`npm run admin:build`（passed；Vite 仅报告既有 Analytics chunk 大小警告）。
 - 静态检查：`git diff --check`（无 whitespace errors）；治理页不再包含旧邀请、成员或设备管理 endpoint，新增视图无 console/storage/URL secret 路径。
@@ -33,3 +33,9 @@
 - Drawer 增加可见 `description` 与唯一的 `aria-describedby`；创建授权和一次性连接链接 drawer 分别关联创建说明与“关闭后无法再次查看完整令牌”。
 - 用户创建与详情授权创建共同改用可测试的互斥异步 request gate：第二次提交不会发起请求，成功或失败都会在 `finally` 释放；切换用户或卸载会使旧操作失效，不应用晚到的用户或 secret 响应。
 - 新增 deferred Promise、pending 回调和 fake-DOM 焦点测试，验证互斥、失败后重试、旧 GET/POST 丢弃、Tab 环绕、初始禁用焦点跳过及确认/取消后的焦点恢复。
+
+## 最终复审修复
+
+- Dialog focus lifecycle 只在实际捕获触发控件后才允许恢复；初始关闭不会抢占页面焦点，关闭后卸载不会二次恢复，打开时卸载仍恢复一次。关闭 watcher 在 `nextTick` 后检查该状态再恢复。
+- 用户详情将 route lifecycle 与 GET load sequence 拆开：刷新只淘汰旧 GET，不能淘汰同一用户正在创建的授权；仅路由切换或卸载会使在途创建失效。授权创建成功先保留一次性 secret，再刷新详情；刷新失败不会清空 secret。
+- 最终 focused：`npx vitest run test/admin/dialog-focus.test.ts test/admin/device-grant-management.test.ts test/admin/device-grant-views.test.ts`（3 files / 18 tests passed）。

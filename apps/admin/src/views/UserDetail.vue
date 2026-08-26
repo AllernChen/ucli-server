@@ -10,7 +10,9 @@ import StatusBadge from '../components/StatusBadge.vue'
 const route = useRoute()
 const router = useRouter()
 const userId = computed(() => String(route.params.id))
-const requestLifecycle = createRequestLifecycle()
+const routeLifecycle = createRequestLifecycle()
+const loadLifecycle = createRequestLifecycle()
+let currentRouteGeneration = 0
 const user = ref<ManagedUserDetail | null>(null)
 const loading = ref(true)
 const error = ref('')
@@ -31,8 +33,8 @@ function detailGrantStatusLabel(grant: UserDetailGrant) {
   return grantStatusLabel(grant.status)
 }
 
-function isCurrentRequest(generation: number, requestedUserId: string) {
-  return requestLifecycle.isCurrent(generation) && userId.value === requestedUserId
+function isCurrentRoute(generation: number, requestedUserId: string) {
+  return routeLifecycle.isCurrent(generation) && userId.value === requestedUserId
 }
 
 function clearSecret() {
@@ -54,20 +56,21 @@ function resetForUser() {
 }
 
 async function load() {
-  const generation = requestLifecycle.next()
+  const loadGeneration = loadLifecycle.next()
+  const routeGeneration = currentRouteGeneration
   const requestedUserId = userId.value
-  if (!isCurrentRequest(generation, requestedUserId)) return
+  if (!isCurrentRoute(routeGeneration, requestedUserId)) return
   loading.value = true
   error.value = ''
   try {
     const detail = await api<ManagedUserDetail>(`/api/v1/admin/users/${requestedUserId}`)
-    if (!isCurrentRequest(generation, requestedUserId)) return
+    if (!isCurrentRoute(routeGeneration, requestedUserId) || !loadLifecycle.isCurrent(loadGeneration)) return
     user.value = detail
   } catch (value: unknown) {
-    if (!isCurrentRequest(generation, requestedUserId)) return
+    if (!isCurrentRoute(routeGeneration, requestedUserId) || !loadLifecycle.isCurrent(loadGeneration)) return
     error.value = errorMessage(value, '加载用户失败')
   } finally {
-    if (isCurrentRequest(generation, requestedUserId)) loading.value = false
+    if (isCurrentRoute(routeGeneration, requestedUserId) && loadLifecycle.isCurrent(loadGeneration)) loading.value = false
   }
 }
 
@@ -88,25 +91,24 @@ function closeGrant() {
 async function createGrant() {
   if (grantPending.value || !canCreateGrant.value) return
   const requestedUserId = userId.value
+  const routeGeneration = currentRouteGeneration
   let operation = 0
-  let requestGeneration = 0
   grantError.value = ''
   clearSecret()
   try {
     const created = await grantGate.run(async requestOperation => {
       operation = requestOperation
-      requestGeneration = requestLifecycle.next()
       return api<{ token: string; connectionUrl: string }>(
         `/api/v1/admin/users/${requestedUserId}/device-grants`,
         { method: 'POST', body: JSON.stringify(grantExpiryPayload(grantForm)) }
       )
     })
-    if (!created || !grantGate.isCurrent(operation) || !isCurrentRequest(requestGeneration, requestedUserId)) return
+    if (!created || !grantGate.isCurrent(operation) || !isCurrentRoute(routeGeneration, requestedUserId)) return
     createdSecret.value = created
     grantOpen.value = false
     await load()
   } catch (value: unknown) {
-    if (!grantGate.isCurrent(operation) || !isCurrentRequest(requestGeneration, requestedUserId)) return
+    if (!grantGate.isCurrent(operation) || !isCurrentRoute(routeGeneration, requestedUserId)) return
     clearSecret()
     grantError.value = errorMessage(value, '创建授权失败')
   }
@@ -125,13 +127,15 @@ async function copyConnectionUrl() {
 }
 
 watch(userId, () => {
+  currentRouteGeneration = routeLifecycle.next()
   resetForUser()
   load()
 }, { immediate: true })
 
 onUnmounted(() => {
   grantGate.dispose()
-  requestLifecycle.dispose()
+  routeLifecycle.dispose()
+  loadLifecycle.dispose()
   clearSecret()
 })
 </script>

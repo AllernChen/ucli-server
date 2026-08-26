@@ -43,22 +43,40 @@ describe('device grant administration helpers', () => {
   })
 
   it('rejects late user-detail GET and POST effects after a route change or unmount', async () => {
-    const lifecycle = createRequestLifecycle()
-    const userOneRequest = lifecycle.next()
+    const routeLifecycle = createRequestLifecycle()
+    const loadLifecycle = createRequestLifecycle()
+    const userOneRoute = routeLifecycle.next()
     const oldGet = deferred<void>()
-    const oldPost = deferred<void>()
+    const latestGet = deferred<void>()
+    const sameRoutePost = deferred<void>()
+    const staleRoutePost = deferred<void>()
     const applied: string[] = []
-    const completeGet = oldGet.promise.then(() => { if (lifecycle.isCurrent(userOneRequest)) applied.push('old-user') })
-    const completePost = oldPost.promise.then(() => { if (lifecycle.isCurrent(userOneRequest)) applied.push('old-user-secret') })
-    const userTwoRequest = lifecycle.next()
+    const oldLoad = loadLifecycle.next()
+    const latestLoad = loadLifecycle.next()
+    const completeGet = oldGet.promise.then(() => {
+      if (routeLifecycle.isCurrent(userOneRoute) && loadLifecycle.isCurrent(oldLoad)) applied.push('old-user')
+    })
+    const completeLatestGet = latestGet.promise.then(() => {
+      if (routeLifecycle.isCurrent(userOneRoute) && loadLifecycle.isCurrent(latestLoad)) applied.push('latest-user')
+    })
+    const completeSameRoutePost = sameRoutePost.promise.then(() => {
+      if (routeLifecycle.isCurrent(userOneRoute)) applied.push('same-route-secret')
+    })
     oldGet.resolve()
-    oldPost.resolve()
-    await Promise.all([completeGet, completePost])
-    if (lifecycle.isCurrent(userTwoRequest)) applied.push('new-user')
-    lifecycle.dispose()
-    if (lifecycle.isCurrent(userTwoRequest)) applied.push('after-unmount')
+    latestGet.resolve()
+    sameRoutePost.resolve()
+    await Promise.all([completeGet, completeLatestGet, completeSameRoutePost])
+    const completeStalePost = staleRoutePost.promise.then(() => {
+      if (routeLifecycle.isCurrent(userOneRoute)) applied.push('old-route-secret')
+    })
+    const userTwoRoute = routeLifecycle.next()
+    staleRoutePost.resolve()
+    await completeStalePost
+    if (routeLifecycle.isCurrent(userTwoRoute)) applied.push('new-route')
+    routeLifecycle.dispose()
+    if (routeLifecycle.isCurrent(userTwoRoute)) applied.push('after-unmount')
 
-    expect(applied).toEqual(['new-user'])
+    expect(applied).toEqual(['latest-user', 'same-route-secret', 'new-route'])
   })
 
   it('runs one create request at a time and releases after success or failure', async () => {
