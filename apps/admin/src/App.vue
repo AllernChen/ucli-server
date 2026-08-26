@@ -60,7 +60,7 @@ async function changePassword() {
       <button @click="passwordChanged = false">去登录</button>
     </div>
   </main>
-  <main v-else-if="route.name === 'invite'" class="login-shell"><RouterView /></main>
+  <main v-else-if="route.meta.public === true"><RouterView /></main>
   <main v-else-if="!loggedIn" class="login-shell">
     <form class="login-card" @submit.prevent="login">
       <div class="brand-mark">U</div><h1>UCLI Server</h1><p>私有模型服务与技能管理平台</p>

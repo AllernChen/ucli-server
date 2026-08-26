@@ -14,9 +14,8 @@ import Skills from './views/Skills.vue'
 import Reports from './views/Reports.vue'
 import Governance from './views/Governance.vue'
 import Organizations from './views/Organizations.vue'
-import DeviceApproval from './views/DeviceApproval.vue'
 import Usage from './views/Usage.vue'
-import InviteAccept from './views/InviteAccept.vue'
+import Connect from './views/Connect.vue'
 import ChannelDetail from './views/ChannelDetail.vue'
 import ModelDetail from './views/ModelDetail.vue'
 import ModelTest from './views/ModelTest.vue'
@@ -36,7 +35,6 @@ const routes = [
   { path: '/reports', name: 'reports', component: Reports },
   { path: '/governance', name: 'governance', component: Governance },
   { path: '/organizations', name: 'organizations', component: Organizations },
-  { path: '/device', name: 'device', component: DeviceApproval },
-  { path: '/invite', name: 'invite', component: InviteAccept }
+  { path: '/connect', name: 'connect', component: Connect, meta: { public: true } }
 ]
 createApp(App).use(createRouter({ history: createWebHistory(), routes })).mount('#app')
