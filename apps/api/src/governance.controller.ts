@@ -1,36 +1,12 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
-import { randomBytes } from 'node:crypto'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import { AuthGuard, Roles } from '../../../packages/security/src/auth.js'
 import { UuidPipe } from '../../../packages/http/src/uuid.pipe.js'
-import { hashOpaqueToken } from '../../../packages/security/src/tokens.js'
 
 @ApiTags('governance') @ApiBearerAuth() @UseGuards(AuthGuard) @Controller('api/v1/admin')
 export class GovernanceController {
   constructor(private readonly prisma: PrismaService) {}
-  @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Get('members') members(@Req() request: any, @Query('limit') limit?: string, @Query('offset') offset?: string) {
-    return this.prisma.membership.findMany({ where: { organizationId: request.principal.organizationId },
-      include: { account: { select: { id: true, email: true, displayName: true, status: true, createdAt: true } } },
-      take: Math.min(500, Math.max(1, Number(limit) || 100)), skip: Math.max(0, Number(offset) || 0) })
-  }
-  @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Post('invitations') async invite(@Req() request: any, @Body() body: any) {
-    const token = randomBytes(32).toString('base64url')
-    const role = body.role === 'ORG_ADMIN' && request.principal.role !== 'MEMBER' ? 'ORG_ADMIN' : 'MEMBER'
-    const invitation = await this.prisma.invitation.create({ data: {
-      organizationId: request.principal.organizationId, email: String(body.email).toLowerCase(), role,
-      tokenHash: hashOpaqueToken(token), expiresAt: new Date(Date.now() + 7 * 86_400_000), invitedById: request.principal.sub
-    } })
-    return { id: invitation.id, token, expiresAt: invitation.expiresAt }
-  }
-  @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Get('devices') devices(@Req() request: any, @Query('limit') limit?: string, @Query('offset') offset?: string) {
-    return this.prisma.device.findMany({ where: { organizationId: request.principal.organizationId },
-      select: { id: true, accountId: true, name: true, revokedAt: true, lastSeenAt: true, createdAt: true },
-      take: Math.min(500, Math.max(1, Number(limit) || 100)), skip: Math.max(0, Number(offset) || 0) })
-  }
-  @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Post('devices/:id/revoke') revoke(@Req() request: any, @Param('id', UuidPipe) id: string) {
-    return this.prisma.device.updateMany({ where: { id, organizationId: request.principal.organizationId }, data: { revokedAt: new Date() } })
-  }
   @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Get('quotas') quotas(@Req() request: any) {
     return this.prisma.quotaPolicy.findMany({ where: request.principal.role === 'PLATFORM_ADMIN' ? {} : { organizationId: request.principal.organizationId } })
   }
