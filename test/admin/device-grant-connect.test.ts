@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { buildUcliConnectUrl, connectionStateForGrantStatus, readGrantToken } from '../../apps/admin/src/device-grant-connect.js'
+import { buildUcliConnectUrl, connectionStateForGrantStatus, readGrantToken, revalidateGrantAction } from '../../apps/admin/src/device-grant-connect.js'
 import { publicApi } from '../../apps/admin/src/api.js'
 
 describe('device grant browser connection', () => {
@@ -39,6 +39,34 @@ describe('device grant browser connection', () => {
     expect(connectionStateForGrantStatus('unexpected')).toEqual({
       canConnect: false, label: '状态未知', message: '授权状态无法识别，请联系管理员。'
     })
+  })
+
+  it('revalidates the latest grant status before allowing an action', async () => {
+    const token = 'grant-secret'
+    expect(connectionStateForGrantStatus('AVAILABLE').canConnect).toBe(true)
+    for (const status of ['DISABLED', 'BOUND', 'EXPIRED', 'DELETED', 'unexpected']) {
+      const fetcher = vi.fn(async (receivedToken: string) => ({ status }))
+      const result = await revalidateGrantAction(token, fetcher)
+
+      expect(fetcher).toHaveBeenCalledWith(token)
+      expect(result.preview).toEqual({ status })
+      expect(result.state.canConnect).toBe(false)
+    }
+
+    const fetcher = vi.fn(async (receivedToken: string) => ({ status: 'AVAILABLE' }))
+    const result = await revalidateGrantAction(token, fetcher)
+    expect(fetcher).toHaveBeenCalledWith(token)
+    expect(result.preview).toEqual({ status: 'AVAILABLE' })
+    expect(result.state.canConnect).toBe(true)
+  })
+
+  it('fails closed without exposing the token when revalidation fails', async () => {
+    const token = 'grant-secret'
+    const result = await revalidateGrantAction(token, async () => { throw new Error(token) })
+
+    expect(result.preview).toBeUndefined()
+    expect(result.state.canConnect).toBe(false)
+    expect(JSON.stringify(result)).not.toContain(token)
   })
 
   it('sends preview requests without administrator authentication or login side effects', async () => {

@@ -27,3 +27,10 @@
 - `BOUND` 明确提示“授权已绑定设备，不能用于其他设备。”；浏览器页不再提供连接或复制动作，已唤起 UCLI 的同安装 ID 重试仍由客户端处理。
 - 页面使用中文状态标签和说明，不再仅展示后端枚举；连接和复制操作同时在模板和事件处理函数中受 `canConnect` 限制。
 - 验证：`npx vitest run test/admin/device-grant-connect.test.ts`（7 passed）、`npm run typecheck`、`npm run admin:build` 均通过。
+
+## 终态复审修复：动作前授权重验
+
+- 连接和复制链接动作共用 `revalidateGrantAction`：每次动作前都以仅存于内存的令牌 POST 授权预览，并以最新预览更新页面状态。
+- 仅最新状态为 `AVAILABLE` 时继续跳转或写入剪贴板；最新状态为禁用、已绑定、已过期、已删除、未知或预览失败时均安全关闭，不执行动作。
+- 重验 helper 吞掉上游异常并返回不含令牌的未知不可操作状态；服务端 redeem 校验仍是最后的并发竞态防线。
+- 验证：`npx vitest run test/admin/device-grant-connect.test.ts`（9 passed）、`npm run typecheck`、`npm run admin:build` 均通过。

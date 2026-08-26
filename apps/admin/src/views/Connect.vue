@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { publicApi } from '../api'
-import { buildUcliConnectUrl, connectionStateForGrantStatus, readGrantToken } from '../device-grant-connect'
+import { buildUcliConnectUrl, connectionStateForGrantStatus, readGrantToken, revalidateGrantAction } from '../device-grant-connect'
 
 type GrantPreview = {
   account: { displayName: string }
@@ -15,19 +15,39 @@ const error = ref('')
 const notice = ref('')
 const preview = ref<GrantPreview | null>(null)
 const serverOrigin = ref('')
-const connectionState = computed(() => connectionStateForGrantStatus(preview.value?.status || ''))
+const connectionState = ref(connectionStateForGrantStatus(''))
 let grantToken = ''
 
 function connectionUrl() {
   return buildUcliConnectUrl(serverOrigin.value, grantToken)
 }
 
-function connect() {
-  if (connectionState.value.canConnect && grantToken) window.location.href = connectionUrl()
+function previewGrant(token: string) {
+  return publicApi<GrantPreview>('/api/v1/auth/device-grants/preview', {
+    method: 'POST', body: JSON.stringify({ token })
+  })
+}
+
+function updatePreview(latest: GrantPreview) {
+  preview.value = latest
+  connectionState.value = connectionStateForGrantStatus(latest.status)
+}
+
+async function revalidateAction() {
+  if (!grantToken) return false
+  const latest = await revalidateGrantAction(grantToken, previewGrant)
+  connectionState.value = latest.state
+  if (latest.preview) preview.value = latest.preview
+  return latest.state.canConnect
+}
+
+async function connect() {
+  if (!(await revalidateAction())) return
+  window.location.href = connectionUrl()
 }
 
 async function copyConnectionLink() {
-  if (!connectionState.value.canConnect || !grantToken) return
+  if (!(await revalidateAction())) return
   try {
     await navigator.clipboard.writeText(connectionUrl())
     notice.value = '连接链接已复制，可在安装 UCLI 后打开。'
@@ -52,9 +72,7 @@ onMounted(async () => {
     return
   }
   try {
-    preview.value = await publicApi<GrantPreview>('/api/v1/auth/device-grants/preview', {
-      method: 'POST', body: JSON.stringify({ token: grantToken })
-    })
+    updatePreview(await previewGrant(grantToken))
   } catch {
     error.value = '无法加载授权预览，请检查链接是否有效。'
   } finally {

@@ -11,7 +11,7 @@ export function buildUcliConnectUrl(serverBaseUrl: string, token: string): strin
   return target.toString()
 }
 
-type GrantConnectionState = { canConnect: boolean; label: string; message: string }
+export type GrantConnectionState = { canConnect: boolean; label: string; message: string }
 
 export function connectionStateForGrantStatus(status: string): GrantConnectionState {
   const unavailable = (label: string, message: string): GrantConnectionState => ({ canConnect: false, label, message })
@@ -22,5 +22,16 @@ export function connectionStateForGrantStatus(status: string): GrantConnectionSt
     case 'DELETED': return unavailable('已删除', '授权已被删除，不能再用于连接 UCLI。')
     case 'BOUND': return unavailable('已绑定', '授权已绑定设备，不能用于其他设备。')
     default: return unavailable('状态未知', '授权状态无法识别，请联系管理员。')
+  }
+}
+
+export async function revalidateGrantAction<T extends { status: string }>(
+  token: string, previewFetcher: (token: string) => Promise<T>
+): Promise<{ preview?: T; state: GrantConnectionState }> {
+  try {
+    const preview = await previewFetcher(token)
+    return { preview, state: connectionStateForGrantStatus(preview.status) }
+  } catch {
+    return { state: connectionStateForGrantStatus('') }
   }
 }
