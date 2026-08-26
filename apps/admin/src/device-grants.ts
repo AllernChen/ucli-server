@@ -29,6 +29,19 @@ export interface DeviceGrantSummary {
   device?: ManagedDevice | null
 }
 
+export interface UserDetailGrant {
+  id: string
+  tokenHint: string
+  expiresAt: string | null
+  disabledAt: string | null
+  deletedAt: string | null
+  boundAt: string | null
+  deviceId: string | null
+  createdAt: string
+  updatedAt: string
+  status: DeviceGrantStatus
+}
+
 export interface ManagedUser {
   id: string
   organizationId: string
@@ -43,7 +56,7 @@ export interface ManagedUser {
 
 export interface ManagedUserDetail extends ManagedUser {
   devices: ManagedDevice[]
-  deviceGrants: DeviceGrantSummary[]
+  deviceGrants: UserDetailGrant[]
 }
 
 export interface DeviceGrantUserGroup {
@@ -88,4 +101,14 @@ export function deviceGrantQuery(input: { status: string; q: string; limit: numb
   query.set('limit', String(input.limit))
   query.set('offset', String(input.offset))
   return query.toString()
+}
+
+export function createRequestLifecycle() {
+  let generation = 0
+  let disposed = false
+  return {
+    next() { return ++generation },
+    isCurrent(requestGeneration: number) { return !disposed && requestGeneration === generation },
+    dispose() { disposed = true; generation++ }
+  }
 }

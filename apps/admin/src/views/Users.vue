@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
 import { toast } from '../toast'
@@ -13,11 +13,14 @@ const loading = ref(true)
 const error = ref('')
 const formError = ref('')
 const createOpen = ref(false)
+const createPending = ref(false)
 const actionPending = ref(false)
 const pendingUser = ref<ManagedUser | null>(null)
 const result = ref<Page<ManagedUser>>({ items: [], total: 0, limit: 20, offset: 0 })
 const filters = reactive({ q: '', limit: 20, offset: 0 })
 const createForm = reactive({ email: '', displayName: '' })
+let createGeneration = 0
+let disposed = false
 
 async function load() {
   loading.value = true
@@ -34,21 +37,35 @@ async function load() {
 }
 
 function openCreate() {
+  if (createPending.value) return
   formError.value = ''
   createForm.email = ''
   createForm.displayName = ''
   createOpen.value = true
 }
 
-async function createUser() {
+function closeCreate() {
+  if (createPending.value) return
+  createOpen.value = false
   formError.value = ''
+}
+
+async function createUser() {
+  if (createPending.value) return
+  const generation = ++createGeneration
+  formError.value = ''
+  createPending.value = true
   try {
     await api('/api/v1/admin/users', { method: 'POST', body: JSON.stringify(createForm) })
+    if (disposed || generation !== createGeneration) return
     createOpen.value = false
     toast('用户已创建')
     await load()
-  } catch (value: any) {
-    formError.value = value.message
+  } catch (value: unknown) {
+    if (disposed || generation !== createGeneration) return
+    formError.value = value instanceof Error && value.message ? value.message : '创建用户失败'
+  } finally {
+    if (!disposed && generation === createGeneration) createPending.value = false
   }
 }
 
@@ -80,6 +97,7 @@ function setOffset(offset: number) {
 }
 
 onMounted(load)
+onUnmounted(() => { disposed = true; createGeneration++; createPending.value = false })
 </script>
 
 <template>
@@ -91,6 +109,6 @@ onMounted(load)
     <tbody><tr v-for="user in result.items" :key="user.id" class="clickable-row" @click="router.push(`/users/${user.id}`)"><td><strong>{{ user.displayName }}</strong><small>{{ user.email }}</small></td><td><span class="chip" :class="{ success: user.status === 'ACTIVE' }">{{ user.status === 'ACTIVE' ? '正常' : '已禁用' }}</span></td><td>{{ user.role }}</td><td>{{ user.deviceCount }}</td><td>{{ user.deviceGrantCount }}</td><td>{{ new Date(user.createdAt).toLocaleString() }}</td><td><div class="actions" @click.stop><button type="button" @click="router.push(`/users/${user.id}`)">查看</button><button v-if="user.role === 'MEMBER'" type="button" :class="{ 'danger-link': user.status === 'ACTIVE', primary: user.status === 'DISABLED' }" :disabled="actionPending" @click="pendingUser = user">{{ user.status === 'ACTIVE' ? '禁用' : '启用' }}</button></div></td></tr></tbody>
   </table><p v-else class="empty">没有符合条件的用户</p><Pagination v-bind="result" @change="setOffset" /></section>
 
-  <Drawer :open="createOpen" title="创建用户" @close="createOpen = false"><form class="stack-form" @submit.prevent="createUser"><label>显示名<input v-model="createForm.displayName" required maxlength="120" autocomplete="name"></label><label>邮箱<input v-model="createForm.email" type="email" required maxlength="320" autocomplete="email"></label><p v-if="formError" class="state error">{{ formError }}</p><button type="submit" class="primary">创建用户</button></form></Drawer>
+  <Drawer :open="createOpen" title="创建用户" :close-disabled="createPending" @close="closeCreate"><form class="stack-form" @submit.prevent="createUser"><label>显示名<input v-model="createForm.displayName" required maxlength="120" autocomplete="name"></label><label>邮箱<input v-model="createForm.email" type="email" required maxlength="320" autocomplete="email"></label><p v-if="formError" class="state error">{{ formError }}</p><button type="submit" class="primary" :disabled="createPending">{{ createPending ? '正在创建…' : '创建用户' }}</button></form></Drawer>
   <ConfirmDialog :open="Boolean(pendingUser)" :title="pendingUser?.status === 'ACTIVE' ? '禁用用户' : '启用用户'" :message="pendingUser?.status === 'ACTIVE' ? '禁用后该用户的全部设备会立即停止访问服务端；重新启用后可恢复。' : '重新启用后该用户及未被禁用、删除或过期的授权可恢复访问。'" :confirm-label="pendingUser?.status === 'ACTIVE' ? '确认禁用' : '确认启用'" :danger="pendingUser?.status === 'ACTIVE'" @confirm="updateUserStatus" @cancel="pendingUser = null" />
 </template>

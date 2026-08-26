@@ -12,7 +12,7 @@ describe('device grant admin views', () => {
   })
 
   it('loads user grants and devices and creates nested grants', () => {
-    expect(detailView).toContain('users/${userId}/device-grants')
+    expect(detailView).toContain('users/${requestedUserId}/device-grants')
     expect(detailView).toContain('deviceGrants')
     expect(detailView).toContain('devices')
   })
@@ -21,6 +21,35 @@ describe('device grant admin views', () => {
     expect(detailView).toContain('关闭后无法再次查看完整令牌')
     expect(detailView).toContain('navigator.clipboard.writeText(connectionUrl)')
     expect(detailView).toContain("createdSecret.value = null")
+    expect(detailView).toContain('copyError.value')
+    expect(detailView).toContain('watch(userId')
+    expect(detailView).toContain('requestLifecycle.isCurrent')
+    expect(detailView).toContain('if (grantPending.value) return')
+    expect(detailView).toContain('UserDetailGrant')
+  })
+
+  it('guards user creation against duplicate submissions and closes only after its active request', () => {
+    expect(usersView).toContain('const createPending = ref(false)')
+    expect(usersView).toContain('if (createPending.value) return')
+    expect(usersView).toContain(':close-disabled="createPending"')
+    expect(usersView).toContain(':disabled="createPending"')
+  })
+
+  it('uses accessible focus-managed shared dialogs', () => {
+    const drawer = readFileSync('apps/admin/src/components/Drawer.vue', 'utf8')
+    const confirm = readFileSync('apps/admin/src/components/ConfirmDialog.vue', 'utf8')
+    for (const source of [drawer, confirm]) {
+      expect(source).toContain('role="dialog"')
+      expect(source).toContain('aria-modal="true"')
+      expect(source).toContain('aria-labelledby')
+      expect(source).toContain('trapDialogFocus')
+      expect(source).toContain("event.key === 'Escape'")
+      expect(source).toContain('restoreDialogFocus')
+    }
+    expect(drawer).toContain('aria-label="关闭"')
+    expect(confirm).toContain('aria-describedby')
+    expect(detailView).toContain('<Drawer :open="grantOpen"')
+    expect(detailView).toContain('<Drawer :open="Boolean(createdSecret)"')
   })
 
   it('manages grouped grants through lifecycle endpoints', () => {

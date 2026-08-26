@@ -17,3 +17,12 @@
 - 类型检查：`npm run typecheck`（passed）。
 - 管理端构建：`npm run admin:build`（passed；Vite 仅报告既有 Analytics chunk 大小警告）。
 - 静态检查：`git diff --check`（无 whitespace errors）；治理页不再包含旧邀请、成员或设备管理 endpoint，新增视图无 console/storage/URL secret 路径。
+
+## 审查修复
+
+- 用户详情页现在响应同组件内的 `/users/:id` 参数变化；每次切换都会重置用户、表单、错误与 secret state。GET/POST 使用请求代际和卸载标记，旧用户或已卸载页面的晚到响应不会写入详情、错误或连接链接。
+- 授权创建仅允许当前组织内已启用的 `MEMBER`；按钮禁用且页面明确提示需先启用。复制失败保留在 secret drawer 内，关闭时与 secret 一同清理。
+- 用户创建增加独立 pending/代际保护；请求进行中抽屉不能关闭、提交按钮禁用，晚到错误不会写到不可见抽屉。
+- `Drawer` 与 `ConfirmDialog` 统一提供可访问 dialog 语义、唯一标题/描述关联、初始焦点、Tab 焦点循环、Escape 关闭（支持 pending 禁止关闭）及关闭后焦点恢复；详情页两个弹层复用该组件。
+- 用户详情授权的响应类型与聚合授权摘要拆分，避免将详情接口未返回的 `accountId`、`createdById`、`device` 误声明为必填。
+- 回归测试覆盖五种授权状态的标签/动作、路由切换/卸载时的晚响应抑制、重复创建门控与弹层 ARIA/焦点/Escape 契约。
