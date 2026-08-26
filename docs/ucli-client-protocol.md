@@ -8,18 +8,19 @@ UCLI 可独立安装和使用；未注册、服务端不可达或授权失效时
 
 ## 令牌边界
 
-原始 grant token 是一次性秘密。服务端只可在管理端创建设备授权 API 的一次性响应中返回它；管理端只可在对应的一次性 Vue 弹窗中短暂保存并展示完整连接链接。弹窗关闭、创建失败、切换用户或卸载时清空。浏览器和 UCLI 仅为从 fragment 发起 preview/redeem 或同安装 10 分钟重试而短暂保留内存副本。
+原始 grant token 是一次性秘密。服务端只可在管理端创建设备授权 API 的一次性 `connectionUrl` 响应中输出其 fragment，绝不返回裸 `token` 字段；管理端只可在对应的一次性 Vue 弹窗中短暂保存并展示完整连接链接。弹窗关闭、创建失败、切换用户或卸载时清空。浏览器和 UCLI 仅为从 fragment 发起 preview/redeem 或同安装 10 分钟重试而短暂保留内存副本。
 
 除这些必要边界外，原始 grant token 不得进入其他 serializer 或响应、DOM 页面、URL query、日志、异常、审计、storage、遥测、崩溃报告或最近打开记录。`tokenHash`/`refreshTokenHash` 永不展示。令牌始终位于浏览器和 `ucli://` URL 的 fragment，绝不位于 query 或服务端请求路径。
 
 ## 浏览器授权链接
 
-管理员为平台预创建普通成员创建授权。一个授权令牌最多绑定一台设备；同一用户可创建多个授权令牌以注册多台设备。创建响应中 `connectionUrl` 是唯一可取得原始令牌的输出：
+管理员为平台预创建普通成员创建授权。一个授权令牌最多绑定一台设备；同一用户可创建多个授权令牌以注册多台设备。创建响应中 `connectionUrl` 是唯一一次性秘密输出：
+
+### 创建响应
 
 ```json
 {
   "id": "grant-uuid",
-  "token": "one-time-secret",
   "connectionUrl": "http://10.0.0.8:3000/connect#token=one-time-secret",
   "expiresAt": null
 }
@@ -36,6 +37,8 @@ ucli://connect?server=http%3A%2F%2F10.0.0.8%3A3000#token=<secret>
 协议处理器只能打开确认界面；设置页粘贴完整浏览器链接进入同一流程，不能直接兑换。
 
 ## 预览
+
+### Preview HTTP
 
 ```http
 POST /api/v1/auth/device-grants/preview
@@ -64,6 +67,8 @@ Content-Type: application/json
 ## 设备兑换
 
 `installationId` 必须是 UUID v4；`name` 为去空格后的 1–120 字符；`platform` 仅允许 `windows`、`macos`、`linux`；`clientVersion` 为 1–32 字符。不符合这些约束时返回 `invalid_device`。
+
+### Redeem HTTP
 
 ```http
 POST /api/v1/auth/device-grants/redeem
@@ -103,6 +108,8 @@ Content-Type: application/json
 
 refresh token 为单次使用凭证。客户端先原子替换操作系统安全存储中的新 refresh token，再更新连接配置；服务端每次成功刷新都轮换 refresh token。
 
+### Refresh HTTP
+
 ```http
 POST /api/v1/auth/token/refresh
 Content-Type: application/json
@@ -124,6 +131,8 @@ Content-Type: application/json
   "authorization": { "expiresAt": null, "serverTime": "2026-08-26T04:00:00.000Z" }
 }
 ```
+
+### Bootstrap HTTP
 
 ```http
 GET /api/v1/client/bootstrap

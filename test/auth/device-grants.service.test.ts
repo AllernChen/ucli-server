@@ -138,14 +138,17 @@ function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string;
 }
 
 describe('device grants', () => {
-  it('returns a connection URL once while storing only hash and hint', async () => {
+  it('returns the one-time secret only in the connection URL fragment while storing only hash and hint', async () => {
     const { service, state } = makeGrantHarness()
     const previousPublicUrl = process.env.PUBLIC_URL
     process.env.PUBLIC_URL = 'http://10.0.0.8:3000'
     try {
       const result = await service.create('org-1', 'admin-1', 'account-1', { expiresAt: null })
-      expect(result.connectionUrl).toBe(`http://10.0.0.8:3000/connect#token=${result.token}`)
-      expect(state.grants.at(-1)?.tokenHash).not.toContain(result.token)
+      const token = new URL(result.connectionUrl).hash.slice('#token='.length)
+      expect(result.connectionUrl).toBe(`http://10.0.0.8:3000/connect#token=${token}`)
+      expect(token).not.toBe('')
+      expect(result).not.toHaveProperty('token')
+      expect(state.grants.at(-1)?.tokenHash).not.toContain(token)
       expect(state.grants.at(-1)?.tokenHint).toMatch(/^••••/)
       expect(JSON.stringify(result)).not.toContain('tokenHash')
     } finally {

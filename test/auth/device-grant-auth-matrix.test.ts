@@ -240,7 +240,7 @@ describe('password administrator compatibility', () => {
     vi.mocked(argon2.hash).mockResolvedValue('new-password-hash')
     const account = {
       id: 'admin-1', email: 'admin@example.com', displayName: 'Admin', passwordHash: 'old-password-hash', status: 'ACTIVE', tokenVersion: 1,
-      memberships: [{ organizationId: 'org-1', role: 'PLATFORM_ADMIN', status: 'ACTIVE' }]
+      memberships: [{ organizationId: 'org-1', role: 'PLATFORM_ADMIN', status: 'ACTIVE', organization: { enabled: true } }]
     }
     const prisma: any = {
       account: { findUnique: vi.fn(async () => account), update: vi.fn(async () => account) },

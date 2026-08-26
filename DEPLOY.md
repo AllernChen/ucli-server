@@ -20,7 +20,48 @@
 设备授权升级包含破坏性删除；在任何 `./install.sh update` 或手工迁移操作前，必须完成以下步骤：
 
 1. 在与生产版本和扩展一致的 staging 数据库执行 staging rehearsal，确认迁移、应用启动和 UCLI 重新注册流程。
-2. 在生产备份副本上检查 `DeviceCodeStatus` 的外部依赖，例如查询 PostgreSQL 的 `pg_depend`；未知依赖会使默认 `DROP TYPE "DeviceCodeStatus"` 的 `RESTRICT` 行为失败。
+2. 从新鲜生产备份隔离恢复 staging 数据库后，运行下面的外部依赖预检。它按 `public` schema 的 `DeviceCodeStatus` OID 查询 `pg_depend`，用 `pg_describe_object` 列出依赖，并仅排除内部数组类型依赖、`public.device_authorizations` 的已知状态列依赖及其 `pg_attrdef` 默认值依赖：
+
+   ```sql
+   WITH target_type AS (
+     SELECT 'public.DeviceCodeStatus'::regtype::oid AS type_oid
+   ), known_dependencies AS (
+     SELECT d.classid, d.objid, d.objsubid
+     FROM pg_depend AS d
+     CROSS JOIN target_type AS target
+     LEFT JOIN pg_type AS array_type ON array_type.oid = d.objid
+     LEFT JOIN pg_class AS relation ON relation.oid = d.objid
+     LEFT JOIN pg_namespace AS relation_schema ON relation_schema.oid = relation.relnamespace
+     LEFT JOIN pg_attribute AS attribute
+       ON attribute.attrelid = relation.oid AND attribute.attnum = d.objsubid
+     LEFT JOIN pg_attrdef AS attribute_default ON attribute_default.oid = d.objid
+     LEFT JOIN pg_class AS default_relation ON default_relation.oid = attribute_default.adrelid
+     LEFT JOIN pg_namespace AS default_schema ON default_schema.oid = default_relation.relnamespace
+     LEFT JOIN pg_attribute AS default_attribute
+       ON default_attribute.attrelid = default_relation.oid AND default_attribute.attnum = attribute_default.adnum
+     WHERE d.refclassid = 'pg_type'::regclass
+       AND d.refobjid = target.type_oid
+       AND (
+         (d.deptype = 'i' AND d.classid = 'pg_type'::regclass AND array_type.typelem = target.type_oid)
+         OR (d.classid = 'pg_class'::regclass AND relation_schema.nspname = 'public'
+             AND relation.relname = 'device_authorizations' AND attribute.attname = 'status')
+         OR (d.classid = 'pg_attrdef'::regclass AND default_schema.nspname = 'public'
+             AND default_relation.relname = 'device_authorizations' AND default_attribute.attname = 'status')
+       )
+   )
+   SELECT pg_describe_object(d.classid, d.objid, d.objsubid) AS dependent_object
+   FROM pg_depend AS d
+   CROSS JOIN target_type AS target
+   WHERE d.refclassid = 'pg_type'::regclass
+     AND d.refobjid = target.type_oid
+     AND NOT EXISTS (
+       SELECT 1 FROM known_dependencies AS known
+       WHERE (known.classid, known.objid, known.objsubid) = (d.classid, d.objid, d.objsubid)
+     )
+   ORDER BY dependent_object;
+   ```
+
+   预期严格 0 行。任何行禁止升级：先识别并迁移该对象，重新从生产备份恢复后再预检。未知依赖会使默认 `DROP TYPE "DeviceCodeStatus"` 的 `RESTRICT` 行为失败。
 3. 执行仓库标准数据库备份：开发仓库使用 `./scripts/backup.ps1`，Linux 交付包使用平台既有备份流程，并确认上一版应用镜像可用。
 
 迁移脚本以显式事务执行。若预检遗漏的依赖导致 `DROP TYPE` 失败，事务整体回滚，不会留下部分删除的表或部分新 schema。

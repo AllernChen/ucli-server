@@ -118,7 +118,7 @@ export class DeviceGrantsService {
       tokenHash: hashOpaqueToken(token), tokenHint: opaqueTokenHint(token)
     }, select: { id: true, expiresAt: true } })
     const origin = new URL(process.env.PUBLIC_URL || 'http://localhost:3000').origin
-    return { id: grant.id, token, connectionUrl: `${origin}/connect#token=${encodeURIComponent(token)}`, expiresAt: grant.expiresAt }
+    return { id: grant.id, connectionUrl: `${origin}/connect#token=${encodeURIComponent(token)}`, expiresAt: grant.expiresAt }
   }
 
   async preview(token: string) {

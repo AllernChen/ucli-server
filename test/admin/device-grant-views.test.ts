@@ -15,6 +15,7 @@ describe('device grant admin views', () => {
     expect(detailView).toContain('users/${requestedUserId}/device-grants')
     expect(detailView).toContain('deviceGrants')
     expect(detailView).toContain('devices')
+    expect(detailView).toContain('当前组织成员状态')
   })
 
   it('protects one-time creation secrets and removes them on close', () => {

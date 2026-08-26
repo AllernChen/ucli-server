@@ -321,7 +321,7 @@ export class ManagedUserPageQueryDto extends PageQueryDto {
 
 `UsersService.create` must use one Prisma transaction, catch Prisma `P2002` as `ConflictException('Account email already exists')`, and return only non-secret fields. List by memberships in the current organization, include counts for grants/devices, and paginate with an exact `total`. Disable/enable must first fetch the current organization's membership and reject `PLATFORM_ADMIN` rather than performing a broad `account.updateMany`.
 
-Architecture clarification: `Account.status` remains the global platform status; managed-user disable/enable changes only the current organization's `Membership.status`. Device authorization checks both states.
+Architecture clarification: `Account.status` remains the global platform status; managed-user disable/enable changes only the current organization's `Membership.status`. Device authorization checks both states. Login also requires an enabled organization and an `ACTIVE` membership; it deterministically selects `PLATFORM_ADMIN`, then `ORG_ADMIN`, then `MEMBER`, breaking same-role ties by `organizationId`, and signs no JWT if none is valid.
 
 - [ ] **Step 5: Implement routes and register them**
 
@@ -386,8 +386,10 @@ it('returns a connection URL once while storing only hash and hint', async () =>
   const { service, state } = makeGrantHarness()
   process.env.PUBLIC_URL = 'http://10.0.0.8:3000'
   const result = await service.create('org-1', 'admin-1', 'account-1', { expiresAt: null })
-  expect(result.connectionUrl).toBe(`http://10.0.0.8:3000/connect#token=${result.token}`)
-  expect(state.grants[0].tokenHash).not.toContain(result.token)
+  const token = new URL(result.connectionUrl).hash.slice('#token='.length)
+  expect(result.connectionUrl).toBe(`http://10.0.0.8:3000/connect#token=${token}`)
+  expect(result).not.toHaveProperty('token')
+  expect(state.grants[0].tokenHash).not.toContain(token)
   expect(state.grants[0].tokenHint).toMatch(/^••••/)
 })
 
@@ -454,7 +456,7 @@ const origin = new URL(process.env.PUBLIC_URL || 'http://localhost:3000').origin
 const connectionUrl = `${origin}/connect#token=${encodeURIComponent(token)}`
 ```
 
-Return `token` and `connectionUrl` only from `create`. Every other serializer must explicitly select fields and add `status: deriveDeviceGrantStatus(grant, now)`.
+Return only the safe grant summary and `connectionUrl` from `create`; the original token exists only in its fragment, never as a bare response field. Every other serializer must explicitly select fields and add `status: deriveDeviceGrantStatus(grant, now)`.
 
 Implement delete in one transaction that updates `DeviceGrant.deletedAt` and, when `deviceId` exists, updates `Device.revokedAt`. Implement grouped listing by first paginating account IDs and then loading their grants/devices; do not paginate flat grants and regroup an incomplete page.
 
@@ -934,13 +936,13 @@ Expiry conversion must use `new Date(localValue).toISOString()` for a dated auth
 ```ts
 await api('/api/v1/admin/users', { method: 'POST', body: JSON.stringify(createForm.value) })
 const user = await api<ManagedUserDetail>(`/api/v1/admin/users/${userId}`)
-const created = await api<{ token: string; connectionUrl: string }>(
+const created = await api<{ connectionUrl: string }>(
   `/api/v1/admin/users/${userId}/device-grants`,
   { method: 'POST', body: JSON.stringify(grantExpiryPayload(grantForm.value)) }
 )
 ```
 
-After grant creation, show `connectionUrl` in a modal with `navigator.clipboard.writeText(connectionUrl)`. Clear the returned `token` and URL from component state when the modal closes.
+After grant creation, show `connectionUrl` in a modal with `navigator.clipboard.writeText(connectionUrl)`. The API returns no bare `token`; clear the one-time connection URL from component state when the modal closes.
 
 - [ ] **Step 6: Implement grouped grant administration**
 

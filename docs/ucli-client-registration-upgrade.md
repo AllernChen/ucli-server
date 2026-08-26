@@ -1,6 +1,6 @@
 # UCLI 客户端服务端注册升级方案
 
-**实施归属：** UCLI 客户端仓库。随交接包附带 `docs/ucli-client-protocol.md`；本文件已内联实施所需接口与安全契约，客户端不依赖相对链接才能实现。
+**实施归属：** UCLI 客户端仓库。随交接包附带服务端协议；本文件已内联实施所需接口与安全契约，客户端不依赖相对链接才能实现。
 
 ## 目标与单服务端状态
 
@@ -20,7 +20,7 @@ ucli://connect?server=http%3A%2F%2F10.0.0.8%3A3000#token=<secret>
 
 协议处理器和设置页粘贴链接都必须解析为 HTTP(S) origin 和 fragment 令牌，拒绝用户信息、路径注入及其他协议，并先打开确认页。确认页展示服务端 IP/端口、组织、用户、状态和有效期；未确认不得兑换。
 
-原始 grant token 只在收到 fragment 后、发起 preview/redeem 或同安装 10 分钟重试期间短暂存在内存。确认页关闭、注册失败、切换用户或卸载时清空；注册成功、取消或断开时同样清空。普通配置、系统安全存储、DOM、最近打开记录和诊断输出都不得保存它；`tokenHash`/`refreshTokenHash` 永不展示。
+管理端创建响应仅返回 `connectionUrl`，绝不返回裸 `token` 字段。原始 grant token 只在收到该链接 fragment 后、发起 preview/redeem 或同安装 10 分钟重试期间短暂存在内存。确认页关闭、注册失败、切换用户或卸载时清空；注册成功、取消或断开时同样清空。普通配置、系统安全存储、DOM、最近打开记录和诊断输出都不得保存它；`tokenHash`/`refreshTokenHash` 永不展示。
 
 ## API 契约
 

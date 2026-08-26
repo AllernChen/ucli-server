@@ -33,15 +33,17 @@ export class AuthService {
 
   async login(input: { email: string; password: string }) {
     const account = await this.prisma.account.findUnique({
-      where: { email: input.email.toLowerCase() }, include: { memberships: true }
+      where: { email: input.email.toLowerCase() }, include: { memberships: { include: { organization: true } } }
     })
     if (!account || account.status !== 'ACTIVE' || !account.passwordHash || !await argon2.verify(account.passwordHash, input.password)) {
       throw new UnauthorizedException('Invalid credentials')
     }
-    const membership = account.memberships[0]
-    if (!membership) throw new UnauthorizedException('No organization membership')
-    const organization = await this.prisma.organization.findUnique({ where: { id: membership.organizationId } })
-    if (!organization?.enabled) throw new UnauthorizedException('Organization is inactive')
+    const rolePriority: Record<Role, number> = { [Role.PLATFORM_ADMIN]: 0, [Role.ORG_ADMIN]: 1, [Role.MEMBER]: 2 }
+    const membership = account.memberships
+      .filter(item => item.status === 'ACTIVE' && item.organization.enabled)
+      .sort((left, right) => rolePriority[left.role] - rolePriority[right.role] ||
+        (left.organizationId < right.organizationId ? -1 : left.organizationId > right.organizationId ? 1 : 0))[0]
+    if (!membership) throw new UnauthorizedException('No active organization membership')
     return { accessToken: signAccessToken({ sub: account.id, organizationId: membership.organizationId, role: membership.role, tokenVersion: account.tokenVersion }) }
   }
 

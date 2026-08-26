@@ -20,7 +20,7 @@ const grantError = ref('')
 const copyError = ref('')
 const grantOpen = ref(false)
 const grantPending = ref(false)
-const createdSecret = ref<{ token: string; connectionUrl: string } | null>(null)
+const createdSecret = ref<{ connectionUrl: string } | null>(null)
 const grantForm = reactive({ permanent: true, expiresAt: '' })
 const canCreateGrant = computed(() => user.value?.role === 'MEMBER' && user.value.status === 'ACTIVE')
 const grantGate = createExclusiveAsyncRequestGate(pending => { grantPending.value = pending })
@@ -98,7 +98,7 @@ async function createGrant() {
   try {
     const created = await grantGate.run(async requestOperation => {
       operation = requestOperation
-      return api<{ token: string; connectionUrl: string }>(
+      return api<{ connectionUrl: string }>(
         `/api/v1/admin/users/${requestedUserId}/device-grants`,
         { method: 'POST', body: JSON.stringify(grantExpiryPayload(grantForm)) }
       )
@@ -145,7 +145,7 @@ onUnmounted(() => {
     <div class="actions"><button type="button" @click="load">刷新</button><button type="button" class="primary" :disabled="!canCreateGrant || grantPending" @click="openGrant">创建授权</button></div></header>
   <p v-if="user && !canCreateGrant" class="state">仅可为已启用的 MEMBER 创建授权；请先启用该用户。</p>
   <p v-if="loading" class="state">正在加载用户…</p><p v-else-if="error" class="state error">{{ error }}</p>
-  <template v-else-if="user"><div class="detail-grid"><article class="panel metric-block"><span>组织状态</span><strong class="small-strong">{{ user.status === 'ACTIVE' ? '正常' : '已禁用' }}</strong></article><article class="panel metric-block"><span>角色</span><strong class="small-strong">{{ user.role }}</strong></article><article class="panel metric-block"><span>设备</span><strong>{{ user.deviceCount }}</strong></article><article class="panel metric-block"><span>授权</span><strong>{{ user.deviceGrantCount }}</strong></article></div>
+  <template v-else-if="user"><div class="detail-grid"><article class="panel metric-block"><span>当前组织成员状态</span><strong class="small-strong">{{ user.status === 'ACTIVE' ? '正常' : '已禁用' }}</strong></article><article class="panel metric-block"><span>角色</span><strong class="small-strong">{{ user.role }}</strong></article><article class="panel metric-block"><span>设备</span><strong>{{ user.deviceCount }}</strong></article><article class="panel metric-block"><span>授权</span><strong>{{ user.deviceGrantCount }}</strong></article></div>
     <section class="panel table-panel"><div class="section-header"><div><h2>设备授权</h2><p class="muted">授权令牌完整内容只在创建完成时展示一次。</p></div><button type="button" @click="router.push('/device-grants')">管理全部授权</button></div><table v-if="user.deviceGrants.length"><thead><tr><th>令牌提示</th><th>状态</th><th>有效期</th><th>绑定设备</th><th>绑定时间</th><th>创建时间</th></tr></thead><tbody><tr v-for="grant in user.deviceGrants" :key="grant.id"><td class="mono">{{ grant.tokenHint }}</td><td><StatusBadge :status="grant.status" /><small>{{ detailGrantStatusLabel(grant) }}</small></td><td>{{ grant.expiresAt ? new Date(grant.expiresAt).toLocaleString() : '永久' }}</td><td>{{ grant.deviceId || '未绑定' }}</td><td>{{ grant.boundAt ? new Date(grant.boundAt).toLocaleString() : '—' }}</td><td>{{ new Date(grant.createdAt).toLocaleString() }}</td></tr></tbody></table><p v-else class="empty">暂无设备授权</p></section>
     <section class="panel table-panel"><h2>设备</h2><table v-if="user.devices.length"><thead><tr><th>名称</th><th>平台 / 版本</th><th>绑定时间</th><th>最后活跃</th><th>状态</th></tr></thead><tbody><tr v-for="device in user.devices" :key="device.id"><td><strong>{{ device.name }}</strong><small class="mono">{{ device.installationId || '—' }}</small></td><td>{{ device.platform || '—' }} / {{ device.clientVersion || '—' }}</td><td>{{ new Date(device.createdAt).toLocaleString() }}</td><td>{{ device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString() : '—' }}</td><td>{{ device.revokedAt ? '已永久撤销' : '正常' }}</td></tr></tbody></table><p v-else class="empty">暂无已绑定设备</p></section>
   </template>

@@ -49,7 +49,7 @@ UCLI 可以独立安装和使用，不依赖 UCLI Server。用户可在 UCLI 设
 现有 `Account` 保留，`passwordHash` 改为可空。`Account.status` 是全局平台状态；`Membership.status` 是组织范围内的成员状态：
 
 - 平台创建普通成员时，事务内创建 `Account` 和当前组织的 `Membership`，角色固定为 `MEMBER`，`passwordHash = null`。
-- 登录接口只接受存在密码摘要、全局 `Account.status` 有效且当前 `Membership.status` 有效的账号。
+- 登录接口先验证密码摘要和全局 `Account.status`，再只从 `Membership.status = ACTIVE` 且组织已启用的成员关系中确定当前组织；按 `PLATFORM_ADMIN`、`ORG_ADMIN`、`MEMBER` 的角色优先级，再按 `organizationId` 升序稳定选择。没有有效成员关系时拒绝且不签发 JWT。
 - 现有管理员账号和密码摘要保持不变。
 - 管理员“禁用用户”只禁用当前组织的 `Membership.status`，不改变全局 `Account.status`；该成员在当前组织的设备立即失去服务端访问能力，其他组织成员关系不受影响。
 
@@ -157,12 +157,11 @@ DELETE /api/v1/admin/device-grants/:grantId
 }
 ```
 
-`expiresAt` 省略或为 `null` 时表示永久授权；非空值必须是晚于服务端当前时间的 ISO 8601 时间。创建响应是唯一一次返回原始令牌和完整连接链接的响应：
+`expiresAt` 省略或为 `null` 时表示永久授权；非空值必须是晚于服务端当前时间的 ISO 8601 时间。创建响应仅以完整连接链接的 fragment 一次性输出原始令牌，不返回裸 `token` 字段：
 
 ```json
 {
   "id": "grant-uuid",
-  "token": "one-time-secret",
   "connectionUrl": "http://10.0.0.8:3000/connect#token=one-time-secret",
   "expiresAt": null
 }
@@ -306,7 +305,7 @@ invalid_device
 ### 用户管理页
 
 - 创建普通用户：显示名和邮箱。
-- 展示账号状态、角色、设备数、授权数和最近使用时间。
+- 展示当前组织成员状态、角色、设备数、授权数和最近使用时间。
 - 用户详情展示全部授权和设备。
 - 可为用户创建新授权，默认永久，也可指定到期时间。
 - 设备展示名称、平台、客户端版本、绑定时间、最后活跃时间和对应授权。
