@@ -142,17 +142,14 @@ export class UsersService {
   }
 
   private async updateStatus(organizationId: string, accountId: string, status: 'ACTIVE' | 'DISABLED') {
-    await this.prisma.$transaction(async transaction => {
-      const membership = await transaction.membership.findUnique({
-        where: { organizationId_accountId: { organizationId, accountId } }, select: { role: true }
-      })
-      if (!membership) throw new NotFoundException('Managed user not found')
-      if (membership.role !== Role.MEMBER) {
-        throw new ForbiddenException('Managed user cannot be updated')
-      }
-      await transaction.membership.update({
-        where: { organizationId_accountId: { organizationId, accountId } }, data: { status }
-      })
+    const updated = await this.prisma.membership.updateMany({
+      where: { organizationId, accountId, role: Role.MEMBER }, data: { status }
     })
+    if (updated.count === 1) return
+    const membership = await this.prisma.membership.findUnique({
+      where: { organizationId_accountId: { organizationId, accountId } }, select: { accountId: true }
+    })
+    if (!membership) throw new NotFoundException('Managed user not found')
+    throw new ForbiddenException('Managed user cannot be updated')
   }
 }

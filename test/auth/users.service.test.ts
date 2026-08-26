@@ -9,7 +9,7 @@ import { CreateManagedUserDto } from '../../apps/api/src/device-grants.dto.js'
 const schema = readFileSync('prisma/schema.prisma', 'utf8')
 const migration = readFileSync('prisma/migrations/202608260001_device_grants/migration.sql', 'utf8')
 
-function makeUsersHarness(options: { role?: string; secondOrganization?: boolean; sharedAccount?: boolean; otherRole?: string } = {}) {
+function makeUsersHarness(options: { role?: string; secondOrganization?: boolean; sharedAccount?: boolean; otherRole?: string; promoteBeforeLifecycleUpdate?: boolean } = {}) {
   const state: any = {
     accounts: [{
       id: 'account-1', email: 'existing@example.com', displayName: 'Existing user', passwordHash: null,
@@ -19,6 +19,7 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
     devices: [{ id: 'device-1', organizationId: 'org-1', accountId: 'account-1' }],
     grants: [{ id: 'grant-1', organizationId: 'org-1', accountId: 'account-1', tokenHash: 'secret-hash' }]
   }
+  state.lifecycleUpdateWheres = []
   if (options.secondOrganization) {
     state.accounts.push({
       id: 'account-2', email: 'other@example.com', displayName: 'Other user', passwordHash: null,
@@ -38,7 +39,8 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
   }
   const matchesMembership = (membership: any, where: any) =>
     (!where.organizationId || membership.organizationId === where.organizationId) &&
-    (!where.accountId || membership.accountId === where.accountId) && matchesAccount(accountFor(membership.accountId), where.account)
+    (!where.accountId || membership.accountId === where.accountId) &&
+    (!where.role || membership.role === where.role) && matchesAccount(accountFor(membership.accountId), where.account)
   const membershipWithAccount = (membership: any) => ({
     ...membership,
     account: {
@@ -108,6 +110,13 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
         const membership = state.memberships.find((item: any) => item.organizationId === key.organizationId && item.accountId === key.accountId)
         Object.assign(membership, data)
         return membership
+      },
+      updateMany: async ({ where, data }: any) => {
+        state.lifecycleUpdateWheres.push(structuredClone(where))
+        if (options.promoteBeforeLifecycleUpdate) state.memberships[0].role = 'PLATFORM_ADMIN'
+        const memberships = state.memberships.filter((membership: any) => matchesMembership(membership, where))
+        memberships.forEach((membership: any) => Object.assign(membership, data))
+        return { count: memberships.length }
       }
     },
     $transaction: async (operation: any) => operation(prisma)
@@ -164,6 +173,13 @@ describe('managed users', () => {
     expect(state.accounts[0]).toMatchObject({ status: 'ACTIVE', tokenVersion: 1 })
     await expect(service.enable('org-1', 'account-1')).resolves.toEqual({ status: 'ACTIVE' })
     expect(state.memberships[0].status).toBe('ACTIVE')
+  })
+
+  it('does not write status when the target is promoted before the atomic lifecycle update', async () => {
+    const { service, state } = makeUsersHarness({ promoteBeforeLifecycleUpdate: true })
+    await expect(service.disable('org-1', 'account-1')).rejects.toMatchObject({ status: 403 })
+    expect(state.memberships[0]).toMatchObject({ role: 'PLATFORM_ADMIN', status: 'ACTIVE' })
+    expect(state.lifecycleUpdateWheres).toContainEqual({ organizationId: 'org-1', accountId: 'account-1', role: 'MEMBER' })
   })
 
   it('persists membership lifecycle status with an ACTIVE default', () => {
