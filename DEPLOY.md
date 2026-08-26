@@ -71,8 +71,8 @@
 `install.sh` 自动加载 `images/*.tar` 与 `images/*.tar.gz`。也可以手动执行：
 
 ```bash
-docker load -i images/ucli-server-runtime_v0.2.0.tar.gz
-docker load -i images/ucli-server-web_v0.2.0.tar.gz
+docker load -i images/ucli-server-runtime_v0.3.0.tar.gz
+docker load -i images/ucli-server-web_v0.3.0.tar.gz
 ```
 
 ## 配置说明

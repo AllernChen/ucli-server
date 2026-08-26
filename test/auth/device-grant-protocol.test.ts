@@ -1,15 +1,19 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-const protocol = readFileSync('docs/ucli-client-protocol.md', 'utf8')
-const clientUpgrade = readFileSync('docs/ucli-client-registration-upgrade.md', 'utf8')
-const design = readFileSync('docs/superpowers/specs/2026-08-26-device-grant-registration-design.md', 'utf8')
-const plan = readFileSync('docs/superpowers/plans/2026-08-26-device-grant-registration.md', 'utf8')
-const readme = readFileSync('README.md', 'utf8')
-const deploy = readFileSync('DEPLOY.md', 'utf8')
-const changelog = readFileSync('CHANGELOG.md', 'utf8')
-const migration = readFileSync('prisma/migrations/202608260001_device_grants/migration.sql', 'utf8')
-const schema = readFileSync('prisma/schema.prisma', 'utf8')
+function readText(path: string) {
+  return readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
+}
+
+const protocol = readText('docs/ucli-client-protocol.md')
+const clientUpgrade = readText('docs/ucli-client-registration-upgrade.md')
+const design = readText('docs/superpowers/specs/2026-08-26-device-grant-registration-design.md')
+const plan = readText('docs/superpowers/plans/2026-08-26-device-grant-registration.md')
+const readme = readText('README.md')
+const deploy = readText('DEPLOY.md')
+const changelog = readText('CHANGELOG.md')
+const migration = readText('prisma/migrations/202608260001_device_grants/migration.sql')
+const schema = readText('prisma/schema.prisma')
 
 function jsonBlock(heading: string): unknown {
   const start = protocol.indexOf(`### ${heading}\n\n\`\`\`json\n`)

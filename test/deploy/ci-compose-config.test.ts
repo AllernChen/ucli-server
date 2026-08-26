@@ -30,5 +30,5 @@ describe('CI Docker Compose configuration', () => {
     })
 
     expect(result.status, result.stderr || result.stdout).toBe(0)
-  })
+  }, 30_000)
 })

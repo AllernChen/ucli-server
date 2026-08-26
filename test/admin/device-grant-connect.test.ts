@@ -139,14 +139,14 @@ describe('device grant browser connection', () => {
   })
 
   it('keeps raw tokens out of the connection page DOM and diagnostic paths', async () => {
-    const source = await readFile(resolve('apps/admin/src/views/Connect.vue'), 'utf8')
+    const source = (await readFile(resolve('apps/admin/src/views/Connect.vue'), 'utf8')).replace(/\r\n/g, '\n')
     expect(source).not.toMatch(/\{\{\s*(?:grant)?token\s*\}\}/i)
     expect(source).not.toMatch(/console\.[^(]+\([^)]*token/i)
     expect(source).not.toMatch(/route\.query|location\.search/i)
   })
 
   it('guards launch and copy actions behind the available status', async () => {
-    const source = await readFile(resolve('apps/admin/src/views/Connect.vue'), 'utf8')
+    const source = (await readFile(resolve('apps/admin/src/views/Connect.vue'), 'utf8')).replace(/\r\n/g, '\n')
     expect(source).toContain('v-if="connectionState.canConnect"')
     expect(source).toContain('{{ connectionState.label }}')
     expect(source).toContain('{{ connectionState.message }}')
