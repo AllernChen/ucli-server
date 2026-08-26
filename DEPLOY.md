@@ -32,7 +32,8 @@ docker load -i images/ucli-server-web_v0.2.0.tar.gz
 - `MASTER_KEY`：Base64 编码的 32 字节密钥；丢失后渠道 Key 无法解密。
 - `JWT_SECRET`：至少 32 位随机值。
 - `SETUP_SECRET`：首次创建平台管理员使用，初始化完成后应轮换。
-- `PUBLIC_URL`、`GATEWAY_PUBLIC_URL`：员工访问地址。
+- `PUBLIC_URL`：必须是精确的 UCLI 可访问 origin，例如 `http://IP[:port]`；服务端据此生成浏览器设备授权链接。部署在可信公司内网时允许使用 HTTP，HTTP 以该内网为可信边界，不能用于不可信公网。
+- `GATEWAY_PUBLIC_URL`：员工访问的模型网关地址。
 
 `conf/.env` 包含敏感信息，不得提交或打入交付压缩包。
 
@@ -45,6 +46,12 @@ curl -f http://127.0.0.1/gateway/healthz
 ```
 
 浏览器访问 `http://<服务器地址>/`，首次部署使用 `/api/v1/auth/setup` 创建平台管理员。
+
+## 设备授权迁移与回滚
+
+此版本是破坏性迁移：升级会删除旧邀请和待审批设备码数据，并撤销旧设备 refresh token。执行 `./install.sh update` 前必须使用仓库标准备份脚本 `./scripts/backup.ps1`（Linux 交付包使用平台既有备份流程）完成数据库备份。
+
+迁移后旧表已不存在，因此二进制回滚不受支持。若必须回退，需一并恢复升级前数据库备份和上一版应用镜像；只回滚应用二进制会导致旧版本无法运行。部署前验证失败时，只回退本功能提交，不使用破坏性工作区重置。
 
 ## 常见问题
 

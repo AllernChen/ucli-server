@@ -7,6 +7,7 @@ ALTER TABLE "invitations" DROP CONSTRAINT "invitations_invited_by_id_fkey";
 ALTER TABLE "device_authorizations" DROP CONSTRAINT "device_authorizations_account_id_fkey";
 DROP TABLE "invitations";
 DROP TABLE "device_authorizations";
+DROP TYPE "DeviceCodeStatus";
 
 ALTER TABLE "accounts" ALTER COLUMN "password_hash" DROP NOT NULL;
 ALTER TABLE "memberships" ADD COLUMN "status" "AccountStatus" NOT NULL DEFAULT 'ACTIVE';

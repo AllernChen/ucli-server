@@ -4,6 +4,8 @@
 
 **服务端设计：** [`docs/superpowers/specs/2026-08-26-device-grant-registration-design.md`](superpowers/specs/2026-08-26-device-grant-registration-design.md)
 
+**服务端协议：** [`docs/ucli-client-protocol.md`](ucli-client-protocol.md)；接口字段、稳定错误码和安全边界以该协议为准。
+
 **协议版本：** UCLI Server Device Grant v1
 
 ## 升级目标
@@ -249,4 +251,4 @@ Content-Type: application/json
 
 ## 客户端仓库落地要求
 
-客户端团队实施前应根据实际仓库结构，把上述四个阶段拆成文件级、测试优先的实施任务。计划必须覆盖协议处理器、配置迁移、安全存储、网络服务、设置界面、能力隔离和通知测试；服务端接口字段与错误码以本方案和服务端设计文档为准。
+客户端团队实施前应根据实际仓库结构，把上述四个阶段拆成文件级、测试优先的实施任务。计划必须覆盖协议处理器、配置迁移、安全存储、网络服务、设置界面、能力隔离和通知测试；服务端接口字段、稳定错误码和安全边界以服务端协议为准。
