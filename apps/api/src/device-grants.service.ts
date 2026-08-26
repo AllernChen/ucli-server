@@ -1,9 +1,10 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { Prisma, Role } from '@prisma/client'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
-import { deriveDeviceGrantStatus } from '../../../packages/security/src/device-grants.js'
+import { deriveDeviceGrantStatus, deviceGrantFailure } from '../../../packages/security/src/device-grants.js'
+import { signAccessToken } from '../../../packages/security/src/auth.js'
 import { createOpaqueToken, hashOpaqueToken, opaqueTokenHint } from '../../../packages/security/src/tokens.js'
-import type { CreateDeviceGrantDto, DeviceGrantPageQueryDto, UpdateDeviceGrantDto } from './device-grants.dto.js'
+import type { CreateDeviceGrantDto, DeviceGrantPageQueryDto, RedeemDeviceGrantDto, UpdateDeviceGrantDto } from './device-grants.dto.js'
 import { DeviceGrantFilter } from './device-grants.dto.js'
 
 type GrantRecord = {
@@ -70,6 +71,18 @@ function serializeGrant(grant: GrantRecord, now: Date) {
   }
 }
 
+function grantException(code: string): BadRequestException {
+  return new BadRequestException({ code })
+}
+
+function validateDevice(input: RedeemDeviceGrantDto['device']) {
+  if (!input || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.installationId) ||
+    !input.name?.trim() || input.name.trim().length > 120 || !['windows', 'macos', 'linux'].includes(input.platform) ||
+    !input.clientVersion || input.clientVersion.length > 32) {
+    throw grantException('invalid_device')
+  }
+}
+
 @Injectable()
 export class DeviceGrantsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -92,6 +105,96 @@ export class DeviceGrantsService {
     }, select: { id: true, expiresAt: true } })
     const origin = new URL(process.env.PUBLIC_URL || 'http://localhost:3000').origin
     return { id: grant.id, token, connectionUrl: `${origin}/connect#token=${encodeURIComponent(token)}`, expiresAt: grant.expiresAt }
+  }
+
+  async preview(token: string) {
+    const grant = await this.prisma.deviceGrant.findUnique({
+      where: { tokenHash: hashOpaqueToken(token) },
+      include: { account: true, organization: true }
+    })
+    if (!grant) throw grantException('invalid_grant')
+    const membership = await this.prisma.membership.findUnique({
+      where: { organizationId_accountId: { organizationId: grant.organizationId, accountId: grant.accountId } }
+    })
+    this.assertEligibleGrant(grant, membership, false)
+    const now = new Date()
+    return {
+      account: { id: grant.account.id, displayName: grant.account.displayName },
+      organization: { id: grant.organization.id, name: grant.organization.name },
+      status: deriveDeviceGrantStatus(grant, now),
+      authorization: { expiresAt: grant.expiresAt, serverTime: now.toISOString() }
+    }
+  }
+
+  async redeem(input: RedeemDeviceGrantDto) {
+    validateDevice(input.device)
+    const tokenHash = hashOpaqueToken(input.token)
+    return this.prisma.$transaction(async transaction => {
+      const locked = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT "id"
+        FROM "device_grants"
+        WHERE "token_hash" = ${tokenHash}
+        FOR UPDATE
+      `)
+      if (!locked[0]) throw grantException('invalid_grant')
+      const grant = await transaction.deviceGrant.findUnique({
+        where: { id: locked[0].id },
+        include: { account: true, organization: true, device: true }
+      })
+      if (!grant) throw grantException('invalid_grant')
+      const membership = await transaction.membership.findUnique({
+        where: { organizationId_accountId: { organizationId: grant.organizationId, accountId: grant.accountId } }
+      })
+      const role = this.assertEligibleGrant(grant, membership)
+
+      const now = new Date()
+      let device = grant.device
+      if (!grant.deviceId) {
+        const existingDevice = await transaction.device.findUnique({ where: { installationId: input.device.installationId } })
+        if (existingDevice) throw grantException('invalid_device')
+        const refreshToken = createOpaqueToken()
+        device = await transaction.device.create({ data: {
+          organizationId: grant.organizationId, accountId: grant.accountId,
+          installationId: input.device.installationId, name: input.device.name.trim(), platform: input.device.platform,
+          clientVersion: input.device.clientVersion, refreshTokenHash: hashOpaqueToken(refreshToken)
+        } })
+        await transaction.deviceGrant.update({ where: { id: grant.id }, data: {
+          deviceId: device.id, boundAt: now, redeemRetryUntil: new Date(now.getTime() + 10 * 60_000)
+        } })
+        return this.credentials(grant, role, device.id, refreshToken, now)
+      }
+
+      if (!device || device.installationId !== input.device.installationId || !grant.redeemRetryUntil || grant.redeemRetryUntil <= now) {
+        throw grantException('grant_already_bound')
+      }
+      const refreshToken = createOpaqueToken()
+      await transaction.device.update({ where: { id: device.id }, data: {
+        refreshTokenHash: hashOpaqueToken(refreshToken), lastSeenAt: now
+      } })
+      return this.credentials(grant, role, device.id, refreshToken, now)
+    })
+  }
+
+  private assertEligibleGrant(grant: any, membership: { role: Role; status: string } | null, enforceLifecycle = true): Role {
+    const failure = deviceGrantFailure(grant)
+    if (enforceLifecycle && failure) throw grantException(failure)
+    if (grant.account.status !== 'ACTIVE') throw grantException('account_inactive')
+    if (!grant.organization.enabled) throw grantException('organization_inactive')
+    if (!membership || membership.role !== Role.MEMBER || membership.status !== 'ACTIVE') throw grantException('invalid_grant')
+    return membership.role
+  }
+
+  private credentials(grant: any, role: Role, deviceId: string, refreshToken: string, now: Date) {
+    return {
+      accessToken: signAccessToken({
+        sub: grant.accountId, organizationId: grant.organizationId, deviceId, role, tokenVersion: grant.account.tokenVersion
+      }),
+      refreshToken,
+      expiresIn: 900,
+      account: { id: grant.account.id, displayName: grant.account.displayName },
+      organization: { id: grant.organization.id, name: grant.organization.name },
+      authorization: { expiresAt: grant.expiresAt, serverTime: now.toISOString() }
+    }
   }
 
   async listGrouped(organizationId: string, query: DeviceGrantPageQueryDto) {
