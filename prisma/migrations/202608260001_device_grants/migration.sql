@@ -1,3 +1,5 @@
+BEGIN;
+
 -- Retire legacy credentials without deleting devices referenced by usage logs.
 UPDATE "devices" SET "revoked_at" = CURRENT_TIMESTAMP WHERE "revoked_at" IS NULL;
 
@@ -7,6 +9,7 @@ ALTER TABLE "invitations" DROP CONSTRAINT "invitations_invited_by_id_fkey";
 ALTER TABLE "device_authorizations" DROP CONSTRAINT "device_authorizations_account_id_fkey";
 DROP TABLE "invitations";
 DROP TABLE "device_authorizations";
+-- Default RESTRICT makes unknown external dependencies abort this whole transaction.
 DROP TYPE "DeviceCodeStatus";
 
 ALTER TABLE "accounts" ALTER COLUMN "password_hash" DROP NOT NULL;
@@ -50,3 +53,5 @@ ALTER TABLE "device_grants" ADD CONSTRAINT "device_grants_created_by_id_fkey"
   FOREIGN KEY ("created_by_id") REFERENCES "accounts"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "device_grants" ADD CONSTRAINT "device_grants_device_id_fkey"
   FOREIGN KEY ("device_id") REFERENCES "devices"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+COMMIT;

@@ -321,6 +321,8 @@ export class ManagedUserPageQueryDto extends PageQueryDto {
 
 `UsersService.create` must use one Prisma transaction, catch Prisma `P2002` as `ConflictException('Account email already exists')`, and return only non-secret fields. List by memberships in the current organization, include counts for grants/devices, and paginate with an exact `total`. Disable/enable must first fetch the current organization's membership and reject `PLATFORM_ADMIN` rather than performing a broad `account.updateMany`.
 
+Architecture clarification: `Account.status` remains the global platform status; managed-user disable/enable changes only the current organization's `Membership.status`. Device authorization checks both states.
+
 - [ ] **Step 5: Implement routes and register them**
 
 ```ts
