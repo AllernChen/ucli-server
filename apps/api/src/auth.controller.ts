@@ -16,12 +16,7 @@ export class AuthController {
   preview(@Body() body: PreviewDeviceGrantDto) { return this.grants.preview(body.token) }
   @Header('Cache-Control', 'no-store') @Post('device-grants/redeem')
   redeem(@Body() body: RedeemDeviceGrantDto) { return this.grants.redeem(body) }
-  @Post('invitations/accept') accept(@Body() body: any) { return this.auth.acceptInvitation(body) }
-  @Post('device/code') deviceCode(@Body() body: any) { return this.auth.startDevice(String(body.deviceName || 'UCLI')) }
-  @Post('device/token') deviceToken(@Body() body: any) { return this.auth.pollDevice(String(body.deviceCode || '')) }
   @Post('token/refresh') refresh(@Body() body: any) { return this.auth.refresh(String(body.refreshToken || '')) }
-  @ApiBearerAuth() @UseGuards(AuthGuard) @Post('device/approve')
-  approve(@Body() body: any, @Req() request: any) { return this.auth.approveDevice(String(body.userCode || ''), request.principal.sub) }
   @ApiBearerAuth() @UseGuards(AuthGuard) @Post('password')
   changePassword(@Body() body: any, @Req() request: any) {
     return this.auth.changePassword(request.principal.sub, {
