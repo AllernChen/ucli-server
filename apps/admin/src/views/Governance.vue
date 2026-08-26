@@ -6,42 +6,16 @@ import { formatCny } from '../currency'
 
 const loading = ref(true)
 const error = ref('')
-const notice = ref('')
-const tab = ref('members')
-
-const members = ref<any[]>([])
-const devices = ref<any[]>([])
+const tab = ref<'quotas' | 'audit'>('quotas')
 const quotas = ref<any[]>([])
 const audit = ref<any[]>([])
-const PAGE = 100
-const membersOffset = ref(0)
-const devicesOffset = ref(0)
-const inviteForm = ref({ email: '', role: 'MEMBER' })
 const quotaForm = ref({ accountId: '', publicModelId: '', dailyTokens: '', monthlyTokens: '', dailyCostUsd: '', monthlyCostUsd: '', qps: '', tpm: '', concurrency: '' })
 
 async function load() {
   loading.value = true; error.value = ''
   try {
-    [members.value, devices.value, quotas.value, audit.value] = await Promise.all([
-      api(`/api/v1/admin/members?limit=${PAGE}&offset=${membersOffset.value}`),
-      api(`/api/v1/admin/devices?limit=${PAGE}&offset=${devicesOffset.value}`),
-      api('/api/v1/admin/quotas'), api('/api/v1/admin/audit')
-    ])
+    [quotas.value, audit.value] = await Promise.all([api('/api/v1/admin/quotas'), api('/api/v1/admin/audit')])
   } catch (value: any) { error.value = value.message } finally { loading.value = false }
-}
-async function invite() {
-  if (!inviteForm.value.email) return error.value = '请填写邮箱'
-  try {
-    const result = await api('/api/v1/admin/invitations', { method: 'POST', body: JSON.stringify({ email: inviteForm.value.email, role: inviteForm.value.role }) })
-    notice.value = `邀请已创建，请把令牌发给对方（7 天有效）：${result.token}`
-    toast('邀请已创建')
-    inviteForm.value = { email: '', role: 'MEMBER' }
-    await load()
-  } catch (value: any) { error.value = value.message }
-}
-async function revoke(id: string) {
-  try { await api(`/api/v1/admin/devices/${id}/revoke`, { method: 'POST' }); toast('设备已撤销'); await load() }
-  catch (value: any) { error.value = value.message }
 }
 async function createQuota() {
   const body: Record<string, any> = {}
@@ -63,10 +37,6 @@ async function deleteQuota(id: string) {
   try { await api(`/api/v1/admin/quotas/${id}`, { method: 'DELETE' }); toast('配额已删除'); await load() }
   catch (value: any) { error.value = value.message }
 }
-function membersPrev() { if (membersOffset.value > 0) { membersOffset.value = Math.max(0, membersOffset.value - PAGE); load() } }
-function membersNext() { if (members.value.length === PAGE) { membersOffset.value += PAGE; load() } }
-function devicesPrev() { if (devicesOffset.value > 0) { devicesOffset.value = Math.max(0, devicesOffset.value - PAGE); load() } }
-function devicesNext() { if (devices.value.length === PAGE) { devicesOffset.value += PAGE; load() } }
 function truncate(value: any) {
   const s = JSON.stringify(value ?? '')
   return s.length > 80 ? s.slice(0, 80) + '…' : s
@@ -80,52 +50,11 @@ onMounted(load)
   <p v-else-if="error" class="state error">{{ error }}</p>
   <template v-else>
     <div class="tabs">
-      <button :class="{active: tab === 'members'}" @click="tab = 'members'">成员</button>
-      <button :class="{active: tab === 'devices'}" @click="tab = 'devices'">设备</button>
-      <button :class="{active: tab === 'quotas'}" @click="tab = 'quotas'">配额</button>
-      <button :class="{active: tab === 'audit'}" @click="tab = 'audit'">审计</button>
+      <button type="button" :class="{active: tab === 'quotas'}" @click="tab = 'quotas'">配额</button>
+      <button type="button" :class="{active: tab === 'audit'}" @click="tab = 'audit'">审计</button>
     </div>
 
-    <template v-if="tab === 'members'">
-      <section class="panel form-panel">
-        <h2>邀请成员</h2>
-        <div class="form-row">
-          <input v-model="inviteForm.email" type="email" placeholder="对方邮箱">
-          <select v-model="inviteForm.role"><option value="MEMBER">成员</option><option value="ORG_ADMIN">组织管理员</option></select>
-          <button class="primary" @click="invite">发送邀请</button>
-        </div>
-        <p v-if="notice" class="state">{{ notice }}</p>
-      </section>
-      <section class="panel">
-        <h2>成员列表</h2>
-        <table v-if="members.length">
-          <thead><tr><th>显示名</th><th>邮箱</th><th>角色</th><th>状态</th><th>加入时间</th></tr></thead>
-          <tbody><tr v-for="m in members" :key="m.accountId"><td>{{ m.account.displayName }}</td><td>{{ m.account.email }}</td><td>{{ m.role }}</td><td>{{ m.account.status }}</td><td>{{ m.account.createdAt?.slice(0, 10) }}</td></tr></tbody>
-        </table>
-        <p v-else class="empty">暂无成员</p>
-        <div v-if="members.length" class="actions">
-          <button @click="membersPrev">上一页</button>
-          <button @click="membersNext">下一页</button>
-        </div>
-      </section>
-    </template>
-
-    <template v-else-if="tab === 'devices'">
-      <section class="panel">
-        <h2>设备列表</h2>
-        <table v-if="devices.length">
-          <thead><tr><th>名称</th><th>最后活跃</th><th>创建时间</th><th>状态</th><th>操作</th></tr></thead>
-          <tbody><tr v-for="d in devices" :key="d.id"><td>{{ d.name }}</td><td>{{ d.lastSeenAt?.slice(0, 19).replace('T', ' ') }}</td><td>{{ d.createdAt?.slice(0, 10) }}</td><td>{{ d.revokedAt ? '已撤销' : '正常' }}</td><td><div class="actions"><button v-if="!d.revokedAt" @click="revoke(d.id)">撤销</button></div></td></tr></tbody>
-        </table>
-        <p v-else class="empty">暂无设备</p>
-        <div v-if="devices.length" class="actions">
-          <button @click="devicesPrev">上一页</button>
-          <button @click="devicesNext">下一页</button>
-        </div>
-      </section>
-    </template>
-
-    <template v-else-if="tab === 'quotas'">
+    <template v-if="tab === 'quotas'">
       <section class="panel form-panel">
         <h2>新建配额</h2>
         <div class="form-row">

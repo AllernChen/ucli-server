@@ -34,7 +34,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       SETUP_SECRET: ${SETUP_SECRET:?SETUP_SECRET is required}
       MASTER_KEY: ${MASTER_KEY:?MASTER_KEY is required}
-      PUBLIC_URL: ${PUBLIC_URL:-http://localhost}
+      PUBLIC_URL: ${PUBLIC_URL:?PUBLIC_URL is required}
       GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-http://localhost/gateway}
     depends_on: { postgres: { condition: service_healthy } }
 

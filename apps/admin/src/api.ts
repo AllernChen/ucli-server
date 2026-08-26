@@ -17,6 +17,16 @@ export async function api<T = any>(path: string, init: RequestInit = {}): Promis
   }
   return response.json() as Promise<T>
 }
+export async function publicApi<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(`${BASE}${path}`, {
+    ...init, headers: { 'content-type': 'application/json', ...init.headers }
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new Error(body?.message || `HTTP ${response.status}`)
+  }
+  return response.json() as Promise<T>
+}
 export async function optional<T = any[]>(path: string): Promise<T> {
   try {
     const response = await fetch(`${BASE}${path}`, { headers: { authorization: `Bearer ${token()}` } })

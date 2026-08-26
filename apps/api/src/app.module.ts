@@ -27,9 +27,13 @@ import { AnalyticsController } from './analytics.controller.js'
 import { AnalyticsService } from './analytics.service.js'
 import { ProcurementCostsController } from './procurement-costs.controller.js'
 import { ProcurementCostsService } from './procurement-costs.service.js'
+import { UsersController } from './users.controller.js'
+import { UsersService } from './users.service.js'
+import { DeviceGrantsController } from './device-grants.controller.js'
+import { DeviceGrantsService } from './device-grants.service.js'
 
 @Module({
-  controllers: [AuthController, ChannelsController, ChannelModelsController, ProcurementCostsController, ModelTestingController, AnalyticsController, ClientController, ModelsController, UsageController, SkillsController, ReportsController, GovernanceController, MonitoringController, MetricsController, OrganizationsController],
-  providers: [PrismaService, AuthService, ChannelsService, ChannelModelsService, ProcurementCostsService, ModelBindingService, ModelsService, ModelTestingService, AnalyticsService, AuthGuard, ObjectStorageService, AuditInterceptor]
+  controllers: [AuthController, ChannelsController, ChannelModelsController, ProcurementCostsController, ModelTestingController, AnalyticsController, ClientController, ModelsController, UsageController, SkillsController, ReportsController, GovernanceController, MonitoringController, MetricsController, OrganizationsController, UsersController, DeviceGrantsController],
+  providers: [PrismaService, AuthService, ChannelsService, ChannelModelsService, ProcurementCostsService, ModelBindingService, ModelsService, ModelTestingService, AnalyticsService, UsersService, DeviceGrantsService, AuthGuard, ObjectStorageService, AuditInterceptor]
 })
 export class AppModule {}

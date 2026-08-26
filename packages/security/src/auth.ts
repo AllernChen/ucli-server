@@ -2,6 +2,7 @@ import { CanActivate, ExecutionContext, Injectable, SetMetadata, UnauthorizedExc
 import { Reflector } from '@nestjs/core'
 import jwt from 'jsonwebtoken'
 import { PrismaService } from '../../database/src/prisma.service.js'
+import { deviceGrantFailure } from './device-grants.js'
 
 export interface AuthPrincipal {
   sub: string
@@ -13,6 +14,25 @@ export interface AuthPrincipal {
 
 export const ROLES_KEY = 'ucli.roles'
 export const Roles = (...roles: AuthPrincipal['role'][]) => SetMetadata(ROLES_KEY, roles)
+
+type AuthorizationFailureCode = 'invalid_grant' | 'grant_disabled' | 'grant_expired' | 'grant_deleted' |
+  'account_inactive' | 'organization_inactive' | 'invalid_device'
+
+export function clientMessage(code: AuthorizationFailureCode): string {
+  return {
+    invalid_grant: 'Device grant is invalid',
+    grant_disabled: 'Device grant is disabled',
+    grant_expired: 'Device grant has expired',
+    grant_deleted: 'Device grant has been deleted',
+    account_inactive: 'Account or membership is inactive',
+    organization_inactive: 'Organization is inactive',
+    invalid_device: 'Device is invalid'
+  }[code]
+}
+
+export function authorizationFailure(code: AuthorizationFailureCode): UnauthorizedException {
+  return new UnauthorizedException({ code, message: clientMessage(code) })
+}
 
 export function signAccessToken(principal: AuthPrincipal): string {
   const secret = process.env.JWT_SECRET
@@ -35,22 +55,39 @@ export class AuthGuard implements CanActivate {
       }) as AuthPrincipal
     } catch { throw new UnauthorizedException('Invalid access token') }
     const principal = request.principal as AuthPrincipal
-    const account = await this.prisma.account.findFirst({ where: {
-      id: principal.sub, status: 'ACTIVE', tokenVersion: principal.tokenVersion,
-      memberships: { some: { organizationId: principal.organizationId, role: principal.role, organization: { enabled: true } } }
-    } })
-    if (!account) throw new UnauthorizedException('Account or membership is inactive')
     if (principal.deviceId) {
       const device = await this.prisma.device.findFirst({ where: {
-        id: principal.deviceId, accountId: principal.sub, organizationId: principal.organizationId, revokedAt: null
-      } })
-      if (!device) throw new UnauthorizedException('Device is revoked')
+        id: principal.deviceId, accountId: principal.sub, organizationId: principal.organizationId
+      }, include: { grant: true } })
+      if (!device) throw authorizationFailure('invalid_device')
+      if (!device.grant) throw authorizationFailure('invalid_grant')
+      const failure = deviceGrantFailure(device.grant)
+      if (failure) throw authorizationFailure(failure)
+      if (device.revokedAt) throw authorizationFailure('invalid_device')
+      await this.assertActiveMembership(principal, 'MEMBER')
       await this.prisma.device.update({ where: { id: device.id }, data: { lastSeenAt: new Date() } })
+    } else {
+      await this.assertActiveMembership(principal, principal.role)
     }
     const roles = this.reflector.getAllAndOverride<AuthPrincipal['role'][]>(ROLES_KEY, [
       context.getHandler(), context.getClass()
     ])
     if (roles?.length && !roles.includes(request.principal.role)) throw new UnauthorizedException('Role not permitted')
     return true
+  }
+
+  private async assertActiveMembership(principal: AuthPrincipal, role: AuthPrincipal['role']) {
+    const account = await this.prisma.account.findUnique({
+      where: { id: principal.sub },
+      include: { memberships: { where: { organizationId: principal.organizationId }, include: { organization: true } } }
+    })
+    if (!account || account.status !== 'ACTIVE' || account.tokenVersion !== principal.tokenVersion) {
+      throw authorizationFailure('account_inactive')
+    }
+    const membership = account.memberships[0]
+    if (!membership || membership.role !== role || membership.status !== 'ACTIVE') {
+      throw authorizationFailure('account_inactive')
+    }
+    if (!membership.organization.enabled) throw authorizationFailure('organization_inactive')
   }
 }

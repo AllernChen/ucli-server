@@ -7,8 +7,10 @@ import { JsonSafeInterceptor } from '../../../packages/http/src/json.interceptor
 import { AuditInterceptor } from '../../../packages/http/src/audit.interceptor.js'
 import { httpMetricsMiddleware } from '../../../packages/monitoring/src/http-metrics.js'
 import { PrismaExceptionFilter } from '../../../packages/http/src/prisma-exception.filter.js'
+import { requirePublicUrl } from '../../../packages/security/src/public-url.js'
 
 async function bootstrap() {
+  requirePublicUrl()
   const app = await NestFactory.create(AppModule, { bodyParser: true })
   app.use(httpMetricsMiddleware)
   app.useGlobalFilters(new PrismaExceptionFilter())

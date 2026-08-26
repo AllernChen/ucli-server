@@ -75,7 +75,7 @@ docker compose up -d --build
 
 首次初始化调用 `POST /api/v1/auth/setup` 时必须携带 `X-UCLI-Setup-Secret` 请求头，值来自 `SETUP_SECRET`。初始化完成后应轮换该密钥。
 
-首次启动后调用 `POST /api/v1/auth/setup` 创建首个组织和平台管理员。后续用户通过管理员邀请加入。
+首次启动后调用 `POST /api/v1/auth/setup` 创建首个组织和平台管理员。后续用户由平台预创建普通成员；管理员为每台设备创建授权，用户通过浏览器授权链接连接 UCLI。旧邀请和设备码流程不再兼容，具体桌面端接入见 [协议](docs/ucli-client-protocol.md)。
 
 ## 安全边界
 

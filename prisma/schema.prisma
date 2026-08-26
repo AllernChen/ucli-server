@@ -18,13 +18,6 @@ enum AccountStatus {
   DISABLED
 }
 
-enum DeviceCodeStatus {
-  PENDING
-  APPROVED
-  CONSUMED
-  EXPIRED
-}
-
 enum ChannelProtocol {
   OPENAI
   ANTHROPIC
@@ -92,37 +85,37 @@ enum ReportScope {
 }
 
 model Organization {
-  id          String              @id @default(uuid()) @db.Uuid
-  slug        String              @unique
-  name        String
-  timezone    String              @default("UTC")
-  enabled     Boolean             @default(true)
-  createdAt   DateTime            @default(now()) @map("created_at")
-  memberships Membership[]
-  devices     Device[]
-  invitations Invitation[]
-  quotas      QuotaPolicy[]
-  logs        UsageLog[]
-  skillScopes SkillOrganization[]
+  id           String              @id @default(uuid()) @db.Uuid
+  slug         String              @unique
+  name         String
+  timezone     String              @default("UTC")
+  enabled      Boolean             @default(true)
+  createdAt    DateTime            @default(now()) @map("created_at")
+  memberships  Membership[]
+  devices      Device[]
+  deviceGrants DeviceGrant[]
+  quotas       QuotaPolicy[]
+  logs         UsageLog[]
+  skillScopes  SkillOrganization[]
 
   @@map("organizations")
 }
 
 model Account {
-  id           String                @id @default(uuid()) @db.Uuid
-  email        String                @unique
-  displayName  String                @map("display_name")
-  passwordHash String                @map("password_hash")
-  status       AccountStatus         @default(ACTIVE)
-  tokenVersion Int                   @default(1) @map("token_version")
-  createdAt    DateTime              @default(now()) @map("created_at")
-  memberships  Membership[]
-  devices      Device[]
-  invitations  Invitation[]          @relation("Inviter")
-  deviceCodes  DeviceAuthorization[]
-  quotas       QuotaPolicy[]
-  logs         UsageLog[]
-  audits       AuditLog[]
+  id                  String                @id @default(uuid()) @db.Uuid
+  email               String                @unique
+  displayName         String                @map("display_name")
+  passwordHash String? @map("password_hash")
+  status              AccountStatus         @default(ACTIVE)
+  tokenVersion        Int                   @default(1) @map("token_version")
+  createdAt           DateTime              @default(now()) @map("created_at")
+  memberships         Membership[]
+  devices             Device[]
+  deviceGrants        DeviceGrant[]         @relation("GrantAccount")
+  createdDeviceGrants DeviceGrant[]         @relation("GrantCreator")
+  quotas              QuotaPolicy[]
+  logs                UsageLog[]
+  audits              AuditLog[]
 
   @@map("accounts")
 }
@@ -131,6 +124,7 @@ model Membership {
   organizationId String       @map("organization_id") @db.Uuid
   accountId      String       @map("account_id") @db.Uuid
   role           Role
+  status         AccountStatus @default(ACTIVE)
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   account        Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
@@ -138,52 +132,50 @@ model Membership {
   @@map("memberships")
 }
 
-model Invitation {
-  id             String       @id @default(uuid()) @db.Uuid
-  organizationId String       @map("organization_id") @db.Uuid
-  email          String
-  role           Role
-  tokenHash      String       @unique @map("token_hash")
-  expiresAt      DateTime     @map("expires_at")
-  acceptedAt     DateTime?    @map("accepted_at")
-  invitedById    String       @map("invited_by_id") @db.Uuid
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  invitedBy      Account      @relation("Inviter", fields: [invitedById], references: [id])
-
-  @@index([organizationId, email])
-  @@map("invitations")
-}
-
 model Device {
   id               String       @id @default(uuid()) @db.Uuid
   organizationId   String       @map("organization_id") @db.Uuid
   accountId        String       @map("account_id") @db.Uuid
   name             String
+  installationId   String?      @map("installation_id") @db.Uuid
+  platform         String?
+  clientVersion    String?      @map("client_version")
   refreshTokenHash String       @unique @map("refresh_token_hash")
   revokedAt        DateTime?    @map("revoked_at")
   lastSeenAt       DateTime?    @map("last_seen_at")
   createdAt        DateTime     @default(now()) @map("created_at")
   organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   account          Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  grant            DeviceGrant?
   logs             UsageLog[]
 
   @@index([organizationId, accountId])
   @@map("devices")
 }
 
-model DeviceAuthorization {
-  id              String           @id @default(uuid()) @db.Uuid
-  deviceCodeHash  String           @unique @map("device_code_hash")
-  userCode        String           @unique @map("user_code")
-  status          DeviceCodeStatus @default(PENDING)
-  accountId       String?          @map("account_id") @db.Uuid
-  deviceName      String           @map("device_name")
-  expiresAt       DateTime         @map("expires_at")
-  intervalSeconds Int              @default(5) @map("interval_seconds")
-  createdAt       DateTime         @default(now()) @map("created_at")
-  account         Account?         @relation(fields: [accountId], references: [id])
+model DeviceGrant {
+  id               String       @id @default(uuid()) @db.Uuid
+  organizationId   String       @map("organization_id") @db.Uuid
+  accountId        String       @map("account_id") @db.Uuid
+  tokenHash        String       @unique @map("token_hash")
+  tokenHint        String       @map("token_hint")
+  expiresAt        DateTime?    @map("expires_at")
+  disabledAt       DateTime?    @map("disabled_at")
+  deletedAt        DateTime?    @map("deleted_at")
+  boundAt          DateTime?    @map("bound_at")
+  redeemRetryUntil DateTime?    @map("redeem_retry_until")
+  deviceId         String?      @unique @map("device_id") @db.Uuid
+  createdById      String       @map("created_by_id") @db.Uuid
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  account          Account      @relation("GrantAccount", fields: [accountId], references: [id], onDelete: Cascade)
+  createdBy        Account      @relation("GrantCreator", fields: [createdById], references: [id])
+  device           Device?      @relation(fields: [deviceId], references: [id], onDelete: SetNull)
 
-  @@map("device_authorizations")
+  @@index([organizationId, accountId, createdAt])
+  @@index([organizationId, deletedAt, expiresAt])
+  @@map("device_grants")
 }
 
 model Channel {
