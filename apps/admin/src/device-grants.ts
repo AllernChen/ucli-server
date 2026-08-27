@@ -141,6 +141,15 @@ export function grantStatusLabel(status: DeviceGrantStatus): string {
   return grantStatusLabels[status]
 }
 
+export function canViewGrantLink(grant: DeviceGrantSummary) {
+  return grant.status === 'AVAILABLE' && grant.deviceId === null &&
+    ['AVAILABLE', 'EXPIRED'].includes(grant.currentLink?.status || '')
+}
+
+export function canRegenerateGrantLink(grant: DeviceGrantSummary) {
+  return grant.status === 'AVAILABLE' && grant.deviceId === null
+}
+
 export function grantActions(grant: Pick<DeviceGrantSummary, 'status'>): GrantAction[] {
   if (grant.status === 'DELETED') return []
   if (grant.status === 'DISABLED') return ['enable', 'edit-expiry', 'delete']
