@@ -3,6 +3,7 @@ import { GUARDS_METADATA, HEADERS_METADATA, METHOD_METADATA, PATH_METADATA } fro
 import { RequestMethod } from '@nestjs/common'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthController } from '../../apps/api/src/auth.controller.js'
+import { DeviceGrantLinksService } from '../../apps/api/src/device-grant-links.service.js'
 import { DeviceGrantsService } from '../../apps/api/src/device-grants.service.js'
 import { hashOpaqueToken } from '../../packages/security/src/tokens.js'
 
@@ -16,7 +17,7 @@ type HarnessOptions = {
   accountStatus?: string; organizationEnabled?: boolean; membershipRole?: string; membershipStatus?: string
   disabledAt?: Date | null; deletedAt?: Date | null; grantExpiresAt?: Date | null; linkExpiresAt?: Date | null
   linkRevokedAt?: Date | null; linkConsumedAt?: Date | null; boundInstallationId?: string; deviceRevokedAt?: Date | null
-  retryUntil?: Date | null; additionalGrant?: boolean
+  retryUntil?: Date | null; additionalGrant?: boolean; pauseRedeemLinkLock?: boolean
 }
 
 function redeemInput(installation = installationId, linkSecret = link) {
@@ -49,8 +50,12 @@ function makeRedeemHarness(options: HarnessOptions = {}) {
     state.grants.push({ id: 'grant-2', organizationId: 'org-1', accountId: 'account-1', tokenHash: 'legacy-grant-hash-2', tokenHint: '••••legacy-2', expiresAt: null, disabledAt: null, deletedAt: null, boundAt: null, redeemRetryUntil: null, deviceId: null, createdById: 'admin-1', createdAt, updatedAt: createdAt })
     state.links.push({ id: 'link-2', deviceGrantId: 'grant-2', secretHash: hashOpaqueToken(otherLink), secretHint: '••••other-link', secretEncrypted: { ciphertext: 'encrypted' }, expiresAt: null, revokedAt: null, consumedAt: null, createdById: 'admin-1', createdAt })
   }
-  const calls = { rowLocks: [] as unknown[][] }
+  const calls = { rowLocks: [] as unknown[][], lockRequests: [] as string[] }
   const queues = new Map<string, Promise<void>>()
+  let redeemLinkLockEntered: (() => void) | undefined
+  let releaseRedeemLinkLock: (() => void) | undefined
+  const redeemLinkLockWaiter = new Promise<void>(resolve => { redeemLinkLockEntered = resolve })
+  const redeemLinkLockPause = new Promise<void>(resolve => { releaseRedeemLinkLock = resolve })
   const accountFor = (id: string) => state.accounts.find(account => account.id === id) || null
   const deviceFor = (id: string | null) => state.devices.find(device => device.id === id) || null
   const membershipFor = (organizationId: string, accountId: string) => state.memberships.find(membership => membership.organizationId === organizationId && membership.accountId === accountId) || null
@@ -63,15 +68,28 @@ function makeRedeemHarness(options: HarnessOptions = {}) {
     auditLog: { create: async ({ data }: any) => { state.audits.push(data); return data } },
     deviceGrantLink: {
       findUnique: async ({ where }: any) => linkWithGrant(where.secretHash ? linkForHash(where.secretHash) : linkForId(where.id)),
+      findFirst: async ({ where }: any) => state.links.filter(item => item.deviceGrantId === where.deviceGrantId && item.revokedAt === where.revokedAt && item.consumedAt === where.consumedAt).sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0] ?? null,
       update: async ({ where, data }: any) => {
         const item = linkForId(where.id)
         if (!item) throw new Error('Link not found')
         Object.assign(item, data, { ...(data.secretEncrypted ? { secretEncrypted: null } : {}) })
         return linkWithGrant(item)
+      },
+      updateMany: async ({ where, data }: any) => {
+        const matching = state.links.filter(item => item.deviceGrantId === where.deviceGrantId && item.revokedAt === where.revokedAt && item.consumedAt === where.consumedAt)
+        matching.forEach(item => Object.assign(item, data, { ...(data.secretEncrypted ? { secretEncrypted: null } : {}) }))
+        return { count: matching.length }
+      },
+      create: async ({ data }: any) => {
+        if (state.links.some(item => item.deviceGrantId === data.deviceGrantId && !item.revokedAt && !item.consumedAt)) throw { code: 'P2002', meta: { target: ['device_grant_links_one_current_per_grant'] } }
+        const item = { id: `link-${state.links.length + 1}`, createdAt: new Date(), revokedAt: null, consumedAt: null, ...data }
+        state.links.push(item)
+        return item
       }
     },
     deviceGrant: {
       findUnique: async ({ where }: any) => grantWithRelations(grantFor(where.id)),
+      findFirst: async ({ where }: any) => grantFor(where.id)?.organizationId === where.organizationId ? grantFor(where.id) : null,
       update: async ({ where, data }: any) => { const grant = grantFor(where.id); if (!grant) throw new Error('Grant not found'); Object.assign(grant, data, { updatedAt: new Date() }); return grantWithRelations(grant) }
     },
     membership: { findUnique: async ({ where }: any) => membershipFor(where.organizationId_accountId.organizationId, where.organizationId_accountId.accountId) },
@@ -84,18 +102,29 @@ function makeRedeemHarness(options: HarnessOptions = {}) {
       const releases: Array<() => void> = []
       const transaction = { ...prisma, $queryRaw: async (query: any) => {
         const value = query.values[0] as string
-        const isLinkLock = query.strings.join('').includes('device_grant_links')
-        const key = `${isLinkLock ? 'link' : 'grant'}:${value}`
+        const sql = query.strings.join('')
+        const isLinkLock = sql.includes('device_grant_links')
+        const isSecretLookup = sql.includes('secret_hash')
+        const lockedLink = isLinkLock ? (isSecretLookup ? linkForHash(value) : state.links.find(item => item.deviceGrantId === value && !item.revokedAt && !item.consumedAt)) : null
+        const key = `${isLinkLock ? 'link' : 'grant'}:${lockedLink?.id ?? value}`
+        calls.lockRequests.push(isLinkLock ? 'device_grant_links' : 'device_grants')
         const previous = queues.get(key) || Promise.resolve()
         queues.set(key, new Promise<void>(resolve => { releases.push(resolve) }))
         await previous; calls.rowLocks.push(query.values)
-        if (isLinkLock) { const item = linkForHash(value); return item ? [{ id: item.id, deviceGrantId: item.deviceGrantId }] : [] }
+        if (options.pauseRedeemLinkLock && isLinkLock && isSecretLookup) {
+          redeemLinkLockEntered!()
+          await redeemLinkLockPause
+        }
+        if (isLinkLock) return lockedLink ? [{ id: lockedLink.id, deviceGrantId: lockedLink.deviceGrantId }] : []
         return grantFor(value) ? [{ id: value }] : []
       } }
       try { return await operation(transaction) } finally { releases.forEach(release => release()) }
     }
   }
-  return { service: new DeviceGrantsService(prisma), state, calls }
+  return {
+    service: new DeviceGrantsService(prisma), prisma, state, calls,
+    waitForRedeemLinkLock: () => redeemLinkLockWaiter, releaseRedeemLinkLock: () => releaseRedeemLinkLock!()
+  }
 }
 
 function errorCode(error: unknown) { return (error as any).getResponse().code }
@@ -147,6 +176,31 @@ describe('link-based device grant redemption', () => {
   ])('rejects %s retry as consumed', async (_name, input, options) => { const { service } = makeRedeemHarness(options); await expect(service.redeem(input)).rejects.toSatisfy(error => errorCode(error) === 'link_consumed') })
   it('serializes simultaneous first redemption to exactly one bound device', async () => {
     const { service, state } = makeRedeemHarness(); const results = await Promise.allSettled([service.redeem(redeemInput()), service.redeem(redeemInput(otherInstallationId))]); expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1); expect(errorCode((results.find(result => result.status === 'rejected') as PromiseRejectedResult).reason)).toBe('link_consumed'); expect(state.devices).toHaveLength(1); expect(state.links[0].consumedAt).toEqual(expect.any(Date))
+  })
+  it('races regeneration behind redemption on the current link before either transaction locks the grant', async () => {
+    const previousMasterKey = process.env.MASTER_KEY
+    const previousPublicUrl = process.env.PUBLIC_URL
+    process.env.MASTER_KEY = Buffer.alloc(32, 7).toString('base64')
+    process.env.PUBLIC_URL = 'https://ucli.example.test'
+    const { service, prisma, calls, waitForRedeemLinkLock, releaseRedeemLinkLock } = makeRedeemHarness({ pauseRedeemLinkLock: true })
+    const links = new DeviceGrantLinksService(prisma)
+    const redemption = service.redeem(redeemInput())
+    await waitForRedeemLinkLock()
+    const regeneration = links.regenerate('org-1', 'admin-1', 'grant-1', { expiresAt: null })
+    let results: PromiseSettledResult<unknown>[] = []
+    try {
+      await Promise.resolve()
+      expect(calls.lockRequests.slice(0, 2)).toEqual(['device_grant_links', 'device_grant_links'])
+    } finally {
+      releaseRedeemLinkLock()
+      results = await Promise.allSettled([redemption, regeneration])
+      if (previousMasterKey === undefined) delete process.env.MASTER_KEY
+      else process.env.MASTER_KEY = previousMasterKey
+      if (previousPublicUrl === undefined) delete process.env.PUBLIC_URL
+      else process.env.PUBLIC_URL = previousPublicUrl
+    }
+    expect(results[0]).toMatchObject({ status: 'fulfilled' })
+    expect(errorCode((results[1] as PromiseRejectedResult).reason)).toBe('grant_bound')
   })
 })
 

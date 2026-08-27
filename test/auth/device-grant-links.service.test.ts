@@ -21,6 +21,7 @@ function makeHarness(options: Partial<{
   linkExpiresAt: Date | null
   secretEncrypted: unknown
   pauseFirstLock: boolean
+  noCurrentLink: boolean
 }> = {}) {
   process.env.MASTER_KEY = masterKey.toString('base64')
   process.env.PUBLIC_URL = 'https://ucli.example.test'
@@ -32,11 +33,11 @@ function makeHarness(options: Partial<{
       deviceId: options.deviceId ?? null, disabledAt: options.disabledAt ?? null, deletedAt: options.deletedAt ?? null,
       expiresAt: options.expiresAt ?? null
     },
-    links: [{
+    links: (options.noCurrentLink ? [] : [{
       id: 'link-1', deviceGrantId: 'grant-1', createdById: 'actor-0', secretHash: previousCredential.secretHash,
       secretHint: previousCredential.secretHint, secretEncrypted: options.secretEncrypted === undefined ? previousCredential.secretEncrypted : options.secretEncrypted,
       expiresAt: options.linkExpiresAt ?? null, revokedAt: null, consumedAt: null, createdAt
-    }] as any[],
+    }]) as any[],
     audits: [] as any[]
   }
   const locks = new Map<string, Promise<void>>()
@@ -44,7 +45,7 @@ function makeHarness(options: Partial<{
   let releaseFirstLock: (() => void) | undefined
   const firstLockWaiter = new Promise<void>(resolve => { firstLockEntered = resolve })
   const firstLockPause = new Promise<void>(resolve => { releaseFirstLock = resolve })
-  const calls = { linkCreate: [] as any[], linkUpdates: [] as any[], rowLocks: [] as unknown[][] }
+  const calls = { linkCreate: [] as any[], linkUpdates: [] as any[], rowLocks: [] as unknown[][], rowLockTables: [] as string[] }
   const linkMatches = (link: any, where: any) =>
     (!where.deviceGrantId || link.deviceGrantId === where.deviceGrantId) &&
     (where.revokedAt === undefined || link.revokedAt === where.revokedAt) &&
@@ -73,24 +74,33 @@ function makeHarness(options: Partial<{
     },
     auditLog: { create: async ({ data }: any) => { state.audits.push(data); return data } },
     $transaction: async (operation: any) => {
-      let release: (() => void) | undefined
+      const releases: Array<() => void> = []
       const transaction = {
         ...prisma,
         $queryRaw: async (query: any) => {
-          const key = `${query.values[0]}:${query.values[1]}`
+          const linkLock = query.strings.join('').includes('device_grant_links')
+          const current = linkLock ? state.links.find(link => link.deviceGrantId === query.values[0] && !link.revokedAt && !link.consumedAt) : null
+          if (linkLock && !current) {
+            calls.rowLocks.push(query.values)
+            calls.rowLockTables.push('device_grant_links')
+            return []
+          }
+          const key = `${linkLock ? 'link' : 'grant'}:${current?.id ?? query.values[0]}`
           const previous = locks.get(key) ?? Promise.resolve()
-          const held = new Promise<void>(resolve => { release = resolve })
+          const held = new Promise<void>(resolve => { releases.push(resolve) })
           locks.set(key, previous.then(() => held))
           await previous
           calls.rowLocks.push(query.values)
+          calls.rowLockTables.push(linkLock ? 'device_grant_links' : 'device_grants')
           if (options.pauseFirstLock && calls.rowLocks.length === 1) {
             firstLockEntered!()
             await firstLockPause
           }
+          if (linkLock) return current ? [{ id: current.id }] : []
           return state.grant.id === query.values[0] && state.grant.organizationId === query.values[1] ? [{ id: state.grant.id }] : []
         }
       }
-      try { return await operation(transaction) } finally { release?.() }
+      try { return await operation(transaction) } finally { releases.forEach(release => release()) }
     }
   }
   return {
@@ -225,7 +235,20 @@ describe('device grant links service', () => {
 
     expect(results[0].connectionUrl).not.toBe(results[1].connectionUrl)
     expect(state.links.filter(link => !link.revokedAt && !link.consumedAt)).toHaveLength(1)
-    expect(calls.rowLocks).toEqual([['grant-1', 'org-1'], ['grant-1', 'org-1']])
+    expect(calls.rowLocks).toEqual([['grant-1'], ['grant-1', 'org-1'], ['grant-1'], ['grant-1', 'org-1']])
+  })
+
+  it('rechecks a no-current-link attempt after the grant lock and retries from the link lock', async () => {
+    const { links, state, calls } = makeHarness({ noCurrentLink: true })
+
+    const results = await Promise.all([
+      links.regenerate('org-1', 'actor-1', 'grant-1', { expiresAt: null }),
+      links.regenerate('org-1', 'actor-2', 'grant-1', { expiresAt: null })
+    ])
+
+    expect(results[0].connectionUrl).not.toBe(results[1].connectionUrl)
+    expect(state.links.filter(link => !link.revokedAt && !link.consumedAt)).toHaveLength(1)
+    expect(calls.rowLockTables).toEqual(['device_grant_links', 'device_grant_links', 'device_grants', 'device_grants', 'device_grant_links', 'device_grants'])
   })
 
   it('rejects an explicit expiry that elapses while waiting for the grant lock', async () => {

@@ -43,6 +43,8 @@ function linkNotFound(): NotFoundException {
   return new NotFoundException('Device grant link not found')
 }
 
+const retryRegeneration = Symbol('retryRegeneration')
+
 @Injectable()
 export class DeviceGrantLinksService {
   private readonly masterKey = loadMasterKey()
@@ -111,36 +113,52 @@ export class DeviceGrantLinksService {
 
   async regenerate(organizationId: string, actorId: string, grantId: string, input: CreateDeviceGrantLinkDto) {
     if (!this.prisma) throw new Error('PrismaService is required to regenerate device grant links')
-    const replacement = await this.prisma.$transaction(async transaction => {
-      const locked = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    let replacement: CreatedDeviceGrantLink
+    for (;;) {
+      try {
+        replacement = await this.prisma.$transaction(async transaction => {
+          const lockedCurrent = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT "id"
+        FROM "device_grant_links"
+        WHERE "device_grant_id" = ${grantId}::uuid AND "revoked_at" IS NULL AND "consumed_at" IS NULL
+        ORDER BY "created_at" DESC
+        LIMIT 1
+        FOR UPDATE
+        `)
+          const locked = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
         SELECT "id"
         FROM "device_grants"
         WHERE "id" = ${grantId}::uuid AND "organization_id" = ${organizationId}::uuid
         FOR UPDATE
       `)
-      if (!locked[0]) throw linkNotFound()
-      const grant = await transaction.deviceGrant.findFirst({
-        where: { id: grantId, organizationId },
-        select: { id: true, deviceId: true, disabledAt: true, deletedAt: true, expiresAt: true }
-      })
-      if (!grant) throw linkNotFound()
-      const status = deriveDeviceGrantStatus(grant)
-      if (status !== 'AVAILABLE') throw new BadRequestException({ code: `grant_${status.toLowerCase()}` })
-      const previous = await transaction.deviceGrantLink.findFirst({
-        where: { deviceGrantId: grant.id, revokedAt: null, consumedAt: null }, orderBy: { createdAt: 'desc' }
-      })
-      const now = new Date()
-      const expiresAt = parseLinkExpiry(input.expiresAt, now)
-      await transaction.deviceGrantLink.updateMany({
-        where: { deviceGrantId: grant.id, revokedAt: null, consumedAt: null },
-        data: { revokedAt: now, secretEncrypted: Prisma.DbNull }
-      })
-      const link = await this.createInTransaction(transaction, {
-        organizationId, actorId, grantId: grant.id, expiresAt, action: 'regenerate', previousLinkId: previous?.id ?? null,
-        credential: this.prepareCredential()
-      })
-      return link
-    })
+          if (!locked[0]) throw linkNotFound()
+          const grant = await transaction.deviceGrant.findFirst({
+            where: { id: grantId, organizationId },
+            select: { id: true, deviceId: true, disabledAt: true, deletedAt: true, expiresAt: true }
+          })
+          if (!grant) throw linkNotFound()
+          const status = deriveDeviceGrantStatus(grant)
+          if (status !== 'AVAILABLE') throw new BadRequestException({ code: `grant_${status.toLowerCase()}` })
+          const previous = await transaction.deviceGrantLink.findFirst({
+            where: { deviceGrantId: grant.id, revokedAt: null, consumedAt: null }, orderBy: { createdAt: 'desc' }
+          })
+          if (!lockedCurrent[0] && previous) throw retryRegeneration
+          const now = new Date()
+          const expiresAt = parseLinkExpiry(input.expiresAt, now)
+          await transaction.deviceGrantLink.updateMany({
+            where: { deviceGrantId: grant.id, revokedAt: null, consumedAt: null },
+            data: { revokedAt: now, secretEncrypted: Prisma.DbNull }
+          })
+          return this.createInTransaction(transaction, {
+            organizationId, actorId, grantId: grant.id, expiresAt, action: 'regenerate', previousLinkId: previous?.id ?? null,
+            credential: this.prepareCredential()
+          })
+        })
+        break
+      } catch (error) {
+        if (error !== retryRegeneration) throw error
+      }
+    }
     const origin = requirePublicUrl()
     return {
       currentLink: serializeLink(replacement),
