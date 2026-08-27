@@ -181,7 +181,7 @@ describe('device grant browser connection', () => {
     expect(source).toContain('{{ connectionState.message }}')
     expect(source).toContain('createExclusiveGrantActionGate()')
     expect(source).toContain('createGrantActionLifecycle()')
-    expect(source.match(/:disabled="actionPending"/g)).toHaveLength(2)
+    expect(source.match(/:disabled="actionPending"/g)).toHaveLength(4)
     expect(source).toContain('if (lifecycle.disposed) return')
     expect(source).toContain('if (!(await revalidateAction()) || lifecycle.disposed) return false\n    const target = connectionUrl()\n    window.location.href = target\n    grantLink = \'\'')
     expect(source).toContain('await navigator.clipboard.writeText(connectionUrl())\n      if (lifecycle.disposed) return false\n      notice.value')
@@ -206,7 +206,7 @@ describe('device grant browser connection', () => {
 
   it('maps stable link failures to contact-administrator guidance', async () => {
     const source = (await readFile(resolve('apps/admin/src/views/Connect.vue'), 'utf8')).replace(/\r\n/g, '\n')
-    expect(source).toContain('connectionStateForPreviewFailure(code).message')
-    expect(source).toContain('clearTerminalLinkFailure()')
+    expect(source).toContain('connectionStateForPreviewFailure(code)')
+    expect(source).toContain('clearTerminalFailure()')
   })
 })

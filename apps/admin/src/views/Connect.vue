@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { publicApi } from '../api'
-import { buildUcliConnectUrl, connectionStateForGrantPreview, connectionStateForGrantStatus, connectionStateForPreviewFailure, createExclusiveGrantActionGate, createGrantActionLifecycle, isTerminalLinkFailureState, readGrantLink, revalidateGrantAction } from '../device-grant-connect'
+import { buildUcliConnectUrl, connectionStateForGrantPreview, connectionStateForGrantStatus, connectionStateForPreviewFailure, createExclusiveGrantActionGate, createGrantActionLifecycle, isTerminalAuthorizationFailureState, isTerminalLinkFailureState, readGrantLink, revalidateGrantAction } from '../device-grant-connect'
 
 type GrantPreview = {
   account: { displayName: string }
@@ -17,6 +17,7 @@ const preview = ref<GrantPreview | null>(null)
 const serverOrigin = ref('')
 const connectionState = ref(connectionStateForGrantStatus(''))
 const actionPending = ref(false)
+const retryable = ref(false)
 const actionGate = createExclusiveGrantActionGate()
 const lifecycle = createGrantActionLifecycle()
 let grantLink = ''
@@ -34,18 +35,25 @@ function previewGrant(link: string) {
 function updatePreview(latest: GrantPreview) {
   preview.value = latest
   connectionState.value = connectionStateForGrantPreview(latest)
+  retryable.value = false
 }
 
-function previewErrorMessage(error: unknown) {
-  const code = error instanceof Error ? error.message : ''
-  return connectionStateForPreviewFailure(code).message
-}
-
-function clearTerminalLinkFailure() {
+function clearTerminalFailure() {
   grantLink = ''
   notice.value = ''
+  retryable.value = false
   preview.value = null
   error.value = connectionState.value.message
+}
+
+function applyRevalidationResult(latest: Awaited<ReturnType<typeof revalidateGrantAction<GrantPreview>>>) {
+  connectionState.value = latest.state
+  if (latest.preview) preview.value = latest.preview
+  if (isTerminalLinkFailureState(latest.state) || isTerminalAuthorizationFailureState(latest.state)) {
+    clearTerminalFailure()
+    return
+  }
+  retryable.value = !latest.state.canConnect
 }
 
 function setActionPending(value: boolean) {
@@ -56,9 +64,7 @@ async function revalidateAction() {
   if (!grantLink || lifecycle.disposed) return false
   const latest = await revalidateGrantAction(grantLink, previewGrant)
   if (lifecycle.disposed) return false
-  connectionState.value = latest.state
-  if (latest.preview) preview.value = latest.preview
-  if (isTerminalLinkFailureState(latest.state)) clearTerminalLinkFailure()
+  applyRevalidationResult(latest)
   return latest.state.canConnect
 }
 
@@ -82,6 +88,10 @@ async function connect() {
     grantLink = ''
     return true
   })
+}
+
+async function retryValidation() {
+  await runAction(revalidateAction)
 }
 
 async function copyConnectionLink() {
@@ -121,7 +131,13 @@ onMounted(async () => {
     updatePreview(initialPreview)
   } catch (caught) {
     if (lifecycle.disposed) return
-    error.value = previewErrorMessage(caught)
+    const code = caught instanceof Error ? caught.message : ''
+    connectionState.value = connectionStateForPreviewFailure(code)
+    if (isTerminalLinkFailureState(connectionState.value) || isTerminalAuthorizationFailureState(connectionState.value)) {
+      clearTerminalFailure()
+    } else {
+      retryable.value = true
+    }
   } finally {
     lifecycle.apply(() => { loading.value = false })
   }
@@ -155,7 +171,9 @@ onUnmounted(() => { lifecycle.dispose(); grantLink = '' })
           <p v-if="notice" class="state">{{ notice }}</p>
           <details><summary>未安装 UCLI？</summary><p>安装 UCLI 后重新打开此页面，或复制连接链接后在 UCLI 中打开。</p><button :disabled="actionPending" @click="copyConnectionLink">复制连接链接</button></details>
         </template>
+        <button v-else-if="retryable" :disabled="actionPending" @click="retryValidation">重新验证</button>
       </template>
+      <template v-else-if="retryable"><h1>暂时无法验证授权</h1><p class="state">{{ connectionState.message }}</p><button :disabled="actionPending" @click="retryValidation">重新验证</button></template>
     </section>
   </main>
 </template>

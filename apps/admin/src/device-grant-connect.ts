@@ -60,6 +60,10 @@ export function isTerminalLinkFailureState(state: GrantConnectionState): boolean
   return ['URL 已过期', 'URL 已撤销', 'URL 已使用', 'URL 无效'].includes(state.label)
 }
 
+export function isTerminalAuthorizationFailureState(state: GrantConnectionState): boolean {
+  return ['已禁用', '已过期', '已删除', '已绑定'].includes(state.label)
+}
+
 export async function revalidateGrantAction<T extends GrantActionPreview>(
   link: string, previewFetcher: (link: string) => Promise<T>
 ): Promise<{ preview?: T; state: GrantConnectionState }> {
