@@ -73,7 +73,7 @@ export class AuthService {
       if (device.account.status !== 'ACTIVE') throw authorizationFailure('account_inactive')
       if (!device.organization.enabled) throw authorizationFailure('organization_inactive')
       const membership = device.account.memberships.find(item => item.organizationId === device.organizationId)
-      if (!membership || membership.role !== Role.MEMBER || membership.status !== 'ACTIVE') throw authorizationFailure('account_inactive')
+      if (!membership || membership.status !== 'ACTIVE') throw authorizationFailure('account_inactive')
       const nextRefreshToken = randomBytes(32).toString('base64url')
       const rotated = await transaction.device.updateMany({ where: { id: device.id, refreshTokenHash: oldRefreshTokenHash }, data: {
         refreshTokenHash: hashOpaqueToken(nextRefreshToken), lastSeenAt: now

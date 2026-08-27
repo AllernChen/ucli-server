@@ -13,7 +13,7 @@ export class AuthController {
   @Post('setup') setup(@Body() body: any, @Headers('x-ucli-setup-secret') secret?: string) { return this.auth.setup(body, secret) }
   @Post('login') login(@Body() body: any) { return this.auth.login(body) }
   @Header('Cache-Control', 'no-store') @Post('device-grants/preview')
-  preview(@Body() body: PreviewDeviceGrantDto) { return this.grants.preview(body.token) }
+  preview(@Body() body: PreviewDeviceGrantDto) { return this.grants.preview(body.link) }
   @Header('Cache-Control', 'no-store') @Post('device-grants/redeem')
   redeem(@Body() body: RedeemDeviceGrantDto) { return this.grants.redeem(body) }
   @Post('token/refresh') refresh(@Body() body: any) { return this.auth.refresh(String(body.refreshToken || '')) }

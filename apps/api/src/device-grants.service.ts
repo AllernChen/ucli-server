@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { Prisma, Role, type Membership } from '@prisma/client'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import { deriveDeviceGrantStatus, deviceGrantFailure } from '../../../packages/security/src/device-grants.js'
-import { deriveDeviceGrantLinkStatus } from '../../../packages/security/src/device-grant-links.js'
+import { deriveDeviceGrantLinkStatus, deviceGrantLinkFailure } from '../../../packages/security/src/device-grant-links.js'
 import { signAccessToken } from '../../../packages/security/src/auth.js'
 import { createOpaqueToken, hashOpaqueToken } from '../../../packages/security/src/tokens.js'
 import { requirePublicUrl } from '../../../packages/security/src/public-url.js'
@@ -40,7 +40,8 @@ type PreviewGrant = Prisma.DeviceGrantGetPayload<{ include: typeof previewGrantI
 type RedemptionGrant = Prisma.DeviceGrantGetPayload<{ include: typeof redemptionGrantInclude }>
 type EligibleGrant = PreviewGrant | RedemptionGrant
 type GrantMembership = Pick<Membership, 'role' | 'status'>
-type KnownGrant = Pick<RedemptionGrant, 'id' | 'organizationId' | 'accountId' | 'tokenHint' | 'expiresAt' | 'deviceId'>
+type KnownGrant = Pick<RedemptionGrant, 'id' | 'organizationId' | 'accountId' | 'expiresAt' | 'deviceId'>
+type KnownLink = { secretHint: string }
 
 function parseExpiry(value: string | null | undefined, required: boolean): Date | null {
   if (value === undefined) {
@@ -101,8 +102,8 @@ function grantException(code: string): BadRequestException {
   return new BadRequestException({ code })
 }
 
-function validateToken(token: unknown): asserts token is string {
-  if (typeof token !== 'string' || token.length < 32 || token.length > 128) throw grantException('invalid_grant')
+function validateLink(link: unknown): asserts link is string {
+  if (typeof link !== 'string' || link.length < 32 || link.length > 128) throw grantException('invalid_link')
 }
 
 function validateDevice(input: RedeemDeviceGrantDto['device']): asserts input is { installationId: string; name: string; platform: string; clientVersion: string } {
@@ -177,57 +178,85 @@ export class DeviceGrantsService {
     }
   }
 
-  async preview(token: unknown) {
-    validateToken(token)
-    const grant = await this.prisma.deviceGrant.findUnique({
-      where: { tokenHash: hashOpaqueToken(token) },
-      include: previewGrantInclude
+  async preview(linkSecret: unknown) {
+    validateLink(linkSecret)
+    const link = await this.prisma.deviceGrantLink.findUnique({
+      where: { secretHash: hashOpaqueToken(linkSecret) },
+      include: { deviceGrant: { include: previewGrantInclude } }
     })
-    if (!grant) throw grantException('invalid_grant')
+    if (!link) throw grantException('invalid_link')
     const now = new Date()
-    const failure = deviceGrantFailure(grant, now)
-    if (!failure) {
-      const membership = await this.prisma.membership.findUnique({
-        where: { organizationId_accountId: { organizationId: grant.organizationId, accountId: grant.accountId } }
-      })
-      this.assertEligibleGrant(grant, membership, false)
-    }
+    const linkFailure = deviceGrantLinkFailure(link, now)
+    if (linkFailure) throw grantException(linkFailure)
+    const grant = link.deviceGrant
+    const membership = await this.prisma.membership.findUnique({
+      where: { organizationId_accountId: { organizationId: grant.organizationId, accountId: grant.accountId } }
+    })
+    this.assertEligibleGrant(grant, membership)
     return {
       account: { id: grant.account.id, displayName: grant.account.displayName },
       organization: { id: grant.organization.id, name: grant.organization.name },
-      status: deriveDeviceGrantStatus(grant, now),
-      authorization: { expiresAt: grant.expiresAt, serverTime: now.toISOString() }
+      link: { status: deriveDeviceGrantLinkStatus(link, now), expiresAt: link.expiresAt },
+      authorization: { status: deriveDeviceGrantStatus(grant, now), expiresAt: grant.expiresAt, serverTime: now.toISOString() }
     }
   }
 
   async redeem(input: RedeemDeviceGrantDto) {
-    validateToken(input.token)
+    validateLink(input.link)
     const deviceInput = input.device
     validateDevice(deviceInput)
-    const tokenHash = hashOpaqueToken(input.token)
+    const linkHash = hashOpaqueToken(input.link)
     let knownGrant: KnownGrant | null = null
+    let knownLink: KnownLink | null = null
     try {
       return await this.prisma.$transaction(async transaction => {
-        const locked = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-        SELECT "id"
-        FROM "device_grants"
-        WHERE "token_hash" = ${tokenHash}
+        const lockedLink = await transaction.$queryRaw<Array<{ id: string; deviceGrantId: string }>>(Prisma.sql`
+        SELECT "id", "device_grant_id" AS "deviceGrantId"
+        FROM "device_grant_links"
+        WHERE "secret_hash" = ${linkHash}
         FOR UPDATE
         `)
-        if (!locked[0]) throw grantException('invalid_grant')
+        if (!lockedLink[0]) throw grantException('invalid_link')
+        const link = await transaction.deviceGrantLink.findUnique({ where: { id: lockedLink[0].id } })
+        if (!link) throw grantException('invalid_link')
+        knownLink = link
+        const lockedGrant = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT "id"
+        FROM "device_grants"
+        WHERE "id" = ${lockedLink[0].deviceGrantId}::uuid
+        FOR UPDATE
+        `)
+        if (!lockedGrant[0]) throw grantException('invalid_link')
         const grant = await transaction.deviceGrant.findUnique({
-          where: { id: locked[0].id },
+          where: { id: lockedGrant[0].id },
           include: redemptionGrantInclude
         })
-        if (!grant) throw grantException('invalid_grant')
+        if (!grant) throw grantException('invalid_link')
         knownGrant = grant
+        const now = new Date()
+        const linkFailure = deviceGrantLinkFailure(link, now)
+        if (linkFailure && linkFailure !== 'link_consumed') throw grantException(linkFailure)
+        let device = grant.device
+        if (linkFailure === 'link_consumed') {
+          if (!device || device.installationId !== deviceInput.installationId || device.revokedAt || !grant.redeemRetryUntil || grant.redeemRetryUntil <= now) {
+            throw grantException('link_consumed')
+          }
+          const membership = await transaction.membership.findUnique({
+            where: { organizationId_accountId: { organizationId: grant.organizationId, accountId: grant.accountId } }
+          })
+          const role = this.assertEligibleGrant(grant, membership)
+          const refreshToken = createOpaqueToken()
+          await transaction.device.update({ where: { id: device.id }, data: { refreshTokenHash: hashOpaqueToken(refreshToken), lastSeenAt: now } })
+          await this.writeAudit(transaction, grant.accountId, grant.organizationId, grant.id, 'redeem', {
+            outcome: 'success', secretHint: link.secretHint, deviceId: device.id, expiresAt: grant.expiresAt, mode: 'idempotent_retry'
+          })
+          return this.credentials(grant, role, device.id, refreshToken, now)
+        }
         const membership = await transaction.membership.findUnique({
           where: { organizationId_accountId: { organizationId: grant.organizationId, accountId: grant.accountId } }
         })
         const role = this.assertEligibleGrant(grant, membership)
 
-        const now = new Date()
-        let device = grant.device
         if (!grant.deviceId) {
           const existingDevice = await transaction.device.findFirst({ where: { installationId: deviceInput.installationId, revokedAt: null } })
           if (existingDevice) throw grantException('invalid_device')
@@ -240,27 +269,17 @@ export class DeviceGrantsService {
           await transaction.deviceGrant.update({ where: { id: grant.id }, data: {
             deviceId: device.id, boundAt: now, redeemRetryUntil: new Date(now.getTime() + 10 * 60_000)
           } })
+          await transaction.deviceGrantLink.update({ where: { id: link.id }, data: { consumedAt: now, secretEncrypted: Prisma.DbNull } })
           await this.writeAudit(transaction, grant.accountId, grant.organizationId, grant.id, 'redeem', {
-            outcome: 'success', tokenHint: grant.tokenHint, deviceId: device.id, expiresAt: grant.expiresAt, mode: 'first_bind'
+            outcome: 'success', secretHint: link.secretHint, deviceId: device.id, expiresAt: grant.expiresAt, mode: 'first_bind'
           })
           return this.credentials(grant, role, device.id, refreshToken, now)
         }
-
-        if (!device || device.installationId !== deviceInput.installationId || !grant.redeemRetryUntil || grant.redeemRetryUntil <= now) {
-          throw grantException('grant_already_bound')
-        }
-        const refreshToken = createOpaqueToken()
-        await transaction.device.update({ where: { id: device.id }, data: {
-          refreshTokenHash: hashOpaqueToken(refreshToken), lastSeenAt: now
-        } })
-        await this.writeAudit(transaction, grant.accountId, grant.organizationId, grant.id, 'redeem', {
-          outcome: 'success', tokenHint: grant.tokenHint, deviceId: device.id, expiresAt: grant.expiresAt, mode: 'idempotent_retry'
-        })
-        return this.credentials(grant, role, device.id, refreshToken, now)
+        throw grantException('link_consumed')
       })
     } catch (error) {
       const finalError = isInstallationIdConflict(error) ? grantException('invalid_device') : error
-      if (knownGrant) await this.writeFailureAudit(knownGrant, finalError)
+      if (knownGrant && knownLink) await this.writeFailureAudit(knownGrant, knownLink, finalError)
       throw finalError
     }
   }
@@ -270,7 +289,7 @@ export class DeviceGrantsService {
     if (enforceLifecycle && failure) throw grantException(failure)
     if (grant.account.status !== 'ACTIVE') throw grantException('account_inactive')
     if (!grant.organization.enabled) throw grantException('organization_inactive')
-    if (!membership || membership.role !== Role.MEMBER) throw grantException('invalid_grant')
+    if (!membership) throw grantException('invalid_grant')
     if (membership.status !== 'ACTIVE') throw grantException('account_inactive')
     return membership.role
   }
@@ -396,12 +415,12 @@ export class DeviceGrantsService {
     await transaction.auditLog.create({ data: { actorAccountId, organizationId, action: `device_grant.${action}`, resourceType: 'device_grant', resourceId, metadata } })
   }
 
-  private async writeFailureAudit(grant: KnownGrant, error: unknown) {
+  private async writeFailureAudit(grant: KnownGrant, link: KnownLink, error: unknown) {
     const response = typeof error === 'object' && error !== null && 'getResponse' in error && typeof (error as any).getResponse === 'function' ? (error as any).getResponse() : null
     const code = typeof response === 'object' && response !== null && 'code' in response && typeof (response as any).code === 'string' ? (response as any).code : 'redemption_failed'
     try {
       if (!this.prisma.auditLog) return
-      await this.prisma.auditLog.create({ data: { actorAccountId: grant.accountId, organizationId: grant.organizationId, action: 'device_grant.redeem', resourceType: 'device_grant', resourceId: grant.id, metadata: { outcome: 'failure', code, tokenHint: grant.tokenHint, deviceId: grant.deviceId, expiresAt: grant.expiresAt } } })
+      await this.prisma.auditLog.create({ data: { actorAccountId: grant.accountId, organizationId: grant.organizationId, action: 'device_grant.redeem', resourceType: 'device_grant', resourceId: grant.id, metadata: { outcome: 'failure', code, secretHint: link.secretHint, deviceId: grant.deviceId, expiresAt: grant.expiresAt } } })
     } catch (auditError) {
       console.error('device-grant-audit-write-failed', { error: auditError instanceof Error ? auditError.message : String(auditError) })
     }

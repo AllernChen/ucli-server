@@ -41,7 +41,7 @@ export class DeviceRegistrationDto {
 }
 
 export class PreviewDeviceGrantDto {
-  @Allow() token!: unknown
+  @Allow() link!: unknown
 }
 
 export class RedeemDeviceGrantDto extends PreviewDeviceGrantDto {
