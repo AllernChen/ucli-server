@@ -1,7 +1,7 @@
 import 'reflect-metadata'
 import { BadRequestException, NotFoundException } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DeviceGrantLinksService } from '../../apps/api/src/device-grant-links.service.js'
 import { createDeviceGrantLinkCredential } from '../../packages/security/src/device-grant-links.js'
 
@@ -20,6 +20,7 @@ function makeHarness(options: Partial<{
   expiresAt: Date | null
   linkExpiresAt: Date | null
   secretEncrypted: unknown
+  pauseFirstLock: boolean
 }> = {}) {
   process.env.MASTER_KEY = masterKey.toString('base64')
   process.env.PUBLIC_URL = 'https://ucli.example.test'
@@ -39,6 +40,10 @@ function makeHarness(options: Partial<{
     audits: [] as any[]
   }
   const locks = new Map<string, Promise<void>>()
+  let firstLockEntered: (() => void) | undefined
+  let releaseFirstLock: (() => void) | undefined
+  const firstLockWaiter = new Promise<void>(resolve => { firstLockEntered = resolve })
+  const firstLockPause = new Promise<void>(resolve => { releaseFirstLock = resolve })
   const calls = { linkCreate: [] as any[], linkUpdates: [] as any[], rowLocks: [] as unknown[][] }
   const linkMatches = (link: any, where: any) =>
     (!where.deviceGrantId || link.deviceGrantId === where.deviceGrantId) &&
@@ -78,14 +83,24 @@ function makeHarness(options: Partial<{
           locks.set(key, previous.then(() => held))
           await previous
           calls.rowLocks.push(query.values)
+          if (options.pauseFirstLock && calls.rowLocks.length === 1) {
+            firstLockEntered!()
+            await firstLockPause
+          }
           return state.grant.id === query.values[0] && state.grant.organizationId === query.values[1] ? [{ id: state.grant.id }] : []
         }
       }
       try { return await operation(transaction) } finally { release?.() }
     }
   }
-  return { links: new DeviceGrantLinksService(prisma), state, calls, previousUrl: `https://ucli.example.test/connect#link=${encodeURIComponent(previousCredential.secret)}` }
+  return {
+    links: new DeviceGrantLinksService(prisma), state, calls,
+    previousUrl: `https://ucli.example.test/connect#link=${encodeURIComponent(previousCredential.secret)}`,
+    waitForFirstLock: () => firstLockWaiter, releaseFirstLock: () => releaseFirstLock!()
+  }
 }
+
+afterEach(() => vi.useRealTimers())
 
 describe('device grant links service', () => {
   it('persists exactly a prepared credential for an initial link', async () => {
@@ -211,6 +226,24 @@ describe('device grant links service', () => {
     expect(results[0].connectionUrl).not.toBe(results[1].connectionUrl)
     expect(state.links.filter(link => !link.revokedAt && !link.consumedAt)).toHaveLength(1)
     expect(calls.rowLocks).toEqual([['grant-1', 'org-1'], ['grant-1', 'org-1']])
+  })
+
+  it('rejects an explicit expiry that elapses while waiting for the grant lock', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-27T00:00:00.000Z'))
+    const { links, state, calls, waitForFirstLock, releaseFirstLock } = makeHarness({ pauseFirstLock: true })
+
+    const first = links.regenerate('org-1', 'actor-1', 'grant-1', {})
+    await waitForFirstLock()
+    const second = links.regenerate('org-1', 'actor-2', 'grant-1', { expiresAt: new Date(Date.now() + 1_000).toISOString() })
+    await vi.advanceTimersByTimeAsync(2_000)
+    releaseFirstLock()
+    await first
+
+    await expect(second).rejects.toBeInstanceOf(BadRequestException)
+    expect(calls.linkUpdates).toHaveLength(1)
+    expect(calls.linkCreate).toHaveLength(1)
+    expect(state.links.filter(link => !link.revokedAt && !link.consumedAt)).toHaveLength(1)
   })
 
   it('keeps secrets, hashes, ciphertext, and URLs out of link audits', async () => {

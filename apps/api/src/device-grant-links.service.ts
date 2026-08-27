@@ -25,11 +25,11 @@ export interface CreatedDeviceGrantLink {
   createdAt: Date
 }
 
-function parseLinkExpiry(value: CreateDeviceGrantLinkDto['expiresAt']): Date | null {
-  if (value === undefined) return new Date(Date.now() + 7 * 24 * 60 * 60_000)
+function parseLinkExpiry(value: CreateDeviceGrantLinkDto['expiresAt'], now: Date): Date | null {
+  if (value === undefined) return new Date(now.getTime() + 7 * 24 * 60 * 60_000)
   if (value === null) return null
   const expiresAt = new Date(value)
-  if (!Number.isFinite(expiresAt.getTime()) || expiresAt <= new Date()) {
+  if (!Number.isFinite(expiresAt.getTime()) || expiresAt <= now) {
     throw new BadRequestException('expiresAt must be in the future')
   }
   return expiresAt
@@ -111,7 +111,6 @@ export class DeviceGrantLinksService {
 
   async regenerate(organizationId: string, actorId: string, grantId: string, input: CreateDeviceGrantLinkDto) {
     if (!this.prisma) throw new Error('PrismaService is required to regenerate device grant links')
-    const expiresAt = parseLinkExpiry(input.expiresAt)
     const replacement = await this.prisma.$transaction(async transaction => {
       const locked = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
         SELECT "id"
@@ -131,6 +130,7 @@ export class DeviceGrantLinksService {
         where: { deviceGrantId: grant.id, revokedAt: null, consumedAt: null }, orderBy: { createdAt: 'desc' }
       })
       const now = new Date()
+      const expiresAt = parseLinkExpiry(input.expiresAt, now)
       await transaction.deviceGrantLink.updateMany({
         where: { deviceGrantId: grant.id, revokedAt: null, consumedAt: null },
         data: { revokedAt: now, secretEncrypted: Prisma.DbNull }
