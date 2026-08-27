@@ -145,6 +145,13 @@ describe('device grant release contract', () => {
     expect(changelog).toContain('旧邀请、设备码和旧设备 refresh token 全部失效')
   })
 
+  it('documents independent link operations and recovery boundaries', () => {
+    expect(readme).toContain('链接 URL 有效期与授权有效期相互独立')
+    expect(readme).toContain('重新生成链接会立即使上一个链接失效')
+    expect(readme).toContain('连接 URL 使用 `MASTER_KEY` 加密')
+    expect(deploy).toContain('回滚必须同时恢复与上一版应用镜像匹配的升级前数据库备份')
+  })
+
   it('wraps the destructive migration atomically and drops the enum after its dependent table', () => {
     const statements = sqlWithoutComments(migration).split(';').map(statement => statement.trim()).filter(Boolean)
     const tableDrop = statements.indexOf('DROP TABLE "device_authorizations"')

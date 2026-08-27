@@ -45,6 +45,10 @@ describe('device grant link schema', () => {
     expect(migration).toMatch(/CREATE UNIQUE INDEX "device_grant_links_one_current_per_grant"[\s\S]*WHERE "revoked_at" IS NULL AND "consumed_at" IS NULL/)
   })
 
+  it('does not use PostgreSQL GRANT as an expand-migration table alias', () => {
+    expect(migration).not.toMatch(/\bAS\s+grant\b/i)
+  })
+
   it('removes legacy grant credentials only after every grant has link history', () => {
     const grant = schema.slice(schema.indexOf('model DeviceGrant {'), schema.indexOf('model Channel {'))
     expect(grant).not.toMatch(/tokenHash|tokenHint/)

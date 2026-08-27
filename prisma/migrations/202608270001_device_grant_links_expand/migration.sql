@@ -44,11 +44,11 @@ DO $$
 BEGIN
   IF EXISTS (
     SELECT 1
-    FROM "device_grants" AS grant
+    FROM "device_grants" AS device_grant
     WHERE NOT EXISTS (
       SELECT 1
       FROM "device_grant_links" AS link
-      WHERE link."device_grant_id" = grant."id"
+      WHERE link."device_grant_id" = device_grant."id"
     )
   ) THEN
     RAISE EXCEPTION 'Every device grant must have historical link evidence';
