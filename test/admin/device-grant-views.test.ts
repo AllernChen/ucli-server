@@ -63,6 +63,12 @@ describe('device grant admin views', () => {
 
   it('manages grouped grants through lifecycle endpoints', () => {
     expect(grantsView).toContain("api<Page<DeviceGrantUserGroup>>(`/api/v1/admin/device-grants?${deviceGrantQuery(filters)}`)")
+    expect(grantsView).toContain('<th>URL 提示</th>')
+    expect(grantsView).toContain('<th>URL 状态</th>')
+    expect(grantsView).toContain('<th>URL 有效期</th>')
+    expect(grantsView).toContain("grant.currentLink?.secretHint || '未生成'")
+    expect(grantsView).toContain('<DeviceGrantLinkActions :grant="grant" @changed="load" />')
+    expect(grantsView).toContain('<div class="actions" @click.stop>')
     expect(grantsView).toContain('/disable')
     expect(grantsView).toContain('/enable')
     expect(grantsView).toContain("method: 'PATCH'")
