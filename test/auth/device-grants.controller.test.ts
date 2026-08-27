@@ -1,6 +1,6 @@
 import 'reflect-metadata'
 import { describe, expect, it, vi } from 'vitest'
-import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants'
+import { HEADERS_METADATA, METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants'
 import { RequestMethod } from '@nestjs/common'
 import { DeviceGrantsController } from '../../apps/api/src/device-grants.controller.js'
 import { DeviceGrantFilter } from '../../apps/api/src/device-grants.dto.js'
@@ -18,7 +18,8 @@ function makeController() {
     updateExpiration: vi.fn(async () => ({ id: grantId })), disable: vi.fn(async () => ({ id: grantId })),
     enable: vi.fn(async () => ({ id: grantId })), delete: vi.fn(async () => ({ id: grantId }))
   }
-  return { controller: new DeviceGrantsController(grants as any), grants }
+  const links = { viewCurrent: vi.fn(async () => ({ connectionUrl: 'https://ucli.example.test/connect#link=secret' })), regenerate: vi.fn(async () => ({ connectionUrl: 'https://ucli.example.test/connect#link=rotated' })) }
+  return { controller: new DeviceGrantsController(grants as any, links as any), grants, links }
 }
 
 describe('device grants controller', () => {
@@ -52,5 +53,22 @@ describe('device grants controller', () => {
     expect(Reflect.getMetadata(METHOD_METADATA, controller.enable)).toBe(RequestMethod.POST)
     expect(Reflect.getMetadata(PATH_METADATA, controller.delete)).toBe('device-grants/:id')
     expect(Reflect.getMetadata(METHOD_METADATA, controller.delete)).toBe(RequestMethod.DELETE)
+  })
+
+  it('exposes no-store link recovery and regeneration routes in the current organization', async () => {
+    const { controller, links } = makeController()
+
+    await controller.viewLink(request, grantId)
+    await controller.regenerateLink(request, grantId, createInput)
+
+    expect(links.viewCurrent).toHaveBeenCalledWith(request.principal.organizationId, request.principal.sub, grantId)
+    expect(links.regenerate).toHaveBeenCalledWith(request.principal.organizationId, request.principal.sub, grantId, createInput)
+    expect(Reflect.getMetadata(PATH_METADATA, controller.viewLink)).toBe('device-grants/:id/link')
+    expect(Reflect.getMetadata(METHOD_METADATA, controller.viewLink)).toBe(RequestMethod.GET)
+    expect(Reflect.getMetadata(PATH_METADATA, controller.regenerateLink)).toBe('device-grants/:id/links')
+    expect(Reflect.getMetadata(METHOD_METADATA, controller.regenerateLink)).toBe(RequestMethod.POST)
+    for (const handler of [controller.viewLink, controller.regenerateLink]) {
+      expect(Reflect.getMetadata(HEADERS_METADATA, handler)).toContainEqual({ name: 'Cache-Control', value: 'no-store' })
+    }
   })
 })
