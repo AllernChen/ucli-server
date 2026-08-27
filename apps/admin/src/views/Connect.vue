@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { publicApi } from '../api'
-import { buildUcliConnectUrl, connectionStateForGrantStatus, createExclusiveGrantActionGate, createGrantActionLifecycle, readGrantLink, revalidateGrantAction } from '../device-grant-connect'
+import { buildUcliConnectUrl, connectionStateForGrantPreview, connectionStateForGrantStatus, createExclusiveGrantActionGate, createGrantActionLifecycle, readGrantLink, revalidateGrantAction } from '../device-grant-connect'
 
 type GrantPreview = {
   account: { displayName: string }
@@ -33,7 +33,7 @@ function previewGrant(link: string) {
 
 function updatePreview(latest: GrantPreview) {
   preview.value = latest
-  connectionState.value = connectionStateForGrantStatus(latest.authorization.status)
+  connectionState.value = connectionStateForGrantPreview(latest)
 }
 
 function previewErrorMessage(error: unknown) {

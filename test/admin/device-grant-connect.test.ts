@@ -42,23 +42,29 @@ describe('device grant browser connection', () => {
     })
   })
 
-  it('revalidates the latest grant status before allowing an action', async () => {
-    const token = 'grant-secret'
-    expect(connectionStateForGrantStatus('AVAILABLE').canConnect).toBe(true)
-    for (const status of ['DISABLED', 'BOUND', 'EXPIRED', 'DELETED', 'unexpected']) {
-      const fetcher = vi.fn(async (receivedToken: string) => ({ status }))
-      const result = await revalidateGrantAction(token, fetcher)
+  it('permits connection actions only when the exact preview link and authorization are available', async () => {
+    const link = 'grant-secret'
+    const preview = (linkStatus: string, authorizationStatus: string) => ({
+      account: { displayName: '成员姓名' }, organization: { name: '组织名称' },
+      link: { status: linkStatus, expiresAt: '2026-09-02T04:00:00.000Z' },
+      authorization: { status: authorizationStatus, expiresAt: '2026-12-31T04:00:00.000Z', serverTime: '2026-08-27T04:00:00.000Z' }
+    })
 
-      expect(fetcher).toHaveBeenCalledWith(token)
-      expect(result.preview).toEqual({ status })
-      expect(result.state.canConnect).toBe(false)
+    const available = preview('AVAILABLE', 'AVAILABLE')
+    const availableFetcher = vi.fn(async (receivedLink: string) => available)
+    const availableResult = await revalidateGrantAction(link, availableFetcher)
+    expect(availableFetcher).toHaveBeenCalledWith(link)
+    expect(availableResult).toEqual({ preview: available, state: connectionStateForGrantStatus('AVAILABLE') })
+
+    for (const linkStatus of ['EXPIRED', 'REVOKED', 'CONSUMED']) {
+      const result = await revalidateGrantAction(link, async () => preview(linkStatus, 'AVAILABLE'))
+      expect(result.state).toMatchObject({ canConnect: false, message: expect.stringContaining('请联系管理员创建新的授权链接') })
     }
 
-    const fetcher = vi.fn(async (receivedToken: string) => ({ status: 'AVAILABLE' }))
-    const result = await revalidateGrantAction(token, fetcher)
-    expect(fetcher).toHaveBeenCalledWith(token)
-    expect(result.preview).toEqual({ status: 'AVAILABLE' })
-    expect(result.state.canConnect).toBe(true)
+    for (const authorizationStatus of ['DISABLED', 'BOUND', 'EXPIRED', 'DELETED', 'unexpected']) {
+      const result = await revalidateGrantAction(link, async () => preview('AVAILABLE', authorizationStatus))
+      expect(result.state).toEqual(connectionStateForGrantStatus(authorizationStatus))
+    }
   })
 
   it('fails closed without exposing the token when revalidation fails', async () => {
@@ -137,6 +143,20 @@ describe('device grant browser connection', () => {
     expect(requestInit?.headers).toMatchObject({ 'content-type': 'application/json' })
     expect(requestInit?.headers).not.toHaveProperty('authorization')
     expect(storage.removeItem).not.toHaveBeenCalled()
+  })
+
+  it('returns contact-administrator guidance for stable link failures during revalidation', async () => {
+    for (const code of ['link_expired', 'link_revoked', 'link_consumed']) {
+      const result = await revalidateGrantAction('grant-secret', async () => { throw new Error(code) })
+      expect(result.state).toMatchObject({ canConnect: false, message: expect.stringContaining('请联系管理员创建新的授权链接') })
+    }
+  })
+
+  it('retains established authorization guidance for grant failures during revalidation', async () => {
+    for (const [code, status] of [['grant_disabled', 'DISABLED'], ['grant_expired', 'EXPIRED'], ['grant_deleted', 'DELETED']] as const) {
+      const result = await revalidateGrantAction('grant-secret', async () => { throw new Error(code) })
+      expect(result.state).toEqual(connectionStateForGrantStatus(status))
+    }
   })
 
   it('preserves stable link failure codes returned by the public API', async () => {

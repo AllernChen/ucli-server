@@ -25,14 +25,41 @@ export function connectionStateForGrantStatus(status: string): GrantConnectionSt
   }
 }
 
-export async function revalidateGrantAction<T extends { status: string }>(
-  token: string, previewFetcher: (token: string) => Promise<T>
+export function connectionStateForLinkStatus(status: string): GrantConnectionState {
+  const unavailable = (label: string, message: string): GrantConnectionState => ({ canConnect: false, label, message })
+  switch (status) {
+    case 'AVAILABLE': return { canConnect: true, label: 'URL 可用', message: '授权链接有效。' }
+    case 'EXPIRED': return unavailable('URL 已过期', '授权链接已过期，请联系管理员创建新的授权链接。')
+    case 'REVOKED': return unavailable('URL 已撤销', '授权链接已被撤销，请联系管理员创建新的授权链接。')
+    case 'CONSUMED': return unavailable('URL 已使用', '授权链接已使用，请联系管理员创建新的授权链接。')
+    default: return unavailable('URL 无效', '授权链接无效，请联系管理员创建新的授权链接。')
+  }
+}
+
+export type GrantActionPreview = { link: { status: string }; authorization: { status: string } }
+
+export function connectionStateForGrantPreview(preview: GrantActionPreview): GrantConnectionState {
+  const linkState = connectionStateForLinkStatus(preview.link.status)
+  return linkState.canConnect ? connectionStateForGrantStatus(preview.authorization.status) : linkState
+}
+
+function connectionStateForPreviewFailure(code: string): GrantConnectionState {
+  const authorizationStatus = new Map([
+    ['grant_disabled', 'DISABLED'], ['grant_expired', 'EXPIRED'],
+    ['grant_deleted', 'DELETED'], ['grant_already_bound', 'BOUND']
+  ]).get(code)
+  return authorizationStatus ? connectionStateForGrantStatus(authorizationStatus) : connectionStateForLinkStatus(code.replace(/^link_/, '').toUpperCase())
+}
+
+export async function revalidateGrantAction<T extends GrantActionPreview>(
+  link: string, previewFetcher: (link: string) => Promise<T>
 ): Promise<{ preview?: T; state: GrantConnectionState }> {
   try {
-    const preview = await previewFetcher(token)
-    return { preview, state: connectionStateForGrantStatus(preview.status) }
-  } catch {
-    return { state: connectionStateForGrantStatus('') }
+    const preview = await previewFetcher(link)
+    return { preview, state: connectionStateForGrantPreview(preview) }
+  } catch (error) {
+    const code = error instanceof Error ? error.message : ''
+    return { state: connectionStateForPreviewFailure(code) }
   }
 }
 
