@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createExclusiveAsyncRequestGate, createRequestLifecycle, deviceGrantQuery, grantActions, grantExpiryPayload, grantStatusLabel, type DeviceGrantSummary, type ManagedUser } from '../../apps/admin/src/device-grants.js'
+import { createExclusiveAsyncRequestGate, createRequestLifecycle, deviceGrantQuery, grantActions, grantExpiryPayload, grantStatusLabel, linkExpiryPayload, linkStatusLabel, type DeviceGrantSummary, type DeviceGrantLinkStatus, type ManagedUser } from '../../apps/admin/src/device-grants.js'
 
 type Expect<T extends true> = T
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
@@ -14,6 +14,29 @@ function deferred<T>() {
 }
 
 describe('device grant administration helpers', () => {
+  it('calculates preset link expiry from the supplied time', () => {
+    const now = new Date('2026-08-27T00:00:00.000Z')
+    expect(linkExpiryPayload({ mode: '1d', customExpiresAt: '' }, now)).toEqual({ expiresAt: '2026-08-28T00:00:00.000Z' })
+    expect(linkExpiryPayload({ mode: '7d', customExpiresAt: '' }, now)).toEqual({ expiresAt: '2026-09-03T00:00:00.000Z' })
+    expect(linkExpiryPayload({ mode: '30d', customExpiresAt: '' }, now)).toEqual({ expiresAt: '2026-09-26T00:00:00.000Z' })
+    expect(linkExpiryPayload({ mode: 'permanent', customExpiresAt: '' }, now)).toEqual({ expiresAt: null })
+  })
+
+  it('converts future custom link expiry to ISO and rejects invalid or past values', () => {
+    const now = new Date('2026-08-27T00:00:00.000Z')
+    expect(linkExpiryPayload({ mode: 'custom', customExpiresAt: '2026-08-28T00:00' }, now)).toEqual({ expiresAt: new Date('2026-08-28T00:00').toISOString() })
+    expect(() => linkExpiryPayload({ mode: 'custom', customExpiresAt: '' }, now)).toThrow('请选择 URL 有效期')
+    expect(() => linkExpiryPayload({ mode: 'custom', customExpiresAt: 'not-a-date' }, now)).toThrow('请选择有效的 URL 有效期')
+    expect(() => linkExpiryPayload({ mode: 'custom', customExpiresAt: '2026-08-27T00:00' }, now)).toThrow('URL 有效期必须晚于当前时间')
+  })
+
+  it('labels each link status for the admin surface', () => {
+    const cases: Array<[DeviceGrantLinkStatus, string]> = [
+      ['AVAILABLE', '可用'], ['EXPIRED', '已过期'], ['REVOKED', '已撤销'], ['CONSUMED', '已使用']
+    ]
+    for (const [status, label] of cases) expect(linkStatusLabel(status)).toBe(label)
+  })
+
   it('offers reversible actions for disabled grants and no actions for deleted grants', () => {
     expect(grantActions({ status: 'DISABLED' })).toEqual(['enable', 'edit-expiry', 'delete'])
     expect(grantActions({ status: 'DELETED' })).toEqual([])

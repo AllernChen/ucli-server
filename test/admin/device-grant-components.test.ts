@@ -4,6 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick, reactive } from 'vue'
 import Drawer from '../../apps/admin/src/components/Drawer.vue'
 import ConfirmDialog from '../../apps/admin/src/components/ConfirmDialog.vue'
+import LinkExpiryFields from '../../apps/admin/src/components/LinkExpiryFields.vue'
 
 const state = vi.hoisted(() => ({ route: null as any, api: vi.fn(), push: vi.fn(), toast: vi.fn() }))
 vi.mock('../../apps/admin/src/api.js', () => ({ api: state.api }))
@@ -79,6 +80,27 @@ describe('admin dialog components', () => {
     await settle()
     openDrawer.unmount()
     expect(unmountFocus).toHaveBeenCalledOnce()
+  })
+
+  it('renders every link expiry option and enables custom datetime only for custom mode', async () => {
+    const wrapper = mount(LinkExpiryFields, { props: { modelValue: { mode: '7d', customExpiresAt: '' } } })
+    const select = wrapper.get('select')
+    const custom = wrapper.get('input[type="datetime-local"]')
+    expect(wrapper.text()).toContain('URL 有效期')
+    expect(select.findAll('option').map(option => option.text())).toEqual(['1 天', '7 天（默认）', '30 天', '永久', '自定义'])
+    expect(custom.attributes('required')).toBeUndefined()
+    expect(custom.attributes('disabled')).toBeDefined()
+
+    for (const mode of ['1d', '7d', '30d', 'permanent', 'custom'] as const) {
+      await select.setValue(mode)
+      const emittedValue = wrapper.emitted('update:modelValue')?.at(-1)?.[0]
+      expect(emittedValue).toEqual({ mode, customExpiresAt: '' })
+      await wrapper.setProps({ modelValue: emittedValue as { mode: typeof mode; customExpiresAt: string } })
+      expect(custom.attributes('required')).toBe(mode === 'custom' ? '' : undefined)
+      expect(custom.attributes('disabled')).toBe(mode === 'custom' ? undefined : '')
+    }
+    await wrapper.setProps({ modelValue: { mode: 'custom', customExpiresAt: '2026-08-28T00:00' } })
+    expect((wrapper.get('input[type="datetime-local"]').element as HTMLInputElement).value).toBe('2026-08-28T00:00')
   })
 })
 
