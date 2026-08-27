@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { Prisma, Role, type Membership } from '@prisma/client'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import { deriveDeviceGrantStatus, deviceGrantFailure } from '../../../packages/security/src/device-grants.js'
+import { deriveDeviceGrantLinkStatus } from '../../../packages/security/src/device-grant-links.js'
 import { signAccessToken } from '../../../packages/security/src/auth.js'
 import { createOpaqueToken, hashOpaqueToken } from '../../../packages/security/src/tokens.js'
 import { requirePublicUrl } from '../../../packages/security/src/public-url.js'
@@ -60,7 +61,13 @@ function parseLinkExpiry(value: string | null | undefined, now: Date): Date | nu
 }
 
 function serializeLink(link: Omit<CreatedDeviceGrantLink, 'secret'>) {
-  return { id: link.id, secretHint: link.secretHint, expiresAt: link.expiresAt, createdAt: link.createdAt }
+  return {
+    id: link.id,
+    secretHint: link.secretHint,
+    status: deriveDeviceGrantLinkStatus({ consumedAt: null, revokedAt: null, expiresAt: link.expiresAt }),
+    expiresAt: link.expiresAt,
+    createdAt: link.createdAt
+  }
 }
 
 function serializeGrant(grant: GrantRecord, now: Date) {
@@ -122,22 +129,34 @@ export class DeviceGrantsService {
   constructor(private readonly prisma: PrismaService, private readonly links?: DeviceGrantLinksService) {}
 
   async create(organizationId: string, actorId: string, accountId: string, input: CreateDeviceGrantDto) {
-    const membership = await this.prisma.membership.findUnique({
-      where: { organizationId_accountId: { organizationId, accountId } },
-      select: { role: true, status: true, account: { select: { status: true } }, organization: { select: { enabled: true } } }
-    })
-    if (!membership) throw new NotFoundException('Managed user not found')
-    if (membership.status !== 'ACTIVE' || membership.account.status !== 'ACTIVE' || !membership.organization.enabled) {
-      throw new ForbiddenException('Managed user is inactive')
-    }
-
     const expiresAt = parseExpiry(input.expiresAt, false)
     const now = new Date()
     const linkExpiresAt = parseLinkExpiry(input.linkExpiresAt, now)
-    const origin = requirePublicUrl()
     const links = this.links ?? new DeviceGrantLinksService()
     const credential = links.prepareCredential()
     const grant = await this.prisma.$transaction(async transaction => {
+      const eligibility = await transaction.$queryRaw<Array<{
+        membershipStatus: string
+        accountStatus: string
+        organizationEnabled: boolean
+      }>>(Prisma.sql`
+        SELECT
+          m."status" AS "membershipStatus",
+          a."status" AS "accountStatus",
+          o."enabled" AS "organizationEnabled"
+        FROM "memberships" m
+        JOIN "accounts" a ON a."id" = m."account_id"
+        JOIN "organizations" o ON o."id" = m."organization_id"
+        WHERE m."organization_id" = ${organizationId}::uuid
+          AND m."account_id" = ${accountId}::uuid
+        FOR UPDATE OF m, a, o
+      `)
+      const target = eligibility[0]
+      if (!target) throw new NotFoundException('Managed user not found')
+      if (target.membershipStatus !== 'ACTIVE' || target.accountStatus !== 'ACTIVE' || !target.organizationEnabled) {
+        throw new ForbiddenException('Managed user is inactive')
+      }
+      const origin = requirePublicUrl()
       const created = await transaction.deviceGrant.create({ data: {
         organizationId, accountId, createdById: actorId, expiresAt,
         tokenHash: credential.secretHash, tokenHint: credential.secretHint
@@ -148,13 +167,13 @@ export class DeviceGrantsService {
       await this.writeAudit(transaction, actorId, organizationId, created.id, 'create', {
         outcome: 'success', tokenHint: created.tokenHint, expiresAt: created.expiresAt
       })
-      return { created, link }
+      return { created, link, origin }
     })
     return {
       id: grant.created.id,
       expiresAt: grant.created.expiresAt,
       currentLink: serializeLink(grant.link),
-      connectionUrl: `${origin}/connect#link=${encodeURIComponent(grant.link.secret)}`
+      connectionUrl: `${grant.origin}/connect#link=${encodeURIComponent(grant.link.secret)}`
     }
   }
 
