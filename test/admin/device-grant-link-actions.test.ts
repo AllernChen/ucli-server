@@ -75,6 +75,29 @@ describe('DeviceGrantLinkActions', () => {
     wrapper.unmount()
   })
 
+  it('submits a custom expiry chosen through the mounted expiry fields', async () => {
+    const wrapper = mountActions()
+    state.api.mockResolvedValue({ connectionUrl: 'https://ucli.example.test/connect#link=custom-expiry-secret' })
+
+    await wrapper.get('button:nth-child(2)').trigger('click')
+    const select = document.querySelector('.link-expiry-fields select') as HTMLSelectElement
+    select.value = 'custom'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    await settle()
+    const customExpiry = document.querySelector('.link-expiry-fields input[type="datetime-local"]') as HTMLInputElement
+    expect(customExpiry.disabled).toBe(false)
+    customExpiry.value = '2026-08-28T06:30'
+    customExpiry.dispatchEvent(new Event('input', { bubbles: true }))
+    await settle()
+    ;(document.querySelector('[role="dialog"] button.primary') as HTMLButtonElement).click()
+    await settle()
+
+    expect(state.api).toHaveBeenLastCalledWith('/api/v1/admin/device-grants/grant-1/links', {
+      method: 'POST', body: JSON.stringify({ expiresAt: new Date('2026-08-28T06:30').toISOString() })
+    })
+    wrapper.unmount()
+  })
+
   it('shows copy success and clipboard failures next to the recovered URL', async () => {
     const wrapper = mountActions()
     state.api.mockResolvedValue({ connectionUrl: 'https://ucli.example.test/connect#link=copy-secret' })
@@ -132,6 +155,26 @@ describe('DeviceGrantLinkActions', () => {
 
     post.resolve({ connectionUrl: 'https://ucli.example.test/connect#link=one-secret' })
     await settle()
+    wrapper.unmount()
+  })
+
+  it('keeps regeneration current when view is attempted while its POST is pending', async () => {
+    const post = deferred<{ connectionUrl: string }>()
+    state.api.mockReturnValue(post.promise)
+    const wrapper = mountActions()
+    await wrapper.get('button:nth-child(2)').trigger('click')
+    ;(document.querySelector('[role="dialog"] button.primary') as HTMLButtonElement).click()
+    await settle()
+
+    const viewButton = wrapper.get('button:first-child')
+    expect((viewButton.element as HTMLButtonElement).disabled).toBe(true)
+    await viewButton.trigger('click')
+    expect(state.api).toHaveBeenCalledTimes(1)
+
+    post.resolve({ connectionUrl: 'https://ucli.example.test/connect#link=regenerated-secret' })
+    await settle()
+    expect(wrapper.emitted('changed')).toHaveLength(1)
+    expect((document.querySelector('textarea[aria-label="完整 URL"]') as HTMLTextAreaElement).value).toContain('regenerated-secret')
     wrapper.unmount()
   })
 

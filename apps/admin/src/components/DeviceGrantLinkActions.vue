@@ -24,8 +24,9 @@ const copyError = ref('')
 const regenerationOpen = ref(false)
 const viewPending = ref(false)
 const regenerationPending = ref(false)
-let expiryForm = reactive<LinkExpiryForm>({ mode: '7d', customExpiresAt: '' })
-const requestLifecycle = createRequestLifecycle()
+const expiryForm = reactive<LinkExpiryForm>({ mode: '7d', customExpiresAt: '' })
+const viewLifecycle = createRequestLifecycle()
+const regenerationLifecycle = createRequestLifecycle()
 const copyLifecycle = createRequestLifecycle()
 const viewGate = createExclusiveAsyncRequestGate(pending => { viewPending.value = pending })
 const regenerationGate = createExclusiveAsyncRequestGate(pending => { regenerationPending.value = pending })
@@ -41,9 +42,13 @@ function clearConnectionUrl() {
   copyError.value = ''
 }
 
+function updateExpiryForm(value: LinkExpiryForm) {
+  Object.assign(expiryForm, value)
+}
+
 async function viewConnectionUrl() {
-  if (!canViewGrantLink(props.grant) || viewPending.value) return
-  const requestGeneration = requestLifecycle.next()
+  if (!canViewGrantLink(props.grant) || viewPending.value || regenerationPending.value) return
+  const requestGeneration = viewLifecycle.next()
   let operation = 0
   viewError.value = ''
   try {
@@ -51,17 +56,18 @@ async function viewConnectionUrl() {
       operation = requestOperation
       return api<{ connectionUrl: string }>(`/api/v1/admin/device-grants/${props.grant.id}/link`)
     })
-    if (!result || !viewGate.isCurrent(operation) || !requestLifecycle.isCurrent(requestGeneration)) return
+    if (!result || !viewGate.isCurrent(operation) || !viewLifecycle.isCurrent(requestGeneration)) return
     clearConnectionUrl()
     connectionUrl.value = result.connectionUrl
   } catch (value: unknown) {
-    if (!viewGate.isCurrent(operation) || !requestLifecycle.isCurrent(requestGeneration)) return
+    if (!viewGate.isCurrent(operation) || !viewLifecycle.isCurrent(requestGeneration)) return
     viewError.value = errorMessage(value, '获取 URL 失败')
   }
 }
 
 function openRegeneration() {
   if (!canRegenerateGrantLink(props.grant) || regenerationPending.value) return
+  viewLifecycle.next()
   clearConnectionUrl()
   regenerationError.value = ''
   expiryForm.mode = '7d'
@@ -77,7 +83,8 @@ function closeRegeneration() {
 
 async function regenerateConnectionUrl() {
   if (!canRegenerateGrantLink(props.grant) || regenerationPending.value) return
-  const requestGeneration = requestLifecycle.next()
+  viewLifecycle.next()
+  const requestGeneration = regenerationLifecycle.next()
   let operation = 0
   regenerationError.value = ''
   try {
@@ -88,13 +95,13 @@ async function regenerateConnectionUrl() {
         method: 'POST', body: JSON.stringify(payload)
       })
     })
-    if (!result || !regenerationGate.isCurrent(operation) || !requestLifecycle.isCurrent(requestGeneration)) return
+    if (!result || !regenerationGate.isCurrent(operation) || !regenerationLifecycle.isCurrent(requestGeneration)) return
     regenerationOpen.value = false
     clearConnectionUrl()
     connectionUrl.value = result.connectionUrl
     emit('changed')
   } catch (value: unknown) {
-    if (!regenerationGate.isCurrent(operation) || !requestLifecycle.isCurrent(requestGeneration)) return
+    if (!regenerationGate.isCurrent(operation) || !regenerationLifecycle.isCurrent(requestGeneration)) return
     regenerationError.value = errorMessage(value, '重新生成 URL 失败')
   }
 }
@@ -118,7 +125,8 @@ async function copyConnectionUrl() {
 onBeforeUnmount(() => {
   viewGate.dispose()
   regenerationGate.dispose()
-  requestLifecycle.dispose()
+  viewLifecycle.dispose()
+  regenerationLifecycle.dispose()
   copyLifecycle.dispose()
   clearConnectionUrl()
 })
@@ -126,7 +134,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div v-if="canViewGrantLink(grant) || canRegenerateGrantLink(grant)" class="device-grant-link-actions">
-    <button v-if="canViewGrantLink(grant)" type="button" :disabled="viewPending" @click="viewConnectionUrl">查看 URL</button>
+    <button v-if="canViewGrantLink(grant)" type="button" :disabled="viewPending || regenerationPending" @click="viewConnectionUrl">查看 URL</button>
     <button v-if="canRegenerateGrantLink(grant)" type="button" :disabled="regenerationPending" @click="openRegeneration">重新生成 URL</button>
     <p v-if="viewError" class="state error">{{ viewError }}</p>
     <p v-if="regenerationError && !regenerationOpen" class="state error">{{ regenerationError }}</p>
@@ -134,7 +142,7 @@ onBeforeUnmount(() => {
 
   <Drawer :open="regenerationOpen" title="重新生成 URL" description="重新生成后，当前 URL 将立即失效。请选择新 URL 的有效期。" :close-disabled="regenerationPending" @close="closeRegeneration">
     <form id="regenerate-grant-link-form" class="stack-form" @submit.prevent="regenerateConnectionUrl">
-      <LinkExpiryFields v-model="expiryForm" />
+      <LinkExpiryFields :model-value="expiryForm" @update:model-value="updateExpiryForm" />
       <p v-if="regenerationError" class="state error">{{ regenerationError }}</p>
     </form>
     <template #footer>
