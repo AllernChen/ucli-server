@@ -158,8 +158,6 @@ model DeviceGrant {
   id               String       @id @default(uuid()) @db.Uuid
   organizationId   String       @map("organization_id") @db.Uuid
   accountId        String       @map("account_id") @db.Uuid
-  tokenHash        String       @unique @map("token_hash")
-  tokenHint        String       @map("token_hint")
   expiresAt        DateTime?    @map("expires_at")
   disabledAt       DateTime?    @map("disabled_at")
   deletedAt        DateTime?    @map("deleted_at")

@@ -1,6 +1,15 @@
 export type ManagedUserStatus = 'ACTIVE' | 'DISABLED'
 export type ManagedUserRole = 'MEMBER' | 'ORG_ADMIN' | 'PLATFORM_ADMIN'
 export type DeviceGrantStatus = 'AVAILABLE' | 'BOUND' | 'DISABLED' | 'EXPIRED' | 'DELETED'
+export type DeviceGrantLinkStatus = 'AVAILABLE' | 'EXPIRED' | 'REVOKED' | 'CONSUMED'
+
+export interface DeviceGrantLinkSummary {
+  id: string
+  secretHint: string
+  status: DeviceGrantLinkStatus
+  expiresAt: string | null
+  createdAt: string
+}
 
 export interface ManagedDevice {
   id: string
@@ -17,7 +26,7 @@ export interface ManagedDevice {
 export interface DeviceGrantSummary {
   id: string
   accountId: string
-  tokenHint: string
+  currentLink: DeviceGrantLinkSummary | null
   expiresAt: string | null
   disabledAt: string | null
   deletedAt: string | null
@@ -32,7 +41,7 @@ export interface DeviceGrantSummary {
 
 export interface UserDetailGrant {
   id: string
-  tokenHint: string
+  currentLink: DeviceGrantLinkSummary | null
   expiresAt: string | null
   disabledAt: string | null
   deletedAt: string | null

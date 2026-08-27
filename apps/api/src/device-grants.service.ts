@@ -13,7 +13,6 @@ import { DeviceGrantLinksService, type CreatedDeviceGrantLink } from './device-g
 type GrantRecord = {
   id: string
   accountId: string
-  tokenHint: string
   expiresAt: Date | null
   disabledAt: Date | null
   deletedAt: Date | null
@@ -22,6 +21,14 @@ type GrantRecord = {
   createdById: string
   createdAt: Date
   updatedAt: Date
+  links: Array<{
+    id: string
+    secretHint: string
+    expiresAt: Date | null
+    revokedAt: Date | null
+    consumedAt: Date | null
+    createdAt: Date
+  }>
   device?: {
     id: string
     name: string
@@ -71,11 +78,21 @@ function serializeLink(link: Omit<CreatedDeviceGrantLink, 'secret'>) {
   }
 }
 
+function serializeCurrentLink(link: GrantRecord['links'][number] | undefined, now: Date) {
+  if (!link) return null
+  return {
+    id: link.id,
+    secretHint: link.secretHint,
+    status: deriveDeviceGrantLinkStatus(link, now),
+    expiresAt: link.expiresAt,
+    createdAt: link.createdAt
+  }
+}
+
 function serializeGrant(grant: GrantRecord, now: Date) {
   return {
     id: grant.id,
     accountId: grant.accountId,
-    tokenHint: grant.tokenHint,
     expiresAt: grant.expiresAt,
     disabledAt: grant.disabledAt,
     deletedAt: grant.deletedAt,
@@ -85,6 +102,7 @@ function serializeGrant(grant: GrantRecord, now: Date) {
     createdAt: grant.createdAt,
     updatedAt: grant.updatedAt,
     status: deriveDeviceGrantStatus(grant, now),
+    currentLink: serializeCurrentLink(grant.links[0], now),
     device: grant.device ? {
       id: grant.device.id,
       name: grant.device.name,
@@ -159,14 +177,13 @@ export class DeviceGrantsService {
       }
       const origin = requirePublicUrl()
       const created = await transaction.deviceGrant.create({ data: {
-        organizationId, accountId, createdById: actorId, expiresAt,
-        tokenHash: credential.secretHash, tokenHint: credential.secretHint
-      }, select: { id: true, expiresAt: true, tokenHint: true } })
+        organizationId, accountId, createdById: actorId, expiresAt
+      }, select: { id: true, expiresAt: true } })
       const link = await links.createInTransaction(transaction, {
         organizationId, actorId, grantId: created.id, expiresAt: linkExpiresAt, action: 'create', credential
       })
       await this.writeAudit(transaction, actorId, organizationId, created.id, 'create', {
-        outcome: 'success', tokenHint: created.tokenHint, expiresAt: created.expiresAt
+        outcome: 'success', secretHint: link.secretHint, expiresAt: created.expiresAt
       })
       return { created, link, origin }
     })
@@ -340,8 +357,11 @@ export class DeviceGrantsService {
     const grants = accountIds.length ? await this.prisma.deviceGrant.findMany({
       where: { ...grantWhere, accountId: { in: accountIds } }, orderBy: { createdAt: 'desc' },
       select: {
-        id: true, accountId: true, tokenHint: true, expiresAt: true, disabledAt: true, deletedAt: true,
+        id: true, accountId: true, expiresAt: true, disabledAt: true, deletedAt: true,
         boundAt: true, deviceId: true, createdById: true, createdAt: true, updatedAt: true,
+        links: { orderBy: { createdAt: 'desc' }, take: 1, select: {
+          id: true, secretHint: true, expiresAt: true, revokedAt: true, consumedAt: true, createdAt: true
+        } },
         device: { select: {
           id: true, name: true, installationId: true, platform: true, clientVersion: true,
           revokedAt: true, lastSeenAt: true, createdAt: true
@@ -401,11 +421,14 @@ export class DeviceGrantsService {
 
   private async auditLifecycle(organizationId: string, actorId: string, grantId: string, action: string, data: Record<string, unknown>, metadata: Record<string, unknown>) {
     await this.prisma.$transaction(async transaction => {
-      const grant = await transaction.deviceGrant.findFirst({ where: { id: grantId, organizationId, deletedAt: null }, select: { id: true, tokenHint: true } })
+      const grant = await transaction.deviceGrant.findFirst({ where: { id: grantId, organizationId, deletedAt: null }, select: {
+        id: true,
+        links: { orderBy: { createdAt: 'desc' }, take: 1, select: { secretHint: true } }
+      } })
       if (!grant) throw new NotFoundException('Device grant not found')
       const updated = await transaction.deviceGrant.updateMany({ where: { id: grantId, organizationId, deletedAt: null }, data })
       if (updated.count !== 1) throw new NotFoundException('Device grant not found')
-      await this.writeAudit(transaction, actorId, organizationId, grantId, action, { outcome: 'success', tokenHint: grant.tokenHint, ...metadata })
+      await this.writeAudit(transaction, actorId, organizationId, grantId, action, { outcome: 'success', secretHint: grant.links[0]?.secretHint ?? null, ...metadata })
     })
   }
 

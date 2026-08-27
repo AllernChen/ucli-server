@@ -2,6 +2,7 @@ import { ConflictException, ForbiddenException, Injectable, NotFoundException } 
 import { AccountStatus, Role } from '@prisma/client'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import { deriveDeviceGrantStatus, type DeviceGrantStatus } from '../../../packages/security/src/device-grants.js'
+import { deriveDeviceGrantLinkStatus, type DeviceGrantLinkStatus } from '../../../packages/security/src/device-grant-links.js'
 import type { CreateManagedUserDto, ManagedUserPageQueryDto } from './device-grants.dto.js'
 
 export interface ManagedUser {
@@ -29,18 +30,17 @@ export interface ManagedUserDetail extends ManagedUser {
     createdAt: Date
     grant: {
       id: string
-      tokenHint: string
       expiresAt: Date | null
       disabledAt: Date | null
       deletedAt: Date | null
       boundAt: Date | null
       deviceId: string | null
       status: DeviceGrantStatus
+      currentLink: DeviceGrantLinkSummary | null
     } | null
   }>
   deviceGrants: Array<{
     id: string
-    tokenHint: string
     expiresAt: Date | null
     disabledAt: Date | null
     deletedAt: Date | null
@@ -49,7 +49,39 @@ export interface ManagedUserDetail extends ManagedUser {
     createdAt: Date
     updatedAt: Date
     status: DeviceGrantStatus
+    currentLink: DeviceGrantLinkSummary | null
   }>
+}
+
+interface DeviceGrantLinkSummary {
+  id: string
+  secretHint: string
+  status: DeviceGrantLinkStatus
+  expiresAt: Date | null
+  createdAt: Date
+}
+
+type GrantWithLatestLink = {
+  links: Array<{
+    id: string
+    secretHint: string
+    expiresAt: Date | null
+    revokedAt: Date | null
+    consumedAt: Date | null
+    createdAt: Date
+  }>
+}
+
+function serializeCurrentLink(grant: GrantWithLatestLink, now: Date): DeviceGrantLinkSummary | null {
+  const link = grant.links[0]
+  if (!link) return null
+  return {
+    id: link.id,
+    secretHint: link.secretHint,
+    status: deriveDeviceGrantLinkStatus(link, now),
+    expiresAt: link.expiresAt,
+    createdAt: link.createdAt
+  }
 }
 
 function normalize(input: Pick<CreateManagedUserDto, 'email' | 'displayName'>) {
@@ -128,11 +160,19 @@ export class UsersService {
           devices: { where: { organizationId }, select: {
             id: true, name: true, installationId: true, platform: true, clientVersion: true,
             revokedAt: true, lastSeenAt: true, createdAt: true,
-            grant: { select: { id: true, tokenHint: true, expiresAt: true, disabledAt: true, deletedAt: true, boundAt: true, deviceId: true } }
+            grant: { select: {
+              id: true, expiresAt: true, disabledAt: true, deletedAt: true, boundAt: true, deviceId: true,
+              links: { orderBy: { createdAt: 'desc' }, take: 1, select: {
+                id: true, secretHint: true, expiresAt: true, revokedAt: true, consumedAt: true, createdAt: true
+              } }
+            } }
           } },
           deviceGrants: { where: { organizationId }, select: {
-            id: true, tokenHint: true, expiresAt: true, disabledAt: true, deletedAt: true,
-            boundAt: true, deviceId: true, createdAt: true, updatedAt: true
+            id: true, expiresAt: true, disabledAt: true, deletedAt: true,
+            boundAt: true, deviceId: true, createdAt: true, updatedAt: true,
+            links: { orderBy: { createdAt: 'desc' }, take: 1, select: {
+              id: true, secretHint: true, expiresAt: true, revokedAt: true, consumedAt: true, createdAt: true
+            } }
           } }
         } }
       }
@@ -143,8 +183,15 @@ export class UsersService {
       id: account.id, organizationId: membership.organizationId, email: account.email, displayName: account.displayName,
       status: membership.status, role: membership.role, createdAt: account.createdAt, lastSeenAt: account.devices.reduce<Date | null>((latest, device) => !latest || (device.lastSeenAt && device.lastSeenAt > latest) ? device.lastSeenAt : latest, null),
       deviceCount: account.devices.length, deviceGrantCount: account.deviceGrants.length,
-      devices: account.devices.map(device => ({ ...device, grant: device.grant ? { ...device.grant, status: deriveDeviceGrantStatus(device.grant, now) } : null })),
-      deviceGrants: account.deviceGrants.map(grant => ({ ...grant, status: deriveDeviceGrantStatus(grant, now) }))
+      devices: account.devices.map(device => {
+        if (!device.grant) return { ...device, grant: null }
+        const { links, ...grant } = device.grant
+        return { ...device, grant: { ...grant, status: deriveDeviceGrantStatus(device.grant, now), currentLink: serializeCurrentLink(device.grant, now) } }
+      }),
+      deviceGrants: account.deviceGrants.map(grant => {
+        const { links, ...summary } = grant
+        return { ...summary, status: deriveDeviceGrantStatus(grant, now), currentLink: serializeCurrentLink(grant, now) }
+      })
     }
   }
 

@@ -3,14 +3,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { DeviceGrantsService } from '../../apps/api/src/device-grants.service.js'
 import { DeviceGrantLinksService } from '../../apps/api/src/device-grant-links.service.js'
 import { DeviceGrantFilter } from '../../apps/api/src/device-grants.dto.js'
-import { hashOpaqueToken } from '../../packages/security/src/tokens.js'
 
 type Grant = {
   id: string
   organizationId: string
   accountId: string
-  tokenHash: string
-  tokenHint: string
   expiresAt: Date | null
   disabledAt: Date | null
   deletedAt: Date | null
@@ -29,11 +26,11 @@ function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string;
     accounts: [{ id: 'account-1', email: 'member@example.com', displayName: 'Member', status: options.accountStatus || 'ACTIVE' }],
     memberships: [{ organizationId: 'org-1', accountId: 'account-1', role: options.membershipRole || 'MEMBER', status: options.membershipStatus || 'ACTIVE' }],
     grants: [{
-      id: 'grant-1', organizationId: 'org-1', accountId: 'account-1', tokenHash: 'existing-secret-hash', tokenHint: '••••secret',
+      id: 'grant-1', organizationId: 'org-1', accountId: 'account-1',
       expiresAt: null, disabledAt: null, deletedAt: null, boundAt: options.bound ? createdAt : null,
       deviceId: options.bound ? 'device-1' : null, createdById: 'admin-1', createdAt, updatedAt: createdAt
     }],
-    links: [], devices: options.bound ? [{ id: 'device-1', organizationId: 'org-1', accountId: 'account-1', name: 'Member laptop', platform: 'windows', clientVersion: '1.0.0', revokedAt: null, lastSeenAt: null, createdAt }] : [], audits: []
+    links: [{ id: 'link-1', deviceGrantId: 'grant-1', secretHash: 'existing-secret-hash', secretHint: '••••secret', secretEncrypted: { ciphertext: 'encrypted-secret' }, expiresAt: null, revokedAt: null, consumedAt: null, createdAt }], devices: options.bound ? [{ id: 'device-1', organizationId: 'org-1', accountId: 'account-1', name: 'Member laptop', platform: 'windows', clientVersion: '1.0.0', revokedAt: null, lastSeenAt: null, createdAt }] : [], audits: []
   }
   const calls = { rowLocks: [] as unknown[][], eligibilityLocks: [] as unknown[][], grantReadsAfterLock: [] as boolean[], linkCreate: [] as any[] }
   let lockHeld = false
@@ -41,12 +38,16 @@ function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string;
     state.accounts.push({ id: 'account-2', email: 'other@example.com', displayName: 'Other', status: 'ACTIVE' })
     state.memberships.push({ organizationId: 'org-1', accountId: 'account-2', role: 'MEMBER', status: 'ACTIVE' })
     state.grants.push({
-      id: 'grant-2', organizationId: 'org-1', accountId: 'account-1', tokenHash: 'another-secret-hash', tokenHint: '••••second',
+      id: 'grant-2', organizationId: 'org-1', accountId: 'account-1',
       expiresAt: null, disabledAt: null, deletedAt: null, boundAt: null, deviceId: null, createdById: 'admin-1', createdAt, updatedAt: createdAt
     }, {
-      id: 'grant-3', organizationId: 'org-1', accountId: 'account-2', tokenHash: 'third-secret-hash', tokenHint: '••••third',
+      id: 'grant-3', organizationId: 'org-1', accountId: 'account-2',
       expiresAt: null, disabledAt: null, deletedAt: null, boundAt: null, deviceId: null, createdById: 'admin-1', createdAt, updatedAt: createdAt
     })
+    state.links.push(
+      { id: 'link-2', deviceGrantId: 'grant-2', secretHash: 'another-secret-hash', secretHint: '••••second', secretEncrypted: { ciphertext: 'second-encrypted-secret' }, expiresAt: null, revokedAt: null, consumedAt: null, createdAt },
+      { id: 'link-3', deviceGrantId: 'grant-3', secretHash: 'third-secret-hash', secretHint: '••••third', secretEncrypted: { ciphertext: 'third-encrypted-secret' }, expiresAt: null, revokedAt: null, consumedAt: null, createdAt }
+    )
   }
 
   const accountFor = (accountId: string) => state.accounts.find(account => account.id === accountId)
@@ -71,7 +72,7 @@ function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string;
   }
   const membershipFor = (organizationId: string, accountId: string) =>
     state.memberships.find(membership => membership.organizationId === organizationId && membership.accountId === accountId) || null
-  const serializeGrant = (grant: Grant) => ({ ...grant, device: deviceFor(grant.deviceId) })
+  const serializeGrant = (grant: Grant) => ({ ...grant, device: deviceFor(grant.deviceId), links: state.links.filter(link => link.deviceGrantId === grant.id).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 1) })
   const prisma: any = {
     auditLog: { create: async ({ data }: any) => { state.audits.push(data); return data } },
     membership: {
@@ -163,7 +164,7 @@ function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string;
 }
 
 describe('device grants', () => {
-  it('returns the initial secret only in the recoverable link fragment while storing its same hash and hint on the grant', async () => {
+  it('returns the initial secret only in the recoverable link fragment while storing its hash and hint on the link', async () => {
     const { service, state } = makeGrantHarness()
     const previousPublicUrl = process.env.PUBLIC_URL
     process.env.PUBLIC_URL = 'http://10.0.0.8:3000'
@@ -173,12 +174,16 @@ describe('device grants', () => {
       expect(result.connectionUrl).toBe(`http://10.0.0.8:3000/connect#link=${link}`)
       expect(link).not.toBe('')
       expect(result).not.toHaveProperty('secret')
-      expect(result.currentLink).toMatchObject({ id: 'link-1', status: 'AVAILABLE', expiresAt: null })
-      expect(state.grants.at(-1)?.tokenHash).toBe(hashOpaqueToken(link))
-      expect(state.grants.at(-1)?.tokenHint).toMatch(/^••••/)
-      expect(state.links).toHaveLength(1)
-      expect(JSON.stringify(result)).not.toContain('tokenHash')
+      expect(result.currentLink).toMatchObject({ id: 'link-2', status: 'AVAILABLE', expiresAt: null })
+      expect(state.grants.at(-1)).not.toHaveProperty('tokenHash')
+      expect(state.grants.at(-1)).not.toHaveProperty('tokenHint')
+      expect(state.links.at(-1)?.secretHash).toBeDefined()
+      expect(state.links.at(-1)?.secretHint).toMatch(/^••••/)
+      expect(state.links).toHaveLength(2)
+      expect(result).not.toHaveProperty('tokenHash')
       expect(state.audits).toContainEqual(expect.objectContaining({ action: 'device_grant.create', resourceType: 'device_grant', resourceId: result.id, organizationId: 'org-1' }))
+      expect(state.audits).toContainEqual(expect.objectContaining({ metadata: expect.objectContaining({ secretHint: state.links.at(-1)?.secretHint }) }))
+      expect(JSON.stringify(state.audits)).not.toContain('tokenHint')
       expect(JSON.stringify(state.audits)).not.toContain(link)
     } finally {
       if (previousPublicUrl === undefined) delete process.env.PUBLIC_URL
@@ -211,7 +216,7 @@ describe('device grants', () => {
       const { service, state } = makeGrantHarness(options)
       await expect(service.create('org-1', 'admin-1', 'account-1', { expiresAt: null })).rejects.toMatchObject({ status: 403 })
       expect(state.grants).toHaveLength(1)
-      expect(state.links).toHaveLength(0)
+      expect(state.links).toHaveLength(1)
     }
     const { service } = makeGrantHarness()
     await expect(service.create('org-2', 'admin-1', 'account-1', { expiresAt: null })).rejects.toMatchObject({ status: 404 })
@@ -225,7 +230,7 @@ describe('device grants', () => {
       await expect(service.create('org-1', 'admin-1', 'account-1', { expiresAt: null })).rejects.toMatchObject({ status: 403 })
       expect(calls.eligibilityLocks).toEqual([['org-1', 'account-1']])
       expect(state.grants).toHaveLength(1)
-      expect(state.links).toHaveLength(0)
+      expect(state.links).toHaveLength(1)
     } finally {
       if (previousPublicUrl === undefined) delete process.env.PUBLIC_URL
       else process.env.PUBLIC_URL = previousPublicUrl
@@ -299,22 +304,38 @@ describe('device grants', () => {
     await expect(service.updateExpiration('org-1', 'admin-1', 'grant-1', new Date(Date.now() + 3_600_000).toISOString())).rejects.toMatchObject({ status: 404 })
   })
 
-  it('paginates grouped grant results by user and never serializes token hashes', async () => {
-    const { service } = makeGrantHarness({ secondUser: true })
+  it('paginates grouped grants with their latest link summary and never serializes link credentials', async () => {
+    const { service, state } = makeGrantHarness({ secondUser: true })
+    const linkExpiry = new Date('2026-08-25T00:00:00.000Z')
+    state.links.push(
+      { id: 'link-1-revoked', deviceGrantId: 'grant-1', secretHash: 'older-link-hash', secretHint: '••••old', secretEncrypted: { ciphertext: 'older-encrypted-secret' }, expiresAt: null, revokedAt: new Date('2026-08-27T00:00:00.000Z'), consumedAt: null, createdAt: new Date('2026-08-27T00:00:00.000Z') },
+      { id: 'link-2-expired', deviceGrantId: 'grant-2', secretHash: 'latest-link-hash', secretHint: '••••abcd', secretEncrypted: { ciphertext: 'latest-encrypted-secret' }, expiresAt: linkExpiry, revokedAt: null, consumedAt: null, createdAt: new Date('2026-08-28T00:00:00.000Z') },
+      { id: 'link-3-consumed', deviceGrantId: 'grant-3', secretHash: 'consumed-link-hash', secretHint: '••••used', secretEncrypted: { ciphertext: 'consumed-encrypted-secret' }, expiresAt: null, revokedAt: null, consumedAt: new Date('2026-08-28T00:00:00.000Z'), createdAt: new Date('2026-08-28T00:00:00.000Z') }
+    )
     const result = await service.listGrouped('org-1', { limit: 1, offset: 0, status: DeviceGrantFilter.ALL })
-    expect(result).toMatchObject({ total: 2, limit: 1, offset: 0, items: [{ id: 'account-1', deviceGrants: [{ id: 'grant-1' }, { id: 'grant-2' }] }] })
-    expect(JSON.stringify(result)).not.toContain('secret-hash')
-    expect(JSON.stringify(result)).not.toContain('refreshTokenHash')
+    expect(result).toMatchObject({ total: 2, limit: 1, offset: 0, items: [{ id: 'account-1', deviceGrants: [
+      { id: 'grant-1', currentLink: { id: 'link-1-revoked', secretHint: '••••old', status: 'REVOKED' } },
+      { id: 'grant-2', currentLink: { id: 'link-2-expired', secretHint: '••••abcd', status: 'EXPIRED', expiresAt: linkExpiry } }
+    ] }] })
+    expect(result.items[0].deviceGrants[0]).not.toHaveProperty('tokenHash')
+    expect(result.items[0].deviceGrants[0]).not.toHaveProperty('tokenHint')
+    expect(JSON.stringify(result)).not.toContain('existing-secret-hash')
+    expect(JSON.stringify(result)).not.toContain('latest-encrypted-secret')
+    expect(JSON.stringify(result)).not.toContain('connectionUrl')
+    const all = await service.listGrouped('org-1', { limit: 50, offset: 0, status: DeviceGrantFilter.ALL })
+    expect(all.items.find(item => item.id === 'account-2')).toMatchObject({
+      deviceGrants: [{ id: 'grant-3', currentLink: { id: 'link-3-consumed', secretHint: '••••used', status: 'CONSUMED' } }]
+    })
   })
 
   it('applies mutually exclusive status filters and excludes deleted grants from ALL', async () => {
     const { service, state } = makeGrantHarness({ bound: true })
     const createdAt = state.grants[0].createdAt
     state.grants.push(
-      { id: 'grant-available', organizationId: 'org-1', accountId: 'account-1', tokenHash: 'available-hash', tokenHint: '••••available', expiresAt: null, disabledAt: null, deletedAt: null, boundAt: null, deviceId: null, createdById: 'admin-1', createdAt, updatedAt: createdAt },
-      { id: 'grant-disabled', organizationId: 'org-1', accountId: 'account-1', tokenHash: 'disabled-hash', tokenHint: '••••disabled', expiresAt: null, disabledAt: new Date(), deletedAt: null, boundAt: null, deviceId: null, createdById: 'admin-1', createdAt, updatedAt: createdAt },
-      { id: 'grant-expired', organizationId: 'org-1', accountId: 'account-1', tokenHash: 'expired-hash', tokenHint: '••••expired', expiresAt: new Date(Date.now() - 1_000), disabledAt: null, deletedAt: null, boundAt: null, deviceId: null, createdById: 'admin-1', createdAt, updatedAt: createdAt },
-      { id: 'grant-deleted', organizationId: 'org-1', accountId: 'account-1', tokenHash: 'deleted-hash', tokenHint: '••••deleted', expiresAt: null, disabledAt: null, deletedAt: new Date(), boundAt: null, deviceId: null, createdById: 'admin-1', createdAt, updatedAt: createdAt }
+      { id: 'grant-available', organizationId: 'org-1', accountId: 'account-1', expiresAt: null, disabledAt: null, deletedAt: null, boundAt: null, deviceId: null, createdById: 'admin-1', createdAt, updatedAt: createdAt },
+      { id: 'grant-disabled', organizationId: 'org-1', accountId: 'account-1', expiresAt: null, disabledAt: new Date(), deletedAt: null, boundAt: null, deviceId: null, createdById: 'admin-1', createdAt, updatedAt: createdAt },
+      { id: 'grant-expired', organizationId: 'org-1', accountId: 'account-1', expiresAt: new Date(Date.now() - 1_000), disabledAt: null, deletedAt: null, boundAt: null, deviceId: null, createdById: 'admin-1', createdAt, updatedAt: createdAt },
+      { id: 'grant-deleted', organizationId: 'org-1', accountId: 'account-1', expiresAt: null, disabledAt: null, deletedAt: new Date(), boundAt: null, deviceId: null, createdById: 'admin-1', createdAt, updatedAt: createdAt }
     )
     const expected: Array<[DeviceGrantFilter, string[]]> = [
       [DeviceGrantFilter.AVAILABLE, ['grant-available']],
