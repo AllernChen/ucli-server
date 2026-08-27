@@ -189,10 +189,12 @@ model DeviceGrantLink {
   consumedAt      DateTime?   @map("consumed_at")
   createdById     String      @map("created_by_id") @db.Uuid
   createdAt       DateTime    @default(now()) @map("created_at")
+  issuanceOrder   BigInt      @unique @default(autoincrement()) @map("issuance_order")
   deviceGrant     DeviceGrant @relation(fields: [deviceGrantId], references: [id], onDelete: Cascade)
   createdBy       Account     @relation("DeviceGrantLinkCreator", fields: [createdById], references: [id])
 
   @@index([deviceGrantId, createdAt])
+  @@index([deviceGrantId, issuanceOrder])
   @@map("device_grant_links")
 }
 

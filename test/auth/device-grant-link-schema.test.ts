@@ -16,6 +16,7 @@ describe('device grant link schema', () => {
     expect(account).toMatch(/createdDeviceGrantLinks\s+DeviceGrantLink\[\]\s+@relation\("DeviceGrantLinkCreator"\)/)
     expect(deviceGrantLink).toMatch(/secretHash\s+String\s+@unique\s+@map\("secret_hash"\)/)
     expect(deviceGrantLink).toMatch(/secretEncrypted\s+Json\?\s+@map\("secret_encrypted"\)/)
+    expect(deviceGrantLink).toMatch(/issuanceOrder\s+BigInt\s+@unique\s+@default\(autoincrement\(\)\)\s+@map\("issuance_order"\)/)
     expect(deviceGrantLink).toContain('@@index([deviceGrantId, createdAt])')
   })
 
@@ -34,6 +35,9 @@ describe('device grant link schema', () => {
     expect(contractMigration).toBeDefined()
     const sql = readFileSync(`prisma/migrations/${contractMigration}/migration.sql`, 'utf8')
     expect(sql).toMatch(/^BEGIN;/)
+    expect(sql).toContain('CREATE SEQUENCE "device_grant_links_issuance_order_seq"')
+    expect(sql).toContain('UPDATE "device_grant_links" SET "issuance_order" = nextval(')
+    expect(sql).toContain('CREATE UNIQUE INDEX "device_grant_links_issuance_order_key"')
     expect(sql).toContain('device grant link backfill incomplete')
     expect(sql).toContain('ALTER TABLE "device_grants" DROP COLUMN "token_hash", DROP COLUMN "token_hint";')
     expect(sql).toMatch(/COMMIT;\s*$/)

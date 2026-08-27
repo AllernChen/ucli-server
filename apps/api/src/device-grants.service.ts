@@ -28,6 +28,7 @@ type GrantRecord = {
     revokedAt: Date | null
     consumedAt: Date | null
     createdAt: Date
+    issuanceOrder: bigint
   }>
   device?: {
     id: string
@@ -359,8 +360,8 @@ export class DeviceGrantsService {
       select: {
         id: true, accountId: true, expiresAt: true, disabledAt: true, deletedAt: true,
         boundAt: true, deviceId: true, createdById: true, createdAt: true, updatedAt: true,
-        links: { orderBy: { createdAt: 'desc' }, take: 1, select: {
-          id: true, secretHint: true, expiresAt: true, revokedAt: true, consumedAt: true, createdAt: true
+        links: { orderBy: { issuanceOrder: 'desc' }, take: 1, select: {
+          id: true, secretHint: true, expiresAt: true, revokedAt: true, consumedAt: true, createdAt: true, issuanceOrder: true
         } },
         device: { select: {
           id: true, name: true, installationId: true, platform: true, clientVersion: true,
@@ -423,7 +424,7 @@ export class DeviceGrantsService {
     await this.prisma.$transaction(async transaction => {
       const grant = await transaction.deviceGrant.findFirst({ where: { id: grantId, organizationId, deletedAt: null }, select: {
         id: true,
-        links: { orderBy: { createdAt: 'desc' }, take: 1, select: { secretHint: true } }
+        links: { orderBy: { issuanceOrder: 'desc' }, take: 1, select: { secretHint: true } }
       } })
       if (!grant) throw new NotFoundException('Device grant not found')
       const updated = await transaction.deviceGrant.updateMany({ where: { id: grantId, organizationId, deletedAt: null }, data })

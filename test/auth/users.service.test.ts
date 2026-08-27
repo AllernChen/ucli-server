@@ -18,7 +18,7 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
     memberships: [{ organizationId: 'org-1', accountId: 'account-1', role: options.role || 'MEMBER', status: 'ACTIVE' }],
     devices: [{ id: 'device-1', organizationId: 'org-1', accountId: 'account-1' }],
     grants: [{ id: 'grant-1', organizationId: 'org-1', accountId: 'account-1' }],
-    links: [{ id: 'link-1', deviceGrantId: 'grant-1', secretHash: 'secret-hash', secretEncrypted: { ciphertext: 'encrypted-secret' }, secretHint: '••••secret', expiresAt: null, revokedAt: null, consumedAt: null, createdAt: new Date('2026-08-26T00:00:00Z') }]
+    links: [{ id: 'link-1', deviceGrantId: 'grant-1', issuanceOrder: 1n, secretHash: 'secret-hash', secretEncrypted: { ciphertext: 'encrypted-secret' }, secretHint: '••••secret', expiresAt: null, revokedAt: null, consumedAt: null, createdAt: new Date('2026-08-26T00:00:00Z') }]
   }
   state.lifecycleUpdateWheres = []
   if (options.secondOrganization) {
@@ -86,11 +86,15 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
         const items = state.memberships.filter((membership: any) => matchesMembership(membership, where))
         return items.slice(skip || 0, take === undefined ? undefined : (skip || 0) + take).map(membershipWithAccount)
       },
-      findUnique: async ({ where }: any) => {
+      findUnique: async ({ where, select }: any) => {
         const key = where.organizationId_accountId
         const membership = state.memberships.find((item: any) => item.organizationId === key.organizationId && item.accountId === key.accountId)
         if (!membership) return null
         const account = accountFor(membership.accountId)
+        const linkOrderBy = select?.account?.select?.deviceGrants?.select?.links?.orderBy || { createdAt: 'desc' }
+        const linkOrderField = Object.keys(linkOrderBy)[0]
+        const latestLink = (grantId: string) => state.links.filter((link: any) => link.deviceGrantId === grantId)
+          .sort((a: any, b: any) => a[linkOrderField] === b[linkOrderField] ? 0 : a[linkOrderField] > b[linkOrderField] ? -1 : 1).slice(0, 1)
         return {
           ...membership,
           account: {
@@ -104,7 +108,7 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
               .map((grant: any) => ({
                 id: grant.id, expiresAt: grant.expiresAt || null, disabledAt: grant.disabledAt || null, deletedAt: grant.deletedAt || null,
                 boundAt: grant.boundAt || null, deviceId: grant.deviceId || null, createdAt: account.createdAt, updatedAt: account.createdAt,
-                links: state.links.filter((link: any) => link.deviceGrantId === grant.id).sort((a: any, b: any) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 1)
+                links: latestLink(grant.id)
               }))
           }
         }
@@ -210,7 +214,7 @@ describe('managed users', () => {
   it('returns user detail with a latest link summary and no password or grant credential fields', async () => {
     const { service, state } = makeUsersHarness()
     const linkExpiry = new Date('2026-08-25T00:00:00.000Z')
-    state.links.push({ id: 'link-2', deviceGrantId: 'grant-1', secretHash: 'latest-secret-hash', secretEncrypted: { ciphertext: 'latest-encrypted-secret' }, secretHint: '••••abcd', expiresAt: linkExpiry, revokedAt: null, consumedAt: null, createdAt: new Date('2026-08-28T00:00:00Z') })
+    state.links.push({ id: 'link-2', deviceGrantId: 'grant-1', issuanceOrder: 2n, secretHash: 'latest-secret-hash', secretEncrypted: { ciphertext: 'latest-encrypted-secret' }, secretHint: '••••abcd', expiresAt: linkExpiry, revokedAt: null, consumedAt: null, createdAt: new Date('2026-08-25T00:00:00Z') })
     const result = await service.detail('org-1', 'account-1')
     expect(result).toMatchObject({ id: 'account-1', organizationId: 'org-1', role: 'MEMBER' })
     expect(result.deviceGrants[0]).toMatchObject({ id: 'grant-1', currentLink: { id: 'link-2', secretHint: '••••abcd', status: 'EXPIRED', expiresAt: linkExpiry } })

@@ -94,7 +94,7 @@ export class DeviceGrantLinksService {
     const grant = await this.prisma.deviceGrant.findFirst({ where: { id: grantId, organizationId }, select: { id: true } })
     if (!grant) throw linkNotFound()
     const link = await this.prisma.deviceGrantLink.findFirst({
-      where: { deviceGrantId: grant.id }, orderBy: { createdAt: 'desc' }
+      where: { deviceGrantId: grant.id }, orderBy: { issuanceOrder: 'desc' }
     })
     if (!link || !link.secretEncrypted) throw linkNotFound()
     const status = deriveDeviceGrantLinkStatus(link)
@@ -121,7 +121,7 @@ export class DeviceGrantLinksService {
         SELECT "id"
         FROM "device_grant_links"
         WHERE "device_grant_id" = ${grantId}::uuid AND "revoked_at" IS NULL AND "consumed_at" IS NULL
-        ORDER BY "created_at" DESC
+        ORDER BY "issuance_order" DESC
         LIMIT 1
         FOR UPDATE
         `)
@@ -140,7 +140,7 @@ export class DeviceGrantLinksService {
           const status = deriveDeviceGrantStatus(grant)
           if (status !== 'AVAILABLE') throw new BadRequestException({ code: `grant_${status.toLowerCase()}` })
           const previous = await transaction.deviceGrantLink.findFirst({
-            where: { deviceGrantId: grant.id, revokedAt: null, consumedAt: null }, orderBy: { createdAt: 'desc' }
+            where: { deviceGrantId: grant.id, revokedAt: null, consumedAt: null }, orderBy: { issuanceOrder: 'desc' }
           })
           if (!lockedCurrent[0] && previous) throw retryRegeneration
           const now = new Date()

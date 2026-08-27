@@ -69,6 +69,7 @@ type GrantWithLatestLink = {
     revokedAt: Date | null
     consumedAt: Date | null
     createdAt: Date
+    issuanceOrder: bigint
   }>
 }
 
@@ -162,16 +163,16 @@ export class UsersService {
             revokedAt: true, lastSeenAt: true, createdAt: true,
             grant: { select: {
               id: true, expiresAt: true, disabledAt: true, deletedAt: true, boundAt: true, deviceId: true,
-              links: { orderBy: { createdAt: 'desc' }, take: 1, select: {
-                id: true, secretHint: true, expiresAt: true, revokedAt: true, consumedAt: true, createdAt: true
+              links: { orderBy: { issuanceOrder: 'desc' }, take: 1, select: {
+                id: true, secretHint: true, expiresAt: true, revokedAt: true, consumedAt: true, createdAt: true, issuanceOrder: true
               } }
             } }
           } },
           deviceGrants: { where: { organizationId }, select: {
             id: true, expiresAt: true, disabledAt: true, deletedAt: true,
             boundAt: true, deviceId: true, createdAt: true, updatedAt: true,
-            links: { orderBy: { createdAt: 'desc' }, take: 1, select: {
-              id: true, secretHint: true, expiresAt: true, revokedAt: true, consumedAt: true, createdAt: true
+            links: { orderBy: { issuanceOrder: 'desc' }, take: 1, select: {
+              id: true, secretHint: true, expiresAt: true, revokedAt: true, consumedAt: true, createdAt: true, issuanceOrder: true
             } }
           } }
         } }

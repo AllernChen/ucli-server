@@ -36,7 +36,7 @@ function makeHarness(options: Partial<{
     links: (options.noCurrentLink ? [] : [{
       id: 'link-1', deviceGrantId: 'grant-1', createdById: 'actor-0', secretHash: previousCredential.secretHash,
       secretHint: previousCredential.secretHint, secretEncrypted: options.secretEncrypted === undefined ? previousCredential.secretEncrypted : options.secretEncrypted,
-      expiresAt: options.linkExpiresAt ?? null, revokedAt: null, consumedAt: null, createdAt
+      issuanceOrder: 1n, expiresAt: options.linkExpiresAt ?? null, revokedAt: null, consumedAt: null, createdAt
     }]) as any[],
     audits: [] as any[]
   }
@@ -45,7 +45,7 @@ function makeHarness(options: Partial<{
   let releaseFirstLock: (() => void) | undefined
   const firstLockWaiter = new Promise<void>(resolve => { firstLockEntered = resolve })
   const firstLockPause = new Promise<void>(resolve => { releaseFirstLock = resolve })
-  const calls = { linkCreate: [] as any[], linkUpdates: [] as any[], rowLocks: [] as unknown[][], rowLockTables: [] as string[] }
+  const calls = { linkCreate: [] as any[], linkUpdates: [] as any[], rowLocks: [] as unknown[][], rowLockTables: [] as string[], latestLinkOrder: [] as string[] }
   const linkMatches = (link: any, where: any) =>
     (!where.deviceGrantId || link.deviceGrantId === where.deviceGrantId) &&
     (where.revokedAt === undefined || link.revokedAt === where.revokedAt) &&
@@ -55,7 +55,11 @@ function makeHarness(options: Partial<{
       findFirst: async ({ where }: any) => state.grant.id === where.id && state.grant.organizationId === where.organizationId ? state.grant : null
     },
     deviceGrantLink: {
-      findFirst: async ({ where }: any) => state.links.filter(link => linkMatches(link, where)).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0] ?? null,
+      findFirst: async ({ where, orderBy }: any) => {
+        const field = Object.keys(orderBy || { createdAt: 'desc' })[0]
+        calls.latestLinkOrder.push(field)
+        return state.links.filter(link => linkMatches(link, where)).sort((a, b) => a[field] === b[field] ? 0 : a[field] > b[field] ? -1 : 1)[0] ?? null
+      },
       updateMany: async ({ where, data }: any) => {
         calls.linkUpdates.push({ where, data })
         const matching = state.links.filter(link => linkMatches(link, where))
@@ -79,7 +83,9 @@ function makeHarness(options: Partial<{
         ...prisma,
         $queryRaw: async (query: any) => {
           const linkLock = query.strings.join('').includes('device_grant_links')
-          const current = linkLock ? state.links.find(link => link.deviceGrantId === query.values[0] && !link.revokedAt && !link.consumedAt) : null
+          if (linkLock) calls.latestLinkOrder.push(query.strings.join('').includes('ORDER BY "issuance_order" DESC') ? 'issuanceOrder' : 'createdAt')
+          const current = linkLock ? state.links.filter(link => link.deviceGrantId === query.values[0] && !link.revokedAt && !link.consumedAt)
+            .sort((a, b) => b.issuanceOrder > a.issuanceOrder ? 1 : -1)[0] : null
           if (linkLock && !current) {
             calls.rowLocks.push(query.values)
             calls.rowLockTables.push('device_grant_links')
@@ -153,6 +159,24 @@ describe('device grant links service', () => {
     expect(state.audits.map(audit => audit.action)).toEqual(['device_grant_link.view', 'device_grant_link.view'])
   })
 
+  it('views the most recently issued link when transaction timestamps are out of order', async () => {
+    const { links, state } = makeHarness()
+    const replacementCredential = createDeviceGrantLinkCredential(masterKey)
+    state.links[0].createdAt = new Date('2026-08-28T00:00:00.000Z')
+    state.links[0].revokedAt = new Date('2026-08-28T00:00:00.000Z')
+    state.links.push({
+      id: 'link-2', deviceGrantId: 'grant-1', createdById: 'actor-1', issuanceOrder: 2n,
+      secretHash: replacementCredential.secretHash, secretHint: replacementCredential.secretHint,
+      secretEncrypted: replacementCredential.secretEncrypted, expiresAt: null, revokedAt: null, consumedAt: null,
+      createdAt: new Date('2026-08-27T00:00:00.000Z')
+    })
+
+    await expect(links.viewCurrent('org-1', 'actor-1', 'grant-1')).resolves.toMatchObject({
+      currentLink: { id: 'link-2', secretHint: replacementCredential.secretHint, status: 'AVAILABLE' },
+      connectionUrl: `https://ucli.example.test/connect#link=${encodeURIComponent(replacementCredential.secret)}`
+    })
+  })
+
   it('recovers an expired current URL even if its grant is later disabled', async () => {
     const { links, state, previousUrl } = makeHarness({
       disabledAt: new Date(), linkExpiresAt: new Date(Date.now() - 1)
@@ -187,7 +211,7 @@ describe('device grant links service', () => {
   })
 
   it('revokes and clears every current ciphertext before inserting one replacement', async () => {
-    const { links, state, previousUrl } = makeHarness()
+    const { links, state, calls, previousUrl } = makeHarness()
 
     const result = await links.regenerate('org-1', 'actor-1', 'grant-1', { expiresAt: null })
 
@@ -199,6 +223,7 @@ describe('device grant links service', () => {
       action: 'device_grant_link.regenerate', resourceId: 'link-2',
       metadata: expect.objectContaining({ previousLinkId: 'link-1', newLinkId: 'link-2' })
     }))
+    expect(calls.latestLinkOrder).toEqual(['issuanceOrder', 'issuanceOrder'])
   })
 
   it.each([
