@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -33,6 +33,7 @@ async function docker(args: string[]) {
 describe.skipIf(!hasDocker)('deployed nginx health route', () => {
   beforeAll(async () => {
     temporaryDirectory = mkdtempSync(join(tmpdir(), 'ucli-nginx-health-'))
+    chmodSync(temporaryDirectory, 0o755)
     writeFileSync(join(temporaryDirectory, 'healthz'), '{"status":"ok","source":"api"}')
     writeFileSync(join(temporaryDirectory, 'api.conf'), 'server { listen 3000; root /usr/share/nginx/html; }\n')
     writeFileSync(join(temporaryDirectory, 'gateway.conf'), 'server { listen 3001; root /usr/share/nginx/html; }\n')
