@@ -45,6 +45,13 @@ async function settle() {
   await nextTick()
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => { resolve = resolvePromise; reject = rejectPromise })
+  return { promise, resolve, reject }
+}
+
 describe('DeviceGrants mounted grouped list', () => {
   beforeEach(() => {
     state.api.mockReset()
@@ -94,6 +101,41 @@ describe('DeviceGrants mounted grouped list', () => {
     expect(state.push).not.toHaveBeenCalled()
     expect(state.api.mock.calls.filter(([path]) => String(path).startsWith('/api/v1/admin/device-grants?'))).toHaveLength(2)
     expect(document.body.textContent).toContain('link…new')
+    wrapper.unmount()
+  })
+
+  it('keeps a regenerated URL open and copyable while applying the refreshed summary', async () => {
+    const initial = deferred<Page<DeviceGrantUserGroup>>()
+    const post = deferred<{ connectionUrl: string }>()
+    const refresh = deferred<Page<DeviceGrantUserGroup>>()
+    const initialGrant = grant('available')
+    const refreshedGrant = { ...initialGrant, currentLink: { ...initialGrant.currentLink!, id: 'link-refreshed', secretHint: 'link…refreshed', status: 'EXPIRED' as const } }
+    let listRequest = 0
+    state.api.mockImplementation((path: string) => {
+      if (path.startsWith('/api/v1/admin/device-grants?')) return listRequest++ === 0 ? initial.promise : refresh.promise
+      if (path === '/api/v1/admin/device-grants/available/links') return post.promise
+      throw new Error(`Unexpected API call: ${path}`)
+    })
+    const clipboard = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: clipboard } })
+
+    const wrapper = mount(DeviceGrants, { attachTo: document.body })
+    initial.resolve(page(initialGrant))
+    await settle()
+    await wrapper.findAll('tbody tr')[0].findAll('.device-grant-link-actions button')[1].trigger('click')
+    await settle()
+    await (document.querySelector('[role="dialog"] button.primary') as HTMLButtonElement).click()
+    post.resolve({ connectionUrl: 'https://example.test/connect#replacement-secret' })
+    await settle()
+    refresh.resolve(page(refreshedGrant))
+    await settle()
+
+    expect(document.body.textContent).toContain('link…refreshed')
+    expect(document.body.textContent).toContain('已过期')
+    expect((document.querySelector('textarea[aria-label="完整 URL"]') as HTMLTextAreaElement).value).toBe('https://example.test/connect#replacement-secret')
+    await (document.querySelector('button[data-copy-url]') as HTMLButtonElement).click()
+    await settle()
+    expect(clipboard).toHaveBeenCalledWith('https://example.test/connect#replacement-secret')
     wrapper.unmount()
   })
 })

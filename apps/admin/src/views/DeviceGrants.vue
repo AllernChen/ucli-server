@@ -11,6 +11,7 @@ import StatusBadge from '../components/StatusBadge.vue'
 
 const router = useRouter()
 const loading = ref(true)
+const hasLoaded = ref(false)
 const error = ref('')
 const editError = ref('')
 const actionPending = ref(false)
@@ -36,6 +37,7 @@ async function load() {
     const loaded = await api<Page<DeviceGrantUserGroup>>(`/api/v1/admin/device-grants?${deviceGrantQuery(filters)}`)
     if (!loadLifecycle.isCurrent(generation)) return
     result.value = loaded
+    hasLoaded.value = true
   } catch (value: any) {
     if (!loadLifecycle.isCurrent(generation)) return
     error.value = value.message
@@ -131,7 +133,7 @@ onUnmounted(() => loadLifecycle.dispose())
 <template>
   <header class="page-header"><div><p>DEVICE GRANTS</p><h1>授权令牌</h1><span class="subtitle">按用户聚合管理设备授权；列表分页单位为用户。</span></div><button type="button" @click="load">刷新</button></header>
   <form class="panel grant-toolbar" @submit.prevent="search"><input v-model="filters.q" aria-label="搜索授权用户" placeholder="搜索邮箱或显示名"><select v-model="filters.status" aria-label="授权状态" @change="changeStatus"><option value="ALL">全部未删除</option><option value="AVAILABLE">待绑定</option><option value="BOUND">已绑定</option><option value="DISABLED">已禁用</option><option value="EXPIRED">已过期</option><option value="DELETED">已删除</option></select><button type="submit">搜索</button></form>
-  <p v-if="loading" class="state">正在加载授权…</p><p v-else-if="error" class="state error">{{ error }}</p>
+  <p v-if="loading && !hasLoaded" class="state">正在加载授权…</p><p v-else-if="error && !hasLoaded" class="state error">{{ error }}</p>
   <section v-else class="grant-groups"><article v-for="group in result.items" :key="group.id" class="panel grant-group"><div class="section-header"><div><h2>{{ group.displayName }}</h2><p class="muted">{{ group.email }}</p></div><button type="button" @click="router.push(`/users/${group.id}`)">查看用户</button></div><table><thead><tr><th>URL 提示</th><th>URL 状态</th><th>URL 有效期</th><th>授权状态</th><th>授权有效期</th><th>绑定设备</th><th>创建人</th><th>创建时间</th><th>操作</th></tr></thead><tbody><tr v-for="grant in group.deviceGrants" :key="grant.id"><td class="mono">{{ grant.currentLink?.secretHint || '未生成' }}</td><td>{{ grant.currentLink ? linkStatusLabel(grant.currentLink.status) : '未生成' }}</td><td>{{ grant.currentLink ? (grant.currentLink.expiresAt ? new Date(grant.currentLink.expiresAt).toLocaleString() : '永久') : '未生成' }}</td><td><StatusBadge :status="grant.status" /><small>{{ grantStatusLabel(grant.status) }}</small></td><td>{{ grant.expiresAt ? new Date(grant.expiresAt).toLocaleString() : '永久' }}</td><td>{{ grant.device?.name || '未绑定' }}<small v-if="grant.boundAt">{{ new Date(grant.boundAt).toLocaleString() }}</small></td><td class="mono">{{ grant.createdById }}</td><td>{{ new Date(grant.createdAt).toLocaleString() }}</td><td><div class="actions" @click.stop><DeviceGrantLinkActions :grant="grant" @changed="load" /><button v-if="grantActions(grant).includes('enable')" type="button" class="primary" :disabled="actionPending" @click="enable(grant)">启用</button><button v-if="grantActions(grant).includes('disable')" type="button" :disabled="actionPending" @click="pendingAction = { grant, action: 'disable' }">禁用</button><button v-if="grantActions(grant).includes('edit-expiry')" type="button" :disabled="actionPending" @click="openExpiry(grant)">有效期</button><button v-if="grantActions(grant).includes('delete')" type="button" class="danger-link" :disabled="actionPending" @click="pendingAction = { grant, action: 'delete' }">删除</button><span v-if="grantActions(grant).length === 0" class="muted">无可用操作</span></div></td></tr></tbody></table></article><p v-if="!result.items.length" class="panel empty">没有符合条件的授权用户</p><Pagination v-bind="result" @change="setOffset" /></section>
 
   <div v-if="editingGrant" class="modal-backdrop" @click.self="closeExpiry"><form class="modal" @submit.prevent="saveExpiry"><h2>修改授权有效期</h2><label class="check-row"><input v-model="expiryForm.permanent" type="checkbox">永久有效</label><label>有效期<input v-model="expiryForm.expiresAt" type="datetime-local" :disabled="expiryForm.permanent" :required="!expiryForm.permanent"></label><p v-if="editError" class="state error">{{ editError }}</p><div class="modal-actions"><button type="button" :disabled="actionPending" @click="closeExpiry">取消</button><button type="submit" class="primary" :disabled="actionPending">{{ actionPending ? '正在保存…' : '保存有效期' }}</button></div></form></div>
