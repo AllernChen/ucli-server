@@ -149,6 +149,7 @@ describe('device grant release contract', () => {
     expect(readme).toContain('链接 URL 有效期与授权有效期相互独立')
     expect(readme).toContain('重新生成链接会立即使上一个链接失效')
     expect(readme).toContain('连接 URL 使用 `MASTER_KEY` 加密')
+    expect(readme).toContain('创建、查看或重新生成操作中显示')
     expect(deploy).toContain('回滚必须同时恢复与上一版应用镜像匹配的升级前数据库备份')
   })
 

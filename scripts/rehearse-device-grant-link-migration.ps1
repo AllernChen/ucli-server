@@ -1,4 +1,4 @@
-param()
+param([switch]$SelfTest)
 
 $ErrorActionPreference = 'Stop'
 
@@ -9,6 +9,9 @@ $LegacyGrantMigration = '202608260001_device_grants'
 $ExpandMigration = '202608270001_device_grant_links_expand'
 $ContractMigration = '202608270002_device_grant_links_contract'
 $IssuanceOrderMigration = '202608270003_device_grant_link_issuance_order'
+$ExpectedCompletenessFailure = 'device grant link backfill incomplete'
+$startedContainer = $false
+$startedContainerId = $null
 
 function Invoke-Docker {
   param([string[]]$DockerArguments)
@@ -34,12 +37,30 @@ function Invoke-Psql {
 function Invoke-PsqlExpectFailure {
   param(
     [Parameter(Mandatory = $true)][string]$Database,
-    [Parameter(Mandatory = $true)][string]$Sql
+    [Parameter(Mandatory = $true)][string]$Sql,
+    [Parameter(Mandatory = $true)][string]$ExpectedError
   )
 
-  $Sql | & docker exec -i $Container psql -U postgres -d $Database -v ON_ERROR_STOP=1
-  if ($LASTEXITCODE -eq 0) {
+  $output = @($Sql | & docker exec -i $Container psql -U postgres -d $Database -v ON_ERROR_STOP=1 2>&1)
+  $exitCode = $LASTEXITCODE
+  $outputText = $output | Out-String
+  $output | ForEach-Object { Write-Output $_ }
+  Assert-ExpectedPsqlFailure -ExitCode $exitCode -Output $outputText -ExpectedError $ExpectedError -Database $Database
+}
+
+function Assert-ExpectedPsqlFailure {
+  param(
+    [Parameter(Mandatory = $true)][int]$ExitCode,
+    [Parameter(Mandatory = $true)][string]$Output,
+    [Parameter(Mandatory = $true)][string]$ExpectedError,
+    [Parameter(Mandatory = $true)][string]$Database
+  )
+
+  if ($ExitCode -eq 0) {
     throw "psql against $Database unexpectedly succeeded"
+  }
+  if (-not $Output.Contains($ExpectedError, [System.StringComparison]::Ordinal)) {
+    throw "psql against $Database failed unexpectedly with exit code $ExitCode; expected error '$ExpectedError' was absent. Output: $Output"
   }
 }
 
@@ -63,6 +84,21 @@ function Get-MigrationPath {
   return (Resolve-Path -LiteralPath $path).Path
 }
 
+if ($SelfTest) {
+  Assert-ExpectedPsqlFailure -ExitCode 1 -Output "ERROR: $ExpectedCompletenessFailure" -ExpectedError $ExpectedCompletenessFailure -Database self-test
+  $wrongOutputRejected = $false
+  try {
+    Assert-ExpectedPsqlFailure -ExitCode 1 -Output 'ERROR: connection refused' -ExpectedError $ExpectedCompletenessFailure -Database self-test
+  } catch {
+    $wrongOutputRejected = $_.Exception.Message.Contains($ExpectedCompletenessFailure, [System.StringComparison]::Ordinal)
+  }
+  if (-not $wrongOutputRejected) {
+    throw 'Expected-failure self-test did not reject unrelated psql output.'
+  }
+  Write-Output 'Expected-failure self-test passed: unrelated psql errors are rejected.'
+  return
+}
+
 try {
   & docker version --format '{{.Server.Version}}' | Out-Null
   if ($LASTEXITCODE -ne 0) {
@@ -74,10 +110,24 @@ try {
     throw 'Unable to inspect the disposable rehearsal container.'
   }
   if ($existing) {
-    Invoke-Docker @('rm', '-f', $Container)
+    $running = & docker inspect --format '{{.State.Running}}' $Container
+    if ($LASTEXITCODE -ne 0) {
+      throw "Unable to inspect existing rehearsal container $Container."
+    }
+    if ($running.Trim() -eq 'true') {
+      throw "Rehearsal container $Container is already running; refusing to remove a container owned by another invocation."
+    }
+    Invoke-Docker @('rm', $Container)
   }
 
-  Invoke-Docker @('run', '--name', $Container, '-e', 'POSTGRES_PASSWORD=postgres', '-d', 'postgres:17-alpine')
+  $startedContainerId = (& docker run --name $Container -e 'POSTGRES_PASSWORD=postgres' -d 'postgres:17-alpine').Trim()
+  if ($LASTEXITCODE -ne 0) {
+    throw "docker run for $Container failed with exit code $LASTEXITCODE"
+  }
+  if (-not $startedContainerId) {
+    throw "docker run for $Container did not return a container ID"
+  }
+  $startedContainer = $true
 
   $ready = $false
   $deadline = (Get-Date).AddSeconds(30)
@@ -230,7 +280,7 @@ BEGIN
 END $$;
 '@
 
-  Invoke-PsqlExpectFailure -Database legacy -Sql @'
+  Invoke-PsqlExpectFailure -Database legacy -ExpectedError $ExpectedCompletenessFailure -Sql @'
 BEGIN;
 CREATE TABLE "migration_rehearsal_rollback_marker" ("id" INTEGER PRIMARY KEY);
 DELETE FROM "device_grant_links" WHERE "device_grant_id" = '00000000-0000-0000-0000-000000000004';
@@ -268,8 +318,17 @@ END $$;
   Write-Output 'Legacy expand/contract/issuance migration path verified, including lifecycle history, ordering, uniqueness, and rollback.'
 }
 finally {
-  & docker rm -f $Container | Out-Null
-  if ($LASTEXITCODE -ne 0) {
-    Write-Error "Failed to remove disposable rehearsal container $Container (exit code $LASTEXITCODE)."
+  if ($startedContainer) {
+    $currentContainerId = & docker ps -aq --filter "name=^/${Container}$"
+    if ($LASTEXITCODE -ne 0) {
+      Write-Error "Unable to inspect disposable rehearsal container $Container during cleanup (exit code $LASTEXITCODE)."
+    } elseif ($currentContainerId -eq $startedContainerId) {
+      & docker rm -f $Container | Out-Null
+      if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to remove disposable rehearsal container $Container (exit code $LASTEXITCODE)."
+      }
+    } elseif ($currentContainerId) {
+      Write-Error "Refusing to remove rehearsal container $Container because its ID no longer belongs to this invocation."
+    }
   }
 }
