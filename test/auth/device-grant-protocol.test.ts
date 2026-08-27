@@ -39,10 +39,11 @@ function sqlWithoutComments(source: string) {
 }
 
 describe('device grant release contract', () => {
-  it('uses the exact fragment browser link and registration routes without a legacy device-code fallback', () => {
-    expect(protocol).toContain('http://10.0.0.8:3000/connect#token=one-time-secret')
-    expect(protocol).toContain('ucli://connect?server=http%3A%2F%2F10.0.0.8%3A3000#token=<secret>')
-    expect(protocol).not.toContain('connect?token=')
+  it('uses the exact link fragment browser handoff and registration routes without legacy fields', () => {
+    expect(protocol).toContain('http://10.0.0.8:3000/connect#link=one-time-link-secret')
+    expect(protocol).toContain('ucli://connect?server=http%3A%2F%2F10.0.0.8%3A3000#link=<secret>')
+    expect(protocol).not.toContain('#token=')
+    expect(protocol).not.toContain('connect?link=')
     expect(fencedBlock(protocol, 'Preview HTTP', 'http')).toBe('POST /api/v1/auth/device-grants/preview\nContent-Type: application/json')
     expect(fencedBlock(protocol, 'Redeem HTTP', 'http')).toBe('POST /api/v1/auth/device-grants/redeem\nContent-Type: application/json')
     expect(fencedBlock(protocol, 'Refresh HTTP', 'http')).toBe('POST /api/v1/auth/token/refresh\nContent-Type: application/json')
@@ -53,36 +54,36 @@ describe('device grant release contract', () => {
 
   it('publishes parseable preview, redeem, refresh, and bootstrap JSON contracts', () => {
     expect(jsonBlock('创建响应')).toEqual({
-      id: 'grant-uuid', connectionUrl: 'http://10.0.0.8:3000/connect#token=one-time-secret', expiresAt: null
+      id: 'grant-uuid', connectionUrl: 'http://10.0.0.8:3000/connect#link=one-time-link-secret', expiresAt: null
     })
-    expect(jsonBlock('Preview 请求')).toEqual({ token: '<secret>' })
+    expect(jsonBlock('Preview 请求')).toEqual({ link: '<secret>' })
     expect(jsonBlock('Preview 响应')).toEqual({
       account: { id: 'account-uuid', displayName: '成员姓名' },
       organization: { id: 'organization-uuid', name: '组织名称' },
-      status: 'AVAILABLE',
-      authorization: { expiresAt: null, serverTime: '2026-08-26T04:00:00.000Z' }
+      link: { status: 'AVAILABLE', expiresAt: '2026-09-02T04:00:00.000Z' },
+      authorization: { status: 'AVAILABLE', expiresAt: null, serverTime: '2026-08-27T04:00:00.000Z' }
     })
     expect(jsonBlock('Redeem 请求')).toEqual({
-      token: '<secret>',
+      link: '<secret>',
       device: { installationId: '550e8400-e29b-41d4-a716-446655440000', name: '张三的工作站', platform: 'windows', clientVersion: '1.2.0' }
     })
     expect(jsonBlock('Redeem 响应')).toEqual({
       accessToken: 'jwt', refreshToken: 'opaque-refresh-token', expiresIn: 900,
       account: { id: 'account-uuid', displayName: '成员姓名' },
       organization: { id: 'organization-uuid', name: '组织名称' },
-      authorization: { expiresAt: null, serverTime: '2026-08-26T04:00:00.000Z' }
+      authorization: { expiresAt: null, serverTime: '2026-08-27T04:00:00.000Z' }
     })
     expect(jsonBlock('Refresh 请求')).toEqual({ refreshToken: 'opaque-refresh-token' })
     expect(jsonBlock('Refresh 响应')).toEqual({
       accessToken: 'jwt', refreshToken: 'next-opaque-refresh-token', expiresIn: 900,
-      authorization: { expiresAt: null, serverTime: '2026-08-26T04:00:00.000Z' }
+      authorization: { expiresAt: null, serverTime: '2026-08-27T04:00:00.000Z' }
     })
     expect(jsonBlock('Bootstrap 响应')).toEqual({
       organization: { id: 'organization-uuid', name: '组织名称', timezone: 'Asia/Shanghai' },
       gateway: { baseUrl: 'http://10.0.0.8:3001' },
       models: [{ id: 'example-model', displayName: '示例模型', contextSize: 128000 }],
       skillsCatalogUrl: 'http://10.0.0.8:3000/api/v1/skills/catalog',
-      authorization: { expiresAt: null, serverTime: '2026-08-26T04:00:00.000Z' }
+      authorization: { expiresAt: null, serverTime: '2026-08-27T04:00:00.000Z' }
     })
   })
 
@@ -98,8 +99,9 @@ describe('device grant release contract', () => {
 
     for (const status of ['AVAILABLE', 'BOUND', 'DISABLED', 'EXPIRED', 'DELETED']) expect(protocol).toContain(status)
     for (const code of [
-      'invalid_grant', 'grant_disabled', 'grant_expired', 'grant_already_bound',
-      'grant_deleted', 'account_inactive', 'organization_inactive', 'invalid_device'
+      'invalid_link', 'link_expired', 'link_revoked', 'link_consumed',
+      'grant_disabled', 'grant_expired', 'grant_already_bound', 'grant_deleted',
+      'account_inactive', 'organization_inactive', 'invalid_device'
     ]) expect(protocol).toContain(code)
   })
 
@@ -108,13 +110,14 @@ describe('device grant release contract', () => {
       '独立安装、独立使用', '只维护一个当前服务端连接', 'POST /api/v1/auth/device-grants/preview',
       'POST /api/v1/auth/device-grants/redeem', 'POST /api/v1/auth/token/refresh',
       'GET /api/v1/client/bootstrap', '操作系统安全存储', '联系管理员延期',
-      'grant_disabled', '服务端模型', '本地模型', '确认页关闭', '注册失败', '切换用户', '卸载时清空'
+      'link_expired', 'link_revoked', 'link_consumed', '服务端模型', '本地模型',
+      '确认页关闭', '注册失败', '切换用户', '卸载时清空', 'UCLI 客户端仓库'
     ]) expect(clientUpgrade).toContain(text)
     expect(clientUpgrade).not.toMatch(/\]\([^)]*\.md\)/)
 
     for (const text of [
-      '管理端创建设备授权 API 的一次性 `connectionUrl` 响应', '绝不返回裸 `token` 字段', '对应的一次性 Vue 弹窗',
-      '弹窗关闭', '创建失败', '切换用户', '卸载时清空', 'tokenHash`/`refreshTokenHash` 永不展示',
+      '管理端创建设备授权 API 的一次性 `connectionUrl` 响应', '绝不返回裸链接秘密字段', '对应的一次性 Vue 弹窗',
+      '弹窗关闭', '创建失败', '切换用户', '卸载时清空', 'secretHash` 与 refresh token 哈希永不展示',
       'URL query', '日志、异常、审计、storage'
     ]) expect(protocol).toContain(text)
     expect(design).not.toContain('"token": "one-time-secret"')

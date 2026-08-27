@@ -1,20 +1,21 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { buildUcliConnectUrl, connectionStateForGrantStatus, createExclusiveGrantActionGate, createGrantActionLifecycle, readGrantToken, revalidateGrantAction } from '../../apps/admin/src/device-grant-connect.js'
+import { buildUcliConnectUrl, connectionStateForGrantStatus, createExclusiveGrantActionGate, createGrantActionLifecycle, readGrantLink, revalidateGrantAction } from '../../apps/admin/src/device-grant-connect.js'
 import { publicApi } from '../../apps/admin/src/api.js'
 
 describe('device grant browser connection', () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it('reads the opaque token only from the fragment', () => {
-    expect(readGrantToken('#token=grant%20secret')).toBe('grant secret')
-    expect(readGrantToken('')).toBe('')
+  it('reads the opaque link only from the link fragment parameter', () => {
+    expect(readGrantLink('#link=grant%20secret')).toBe('grant secret')
+    expect(readGrantLink('#token=legacy')).toBe('')
+    expect(readGrantLink('')).toBe('')
   })
 
   it('builds the exact UCLI protocol URL with a normalized origin', () => {
     expect(buildUcliConnectUrl('http://10.0.0.8:3000/path', 'grant secret')).toBe(
-      'ucli://connect?server=http%3A%2F%2F10.0.0.8%3A3000#token=grant%20secret'
+      'ucli://connect?server=http%3A%2F%2F10.0.0.8%3A3000#link=grant%20secret'
     )
   })
 
@@ -118,7 +119,7 @@ describe('device grant browser connection', () => {
     expect(calls.notice).toBe(0)
   })
 
-  it('sends preview requests without administrator authentication or login side effects', async () => {
+  it('sends link preview requests without administrator authentication or login side effects', async () => {
     let requestInit: RequestInit | undefined
     const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       requestInit = init
@@ -129,7 +130,7 @@ describe('device grant browser connection', () => {
     vi.stubGlobal('localStorage', storage)
 
     await expect(publicApi('/api/v1/auth/device-grants/preview', {
-      method: 'POST', body: JSON.stringify({ token: 'grant-secret' })
+      method: 'POST', body: JSON.stringify({ link: 'grant-secret' })
     })).rejects.toThrow('invalid_grant')
 
     expect(requestInit).toBeDefined()
@@ -138,10 +139,18 @@ describe('device grant browser connection', () => {
     expect(storage.removeItem).not.toHaveBeenCalled()
   })
 
-  it('keeps raw tokens out of the connection page DOM and diagnostic paths', async () => {
+  it('preserves stable link failure codes returned by the public API', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ code: 'link_expired' }), { status: 400 })))
+
+    await expect(publicApi('/api/v1/auth/device-grants/preview', {
+      method: 'POST', body: JSON.stringify({ link: 'grant-secret' })
+    })).rejects.toThrow('link_expired')
+  })
+
+  it('keeps raw links out of the connection page DOM and diagnostic paths', async () => {
     const source = (await readFile(resolve('apps/admin/src/views/Connect.vue'), 'utf8')).replace(/\r\n/g, '\n')
-    expect(source).not.toMatch(/\{\{\s*(?:grant)?token\s*\}\}/i)
-    expect(source).not.toMatch(/console\.[^(]+\([^)]*token/i)
+    expect(source).not.toMatch(/\{\{\s*(?:grant)?link\s*\}\}/i)
+    expect(source).not.toMatch(/console\.[^(]+\([^)]*link/i)
     expect(source).not.toMatch(/route\.query|location\.search/i)
   })
 
@@ -154,13 +163,32 @@ describe('device grant browser connection', () => {
     expect(source).toContain('createGrantActionLifecycle()')
     expect(source.match(/:disabled="actionPending"/g)).toHaveLength(2)
     expect(source).toContain('if (lifecycle.disposed) return')
-    expect(source).toContain('if (!(await revalidateAction()) || lifecycle.disposed) return false\n    window.location.href = connectionUrl()')
+    expect(source).toContain('if (!(await revalidateAction()) || lifecycle.disposed) return false\n    const target = connectionUrl()\n    window.location.href = target\n    grantLink = \'\'')
     expect(source).toContain('await navigator.clipboard.writeText(connectionUrl())\n      if (lifecycle.disposed) return false\n      notice.value')
-    expect(source).toContain('const initialPreview = await previewGrant(grantToken)\n    if (lifecycle.disposed) return\n    updatePreview(initialPreview)')
+    expect(source).toContain('const initialPreview = await previewGrant(grantLink)\n    if (lifecycle.disposed) return\n    updatePreview(initialPreview)')
     expect(source).toContain('lifecycle.apply(() => { actionPending.value = value })')
     expect(source).toContain('lifecycle.apply(() => { loading.value = false })')
     const availableActions = source.split('<template v-if="connectionState.canConnect">')[1]
     expect(availableActions).toContain('连接 UCLI')
     expect(availableActions).toContain('复制连接链接')
+  })
+
+  it('uses the link contract, clears the browser fragment, and shows independent expiries', async () => {
+    const source = (await readFile(resolve('apps/admin/src/views/Connect.vue'), 'utf8')).replace(/\r\n/g, '\n')
+    expect(source).toContain('readGrantLink(window.location.hash)')
+    expect(source).toContain("body: JSON.stringify({ link })")
+    expect(source).toContain("address.hash = ''")
+    expect(source).toContain('URL 有效期')
+    expect(source).toContain('授权有效期')
+    expect(source).toContain('服务器时间')
+    expect(source).toContain("grantLink = ''")
+  })
+
+  it('maps stable link failures to contact-administrator guidance', async () => {
+    const source = (await readFile(resolve('apps/admin/src/views/Connect.vue'), 'utf8')).replace(/\r\n/g, '\n')
+    for (const code of ['link_expired', 'link_revoked', 'link_consumed']) {
+      expect(source).toContain(code)
+    }
+    expect(source).toContain('请联系管理员创建新的授权链接。')
   })
 })

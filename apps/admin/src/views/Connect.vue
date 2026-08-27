@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { publicApi } from '../api'
-import { buildUcliConnectUrl, connectionStateForGrantStatus, createExclusiveGrantActionGate, createGrantActionLifecycle, readGrantToken, revalidateGrantAction } from '../device-grant-connect'
+import { buildUcliConnectUrl, connectionStateForGrantStatus, createExclusiveGrantActionGate, createGrantActionLifecycle, readGrantLink, revalidateGrantAction } from '../device-grant-connect'
 
 type GrantPreview = {
   account: { displayName: string }
   organization: { name: string }
-  status: string
-  authorization: { expiresAt: string | null }
+  link: { status: string; expiresAt: string | null }
+  authorization: { status: string; expiresAt: string | null; serverTime: string }
 }
 
 const loading = ref(true)
@@ -19,21 +19,29 @@ const connectionState = ref(connectionStateForGrantStatus(''))
 const actionPending = ref(false)
 const actionGate = createExclusiveGrantActionGate()
 const lifecycle = createGrantActionLifecycle()
-let grantToken = ''
+let grantLink = ''
 
 function connectionUrl() {
-  return buildUcliConnectUrl(serverOrigin.value, grantToken)
+  return buildUcliConnectUrl(serverOrigin.value, grantLink)
 }
 
-function previewGrant(token: string) {
+function previewGrant(link: string) {
   return publicApi<GrantPreview>('/api/v1/auth/device-grants/preview', {
-    method: 'POST', body: JSON.stringify({ token })
+    method: 'POST', body: JSON.stringify({ link })
   })
 }
 
 function updatePreview(latest: GrantPreview) {
   preview.value = latest
-  connectionState.value = connectionStateForGrantStatus(latest.status)
+  connectionState.value = connectionStateForGrantStatus(latest.authorization.status)
+}
+
+function previewErrorMessage(error: unknown) {
+  const code = error instanceof Error ? error.message : ''
+  if (['link_expired', 'link_revoked', 'link_consumed'].includes(code)) {
+    return '授权链接已失效，请联系管理员创建新的授权链接。'
+  }
+  return '授权链接无效，请联系管理员创建新的授权链接。'
 }
 
 function setActionPending(value: boolean) {
@@ -41,8 +49,8 @@ function setActionPending(value: boolean) {
 }
 
 async function revalidateAction() {
-  if (!grantToken || lifecycle.disposed) return false
-  const latest = await revalidateGrantAction(grantToken, previewGrant)
+  if (!grantLink || lifecycle.disposed) return false
+  const latest = await revalidateGrantAction(grantLink, previewGrant)
   if (lifecycle.disposed) return false
   connectionState.value = latest.state
   if (latest.preview) preview.value = latest.preview
@@ -51,7 +59,7 @@ async function revalidateAction() {
 
 async function runAction(action: () => Promise<boolean>) {
   return actionGate.run(async () => {
-    if (!grantToken || lifecycle.disposed) return false
+    if (!grantLink || lifecycle.disposed) return false
     setActionPending(true)
     try {
       return await action()
@@ -64,7 +72,9 @@ async function runAction(action: () => Promise<boolean>) {
 async function connect() {
   await runAction(async () => {
     if (!(await revalidateAction()) || lifecycle.disposed) return false
-    window.location.href = connectionUrl()
+    const target = connectionUrl()
+    window.location.href = target
+    grantLink = ''
     return true
   })
 }
@@ -90,29 +100,29 @@ function expiryLabel(expiresAt: string | null) {
 }
 
 onMounted(async () => {
-  grantToken = readGrantToken(window.location.hash)
+  grantLink = readGrantLink(window.location.hash)
   const address = new URL(window.location.href)
   address.hash = ''
   window.history.replaceState(window.history.state, '', `${address.pathname}${address.search}`)
   serverOrigin.value = window.location.origin
-  if (!grantToken) {
+  if (!grantLink) {
     loading.value = false
     error.value = '授权链接无效或已过期。'
     return
   }
   try {
-    const initialPreview = await previewGrant(grantToken)
+    const initialPreview = await previewGrant(grantLink)
     if (lifecycle.disposed) return
     updatePreview(initialPreview)
-  } catch {
+  } catch (caught) {
     if (lifecycle.disposed) return
-    error.value = '无法加载授权预览，请检查链接是否有效。'
+    error.value = previewErrorMessage(caught)
   } finally {
     lifecycle.apply(() => { loading.value = false })
   }
 })
 
-onUnmounted(() => { lifecycle.dispose() })
+onUnmounted(() => { lifecycle.dispose(); grantLink = '' })
 </script>
 
 <template>
@@ -128,8 +138,11 @@ onUnmounted(() => { lifecycle.dispose() })
           <div><dt>服务端</dt><dd>{{ serverOrigin }}</dd></div>
           <div><dt>组织</dt><dd>{{ preview.organization.name }}</dd></div>
           <div><dt>用户</dt><dd>{{ preview.account.displayName }}</dd></div>
+          <div><dt>URL 状态</dt><dd>{{ preview.link.status }}</dd></div>
+          <div><dt>URL 有效期</dt><dd>{{ expiryLabel(preview.link.expiresAt) }}</dd></div>
           <div><dt>授权状态</dt><dd>{{ connectionState.label }}</dd></div>
-          <div><dt>有效期</dt><dd>{{ expiryLabel(preview.authorization.expiresAt) }}</dd></div>
+          <div><dt>授权有效期</dt><dd>{{ expiryLabel(preview.authorization.expiresAt) }}</dd></div>
+          <div><dt>服务器时间</dt><dd>{{ expiryLabel(preview.authorization.serverTime) }}</dd></div>
         </dl>
         <p class="state">{{ connectionState.message }}</p>
         <template v-if="connectionState.canConnect">

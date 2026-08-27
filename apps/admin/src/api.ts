@@ -23,7 +23,7 @@ export async function publicApi<T = any>(path: string, init: RequestInit = {}): 
   })
   if (!response.ok) {
     const body = await response.json().catch(() => null)
-    throw new Error(body?.message || `HTTP ${response.status}`)
+    throw new Error(typeof body?.message === 'string' ? body.message : typeof body?.code === 'string' ? body.code : `HTTP ${response.status}`)
   }
   return response.json() as Promise<T>
 }

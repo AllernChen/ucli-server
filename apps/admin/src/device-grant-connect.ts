@@ -1,13 +1,13 @@
-export function readGrantToken(hash: string): string {
-  return new URLSearchParams(hash.replace(/^#/, '')).get('token')?.trim() || ''
+export function readGrantLink(hash: string): string {
+  return new URLSearchParams(hash.replace(/^#/, '')).get('link')?.trim() || ''
 }
 
-export function buildUcliConnectUrl(serverBaseUrl: string, token: string): string {
+export function buildUcliConnectUrl(serverBaseUrl: string, link: string): string {
   const server = new URL(serverBaseUrl)
   if (!['http:', 'https:'].includes(server.protocol)) throw new Error('Unsupported server protocol')
   const target = new URL('ucli://connect')
   target.searchParams.set('server', server.origin)
-  target.hash = `token=${encodeURIComponent(token)}`
+  target.hash = `link=${encodeURIComponent(link)}`
   return target.toString()
 }
 
