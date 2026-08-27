@@ -110,14 +110,14 @@ try {
     throw 'Unable to inspect the disposable rehearsal container.'
   }
   if ($existing) {
-    $running = & docker inspect --format '{{.State.Running}}' $Container
+    $running = & docker inspect --format '{{.State.Running}}' $existing
     if ($LASTEXITCODE -ne 0) {
-      throw "Unable to inspect existing rehearsal container $Container."
+      throw "Unable to inspect existing rehearsal container $existing."
     }
     if ($running.Trim() -eq 'true') {
-      throw "Rehearsal container $Container is already running; refusing to remove a container owned by another invocation."
+      throw "Rehearsal container $existing is already running; refusing to remove a container owned by another invocation."
     }
-    Invoke-Docker @('rm', $Container)
+    Invoke-Docker @('rm', $existing)
   }
 
   $startedContainerId = (& docker run --name $Container -e 'POSTGRES_PASSWORD=postgres' -d 'postgres:17-alpine').Trim()
