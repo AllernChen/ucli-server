@@ -17,6 +17,14 @@ export class ManagedUserPageQueryDto extends PageQueryDto {
 export class CreateDeviceGrantDto {
   @IsOptional() @ValidateIf((_, value) => value !== null)
   @IsDateString({ strict: true }) expiresAt?: string | null
+
+  @IsOptional() @ValidateIf((_, value) => value !== null)
+  @IsDateString({ strict: true }) linkExpiresAt?: string | null
+}
+
+export class CreateDeviceGrantLinkDto {
+  @IsOptional() @ValidateIf((_, value) => value !== null)
+  @IsDateString({ strict: true }) expiresAt?: string | null
 }
 
 export class UpdateDeviceGrantDto {

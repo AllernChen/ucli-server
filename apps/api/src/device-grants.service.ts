@@ -3,10 +3,11 @@ import { Prisma, Role, type Membership } from '@prisma/client'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import { deriveDeviceGrantStatus, deviceGrantFailure } from '../../../packages/security/src/device-grants.js'
 import { signAccessToken } from '../../../packages/security/src/auth.js'
-import { createOpaqueToken, hashOpaqueToken, opaqueTokenHint } from '../../../packages/security/src/tokens.js'
+import { createOpaqueToken, hashOpaqueToken } from '../../../packages/security/src/tokens.js'
 import { requirePublicUrl } from '../../../packages/security/src/public-url.js'
 import type { CreateDeviceGrantDto, DeviceGrantPageQueryDto, RedeemDeviceGrantDto, UpdateDeviceGrantDto } from './device-grants.dto.js'
 import { DeviceGrantFilter } from './device-grants.dto.js'
+import { DeviceGrantLinksService, type CreatedDeviceGrantLink } from './device-grant-links.service.js'
 
 type GrantRecord = {
   id: string
@@ -51,6 +52,15 @@ function parseExpiry(value: string | null | undefined, required: boolean): Date 
     throw new BadRequestException('expiresAt must be in the future')
   }
   return expiresAt
+}
+
+function parseLinkExpiry(value: string | null | undefined, now: Date): Date | null {
+  if (value === undefined) return new Date(now.getTime() + 7 * 24 * 60 * 60_000)
+  return parseExpiry(value, false)
+}
+
+function serializeLink(link: Omit<CreatedDeviceGrantLink, 'secret'>) {
+  return { id: link.id, secretHint: link.secretHint, expiresAt: link.expiresAt, createdAt: link.createdAt }
 }
 
 function serializeGrant(grant: GrantRecord, now: Date) {
@@ -109,32 +119,43 @@ function isInstallationIdConflict(error: unknown): boolean {
 
 @Injectable()
 export class DeviceGrantsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly links?: DeviceGrantLinksService) {}
 
   async create(organizationId: string, actorId: string, accountId: string, input: CreateDeviceGrantDto) {
     const membership = await this.prisma.membership.findUnique({
       where: { organizationId_accountId: { organizationId, accountId } },
-      select: { role: true, status: true, account: { select: { status: true } } }
+      select: { role: true, status: true, account: { select: { status: true } }, organization: { select: { enabled: true } } }
     })
     if (!membership) throw new NotFoundException('Managed user not found')
-    if (membership.role !== Role.MEMBER || membership.status !== 'ACTIVE' || membership.account.status !== 'ACTIVE') {
+    if (membership.status !== 'ACTIVE' || membership.account.status !== 'ACTIVE' || !membership.organization.enabled) {
       throw new ForbiddenException('Managed user is inactive')
     }
 
     const expiresAt = parseExpiry(input.expiresAt, false)
+    const now = new Date()
+    const linkExpiresAt = parseLinkExpiry(input.linkExpiresAt, now)
     const origin = requirePublicUrl()
-    const token = createOpaqueToken()
+    const links = this.links ?? new DeviceGrantLinksService()
+    const credential = links.prepareCredential()
     const grant = await this.prisma.$transaction(async transaction => {
       const created = await transaction.deviceGrant.create({ data: {
         organizationId, accountId, createdById: actorId, expiresAt,
-        tokenHash: hashOpaqueToken(token), tokenHint: opaqueTokenHint(token)
+        tokenHash: credential.secretHash, tokenHint: credential.secretHint
       }, select: { id: true, expiresAt: true, tokenHint: true } })
+      const link = await links.createInTransaction(transaction, {
+        organizationId, actorId, grantId: created.id, expiresAt: linkExpiresAt, action: 'create', credential
+      })
       await this.writeAudit(transaction, actorId, organizationId, created.id, 'create', {
         outcome: 'success', tokenHint: created.tokenHint, expiresAt: created.expiresAt
       })
-      return created
+      return { created, link }
     })
-    return { id: grant.id, connectionUrl: `${origin}/connect#token=${encodeURIComponent(token)}`, expiresAt: grant.expiresAt }
+    return {
+      id: grant.created.id,
+      expiresAt: grant.created.expiresAt,
+      currentLink: serializeLink(grant.link),
+      connectionUrl: `${origin}/connect#link=${encodeURIComponent(grant.link.secret)}`
+    }
   }
 
   async preview(token: unknown) {

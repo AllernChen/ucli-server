@@ -1,6 +1,7 @@
 import 'reflect-metadata'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { DeviceGrantsService } from '../../apps/api/src/device-grants.service.js'
+import { DeviceGrantLinksService } from '../../apps/api/src/device-grant-links.service.js'
 import { DeviceGrantFilter } from '../../apps/api/src/device-grants.dto.js'
 import { hashOpaqueToken } from '../../packages/security/src/tokens.js'
 
@@ -20,19 +21,21 @@ type Grant = {
   updatedAt: Date
 }
 
-function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string; accountStatus?: string; secondUser?: boolean; bindOnLock?: boolean } = {}) {
+function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string; membershipRole?: string; accountStatus?: string; organizationEnabled?: boolean; secondUser?: boolean; bindOnLock?: boolean } = {}) {
+  process.env.MASTER_KEY ||= Buffer.alloc(32, 7).toString('base64')
   const createdAt = new Date('2026-08-26T00:00:00.000Z')
-  const state: { accounts: any[]; memberships: any[]; grants: Grant[]; devices: any[]; audits: any[] } = {
+  const state: { organization: any; accounts: any[]; memberships: any[]; grants: Grant[]; links: any[]; devices: any[]; audits: any[] } = {
+    organization: { id: 'org-1', enabled: options.organizationEnabled ?? true },
     accounts: [{ id: 'account-1', email: 'member@example.com', displayName: 'Member', status: options.accountStatus || 'ACTIVE' }],
-    memberships: [{ organizationId: 'org-1', accountId: 'account-1', role: 'MEMBER', status: options.membershipStatus || 'ACTIVE' }],
+    memberships: [{ organizationId: 'org-1', accountId: 'account-1', role: options.membershipRole || 'MEMBER', status: options.membershipStatus || 'ACTIVE' }],
     grants: [{
       id: 'grant-1', organizationId: 'org-1', accountId: 'account-1', tokenHash: 'existing-secret-hash', tokenHint: '••••secret',
       expiresAt: null, disabledAt: null, deletedAt: null, boundAt: options.bound ? createdAt : null,
       deviceId: options.bound ? 'device-1' : null, createdById: 'admin-1', createdAt, updatedAt: createdAt
     }],
-    devices: options.bound ? [{ id: 'device-1', organizationId: 'org-1', accountId: 'account-1', name: 'Member laptop', platform: 'windows', clientVersion: '1.0.0', revokedAt: null, lastSeenAt: null, createdAt }] : [], audits: []
+    links: [], devices: options.bound ? [{ id: 'device-1', organizationId: 'org-1', accountId: 'account-1', name: 'Member laptop', platform: 'windows', clientVersion: '1.0.0', revokedAt: null, lastSeenAt: null, createdAt }] : [], audits: []
   }
-  const calls = { rowLocks: [] as unknown[][], grantReadsAfterLock: [] as boolean[] }
+  const calls = { rowLocks: [] as unknown[][], grantReadsAfterLock: [] as boolean[], linkCreate: [] as any[] }
   let lockHeld = false
   if (options.secondUser) {
     state.accounts.push({ id: 'account-2', email: 'other@example.com', displayName: 'Other', status: 'ACTIVE' })
@@ -75,7 +78,7 @@ function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string;
       findUnique: async ({ where }: any) => {
         const key = where.organizationId_accountId
         const membership = membershipFor(key.organizationId, key.accountId)
-        return membership ? { ...membership, account: accountFor(membership.accountId) } : null
+        return membership ? { ...membership, account: accountFor(membership.accountId), organization: state.organization } : null
       },
       findMany: async ({ where, skip = 0, take }: any) => state.memberships
         .filter(membership => membership.organizationId === where.organizationId)
@@ -110,6 +113,14 @@ function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string;
         return { count: grants.length }
       }
     },
+    deviceGrantLink: {
+      create: async ({ data }: any) => {
+        calls.linkCreate.push(data)
+        const link = { id: `link-${state.links.length + 1}`, createdAt: new Date(), revokedAt: null, consumedAt: null, ...data }
+        state.links.push(link)
+        return link
+      }
+    },
     device: {
       updateMany: async ({ where, data }: any) => {
         const devices = state.devices.filter(device => device.id === where.id && device.organizationId === where.organizationId)
@@ -136,43 +147,84 @@ function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string;
     },
     $transaction: async (operation: any) => operation(prisma)
   }
-  return { service: new DeviceGrantsService(prisma), state, calls }
+  return { service: new DeviceGrantsService(prisma, new DeviceGrantLinksService()), state, calls }
 }
 
 describe('device grants', () => {
-  it('returns the one-time secret only in the connection URL fragment while storing only hash and hint', async () => {
+  it('returns the initial secret only in the recoverable link fragment while storing its same hash and hint on the grant', async () => {
     const { service, state } = makeGrantHarness()
     const previousPublicUrl = process.env.PUBLIC_URL
     process.env.PUBLIC_URL = 'http://10.0.0.8:3000'
     try {
-      const result = await service.create('org-1', 'admin-1', 'account-1', { expiresAt: null })
-      const token = new URL(result.connectionUrl).hash.slice('#token='.length)
-      expect(result.connectionUrl).toBe(`http://10.0.0.8:3000/connect#token=${token}`)
-      expect(token).not.toBe('')
-      expect(result).not.toHaveProperty('token')
-      expect(state.grants.at(-1)?.tokenHash).toBe(hashOpaqueToken(token))
+      const result = await service.create('org-1', 'admin-1', 'account-1', { expiresAt: null, linkExpiresAt: null })
+      const link = new URL(result.connectionUrl).hash.slice('#link='.length)
+      expect(result.connectionUrl).toBe(`http://10.0.0.8:3000/connect#link=${link}`)
+      expect(link).not.toBe('')
+      expect(result).not.toHaveProperty('secret')
+      expect(result.currentLink).toMatchObject({ id: 'link-1', expiresAt: null })
+      expect(state.grants.at(-1)?.tokenHash).toBe(hashOpaqueToken(link))
       expect(state.grants.at(-1)?.tokenHint).toMatch(/^••••/)
+      expect(state.links).toHaveLength(1)
       expect(JSON.stringify(result)).not.toContain('tokenHash')
       expect(state.audits).toContainEqual(expect.objectContaining({ action: 'device_grant.create', resourceType: 'device_grant', resourceId: result.id, organizationId: 'org-1' }))
-      expect(JSON.stringify(state.audits)).not.toContain(token)
+      expect(JSON.stringify(state.audits)).not.toContain(link)
     } finally {
       if (previousPublicUrl === undefined) delete process.env.PUBLIC_URL
       else process.env.PUBLIC_URL = previousPublicUrl
     }
   })
 
-  it('requires an active MEMBER membership and globally active account in the current organization', async () => {
-    for (const options of [{ membershipStatus: 'DISABLED' }, { accountStatus: 'DISABLED' }]) {
-      const { service } = makeGrantHarness(options)
+  for (const role of ['PLATFORM_ADMIN', 'ORG_ADMIN', 'MEMBER'] as const) {
+    it(`creates an initial 7-day link for active ${role}`, async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-08-27T00:00:00.000Z'))
+      const { service, calls } = makeGrantHarness({ membershipRole: role })
+      const previousPublicUrl = process.env.PUBLIC_URL
+      process.env.PUBLIC_URL = 'http://10.0.0.8:3000'
+      try {
+        const result = await service.create('org-1', 'actor-1', 'account-1', {})
+        expect(result.connectionUrl).toMatch(/^http:\/\/10\.0\.0\.8:3000\/connect#link=/)
+        expect(result.currentLink.expiresAt).toEqual(new Date('2026-09-03T00:00:00.000Z'))
+        expect(calls.linkCreate).toHaveLength(1)
+      } finally {
+        if (previousPublicUrl === undefined) delete process.env.PUBLIC_URL
+        else process.env.PUBLIC_URL = previousPublicUrl
+        vi.useRealTimers()
+      }
+    })
+  }
+
+  it('rejects disabled account, membership, or organization before writing a grant or link', async () => {
+    for (const options of [{ membershipStatus: 'DISABLED' }, { accountStatus: 'DISABLED' }, { organizationEnabled: false }]) {
+      const { service, state } = makeGrantHarness(options)
       await expect(service.create('org-1', 'admin-1', 'account-1', { expiresAt: null })).rejects.toMatchObject({ status: 403 })
+      expect(state.grants).toHaveLength(1)
+      expect(state.links).toHaveLength(0)
     }
     const { service } = makeGrantHarness()
     await expect(service.create('org-2', 'admin-1', 'account-1', { expiresAt: null })).rejects.toMatchObject({ status: 404 })
   })
 
+  it('keeps authorization and link expiry independent', async () => {
+    const { service } = makeGrantHarness()
+    const previousPublicUrl = process.env.PUBLIC_URL
+    process.env.PUBLIC_URL = 'http://10.0.0.8:3000'
+    try {
+      const result = await service.create('org-1', 'admin-1', 'account-1', {
+        expiresAt: '2026-09-10T00:00:00.000Z', linkExpiresAt: '2026-09-03T00:00:00.000Z'
+      })
+      expect(result.expiresAt).toEqual(new Date('2026-09-10T00:00:00.000Z'))
+      expect(result.currentLink.expiresAt).toEqual(new Date('2026-09-03T00:00:00.000Z'))
+    } finally {
+      if (previousPublicUrl === undefined) delete process.env.PUBLIC_URL
+      else process.env.PUBLIC_URL = previousPublicUrl
+    }
+  })
+
   it('rejects a non-future expiration', async () => {
     const { service } = makeGrantHarness()
     await expect(service.create('org-1', 'admin-1', 'account-1', { expiresAt: new Date().toISOString() })).rejects.toMatchObject({ status: 400 })
+    await expect(service.create('org-1', 'admin-1', 'account-1', { linkExpiresAt: new Date().toISOString() })).rejects.toMatchObject({ status: 400 })
   })
 
   it('rejects a missing public origin before creating a grant', async () => {
