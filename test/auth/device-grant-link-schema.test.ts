@@ -5,6 +5,22 @@ const schema = readFileSync('prisma/schema.prisma', 'utf8')
 const migration = readFileSync('prisma/migrations/202608270001_device_grant_links_expand/migration.sql', 'utf8')
 const contractMigration = readdirSync('prisma/migrations')
   .find(name => name.endsWith('_device_grant_links_contract'))
+const issuanceMigration = readdirSync('prisma/migrations')
+  .find(name => name.endsWith('_device_grant_link_issuance_order'))
+
+function historicalBackfillOrder<T extends { id: string; deviceGrantId: string; createdAt: Date; revokedAt: Date | null; consumedAt: Date | null }>(links: T[]) {
+  return [...links].sort((left, right) => {
+    const leftCurrent = left.revokedAt === null && left.consumedAt === null
+    const rightCurrent = right.revokedAt === null && right.consumedAt === null
+    if (leftCurrent !== rightCurrent) return leftCurrent ? 1 : -1
+    const leftEvidence = left.consumedAt ?? left.revokedAt ?? left.createdAt
+    const rightEvidence = right.consumedAt ?? right.revokedAt ?? right.createdAt
+    if (left.deviceGrantId !== right.deviceGrantId) return left.deviceGrantId.localeCompare(right.deviceGrantId)
+    if (leftEvidence.getTime() !== rightEvidence.getTime()) return leftEvidence.getTime() - rightEvidence.getTime()
+    if (left.createdAt.getTime() !== right.createdAt.getTime()) return left.createdAt.getTime() - right.createdAt.getTime()
+    return left.id.localeCompare(right.id)
+  })
+}
 
 describe('device grant link schema', () => {
   it('stores link credentials separately and relates links to grants and creators', () => {
@@ -35,11 +51,43 @@ describe('device grant link schema', () => {
     expect(contractMigration).toBeDefined()
     const sql = readFileSync(`prisma/migrations/${contractMigration}/migration.sql`, 'utf8')
     expect(sql).toMatch(/^BEGIN;/)
-    expect(sql).toContain('CREATE SEQUENCE "device_grant_links_issuance_order_seq"')
-    expect(sql).toContain('UPDATE "device_grant_links" SET "issuance_order" = nextval(')
-    expect(sql).toContain('CREATE UNIQUE INDEX "device_grant_links_issuance_order_key"')
+    expect(sql).not.toContain('issuance_order')
     expect(sql).toContain('device grant link backfill incomplete')
     expect(sql).toContain('ALTER TABLE "device_grants" DROP COLUMN "token_hash", DROP COLUMN "token_hint";')
     expect(sql).toMatch(/COMMIT;\s*$/)
+  })
+
+  it('upgrades a database that already applied the contract migration with an independent issuance-order migration', () => {
+    expect(issuanceMigration).toBeDefined()
+    if (!issuanceMigration) return
+    const sql = readFileSync(`prisma/migrations/${issuanceMigration}/migration.sql`, 'utf8')
+    expect(sql).toMatch(/^BEGIN;/)
+    expect(sql).toContain('ALTER TABLE "device_grant_links" ADD COLUMN "issuance_order" BIGINT;')
+    expect(sql).toContain('CREATE SEQUENCE "device_grant_links_issuance_order_seq"')
+    expect(sql).toContain('ALTER TABLE "device_grant_links" ALTER COLUMN "issuance_order" SET DEFAULT nextval(')
+    expect(sql).toContain('ALTER TABLE "device_grant_links" ALTER COLUMN "issuance_order" SET NOT NULL;')
+    expect(sql).toContain('ALTER SEQUENCE "device_grant_links_issuance_order_seq" OWNED BY "device_grant_links"."issuance_order";')
+    expect(sql).toContain('CREATE UNIQUE INDEX "device_grant_links_issuance_order_key"')
+    expect(sql).toMatch(/COMMIT;\s*$/)
+  })
+
+  it('backfills multi-link history deterministically with lifecycle evidence before timestamps', () => {
+    const links = [
+      { id: 'revoked-later-created', deviceGrantId: 'grant-1', createdAt: new Date('2026-08-30T00:00:00Z'), revokedAt: new Date('2026-08-27T00:00:00Z'), consumedAt: null },
+      { id: 'consumed', deviceGrantId: 'grant-1', createdAt: new Date('2026-08-26T00:00:00Z'), revokedAt: null, consumedAt: new Date('2026-08-28T00:00:00Z') },
+      { id: 'current-earlier-created', deviceGrantId: 'grant-1', createdAt: new Date('2026-08-25T00:00:00Z'), revokedAt: null, consumedAt: null }
+    ]
+    const ordered = historicalBackfillOrder(links)
+
+    expect(ordered.map(link => link.id)).toEqual(['revoked-later-created', 'consumed', 'current-earlier-created'])
+    expect(ordered.at(-1)?.id).toBe('current-earlier-created')
+    expect(issuanceMigration).toBeDefined()
+    if (!issuanceMigration) return
+    const sql = readFileSync(`prisma/migrations/${issuanceMigration}/migration.sql`, 'utf8')
+    expect(sql).toContain('ROW_NUMBER() OVER')
+    expect(sql).toContain('l."consumed_at"')
+    expect(sql).toContain('l."revoked_at"')
+    expect(sql).toContain('l."created_at"')
+    expect(sql).toContain('l."id"')
   })
 })
