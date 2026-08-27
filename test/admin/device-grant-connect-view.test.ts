@@ -105,19 +105,26 @@ describe('device grant connection view', () => {
 
   it.each([
     ['grant_disabled', '授权已被管理员禁用，请联系管理员重新启用。'],
-    ['grant_deleted', '授权已被删除，不能再用于连接 UCLI。']
+    ['grant_deleted', '授权已被删除，不能再用于连接 UCLI。'],
+    ['account_inactive', '账号或当前组织成员关系不可用，请联系管理员。'],
+    ['organization_inactive', '组织不可用，请联系管理员。'],
+    ['invalid_grant', '授权无效，请联系管理员创建新的授权链接。']
   ])('clears stale preview for terminal authorization failure %s', async (code, message) => {
     state.publicApi.mockResolvedValueOnce(preview('AVAILABLE', 'AVAILABLE')).mockRejectedValueOnce(new Error(code))
     const wrapper = mount(Connect, { attachTo: document.body })
     await settle()
 
+    const originalHref = window.location.href
+
     await wrapper.get('details button').trigger('click')
     await settle()
     expect(navigator.clipboard.writeText).not.toHaveBeenCalled()
+    expect(window.location.href).toBe(originalHref)
     expect(wrapper.find('dl').exists()).toBe(false)
     expect(wrapper.findAll('button')).toHaveLength(0)
     expect(wrapper.text()).toContain(message)
     expect(wrapper.text()).not.toContain('重新验证')
+    expect(document.body.textContent).not.toContain('grant-secret')
     wrapper.unmount()
   })
 

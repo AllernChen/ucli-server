@@ -53,7 +53,13 @@ export function connectionStateForPreviewFailure(code: string): GrantConnectionS
     ['grant_disabled', 'DISABLED'], ['grant_expired', 'EXPIRED'],
     ['grant_deleted', 'DELETED'], ['grant_already_bound', 'BOUND']
   ]).get(code)
-  return authorizationStatus ? connectionStateForGrantStatus(authorizationStatus) : connectionStateForGrantStatus('')
+  if (authorizationStatus) return connectionStateForGrantStatus(authorizationStatus)
+  const authorizationFailure = new Map<string, GrantConnectionState>([
+    ['invalid_grant', { canConnect: false, label: '授权无效', message: '授权无效，请联系管理员创建新的授权链接。' }],
+    ['account_inactive', { canConnect: false, label: '账号不可用', message: '账号或当前组织成员关系不可用，请联系管理员。' }],
+    ['organization_inactive', { canConnect: false, label: '组织不可用', message: '组织不可用，请联系管理员。' }]
+  ]).get(code)
+  return authorizationFailure ?? connectionStateForGrantStatus('')
 }
 
 export function isTerminalLinkFailureState(state: GrantConnectionState): boolean {
@@ -61,7 +67,7 @@ export function isTerminalLinkFailureState(state: GrantConnectionState): boolean
 }
 
 export function isTerminalAuthorizationFailureState(state: GrantConnectionState): boolean {
-  return ['已禁用', '已过期', '已删除', '已绑定'].includes(state.label)
+  return ['已禁用', '已过期', '已删除', '已绑定', '授权无效', '账号不可用', '组织不可用'].includes(state.label)
 }
 
 export async function revalidateGrantAction<T extends GrantActionPreview>(

@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { buildUcliConnectUrl, connectionStateForGrantStatus, createExclusiveGrantActionGate, createGrantActionLifecycle, readGrantLink, revalidateGrantAction } from '../../apps/admin/src/device-grant-connect.js'
+import { buildUcliConnectUrl, connectionStateForGrantStatus, connectionStateForPreviewFailure, createExclusiveGrantActionGate, createGrantActionLifecycle, isTerminalAuthorizationFailureState, readGrantLink, revalidateGrantAction } from '../../apps/admin/src/device-grant-connect.js'
 import { publicApi } from '../../apps/admin/src/api.js'
 
 describe('device grant browser connection', () => {
@@ -157,6 +157,17 @@ describe('device grant browser connection', () => {
       const result = await revalidateGrantAction('grant-secret', async () => { throw new Error(code) })
       expect(result.state).toEqual(connectionStateForGrantStatus(status))
     }
+  })
+
+  it.each([
+    ['invalid_grant', '授权无效', '授权无效，请联系管理员创建新的授权链接。'],
+    ['account_inactive', '账号不可用', '账号或当前组织成员关系不可用，请联系管理员。'],
+    ['organization_inactive', '组织不可用', '组织不可用，请联系管理员。']
+  ])('classifies stable Preview failure %s as terminal authorization guidance', (code, label, message) => {
+    const state = connectionStateForPreviewFailure(code)
+
+    expect(state).toEqual({ canConnect: false, label, message })
+    expect(isTerminalAuthorizationFailureState(state)).toBe(true)
   })
 
   it('preserves stable link failure codes returned by the public API', async () => {
