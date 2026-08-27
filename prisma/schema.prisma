@@ -113,6 +113,7 @@ model Account {
   devices             Device[]
   deviceGrants        DeviceGrant[]         @relation("GrantAccount")
   createdDeviceGrants DeviceGrant[]         @relation("GrantCreator")
+  createdDeviceGrantLinks DeviceGrantLink[] @relation("DeviceGrantLinkCreator")
   quotas              QuotaPolicy[]
   logs                UsageLog[]
   audits              AuditLog[]
@@ -172,10 +173,29 @@ model DeviceGrant {
   account          Account      @relation("GrantAccount", fields: [accountId], references: [id], onDelete: Cascade)
   createdBy        Account      @relation("GrantCreator", fields: [createdById], references: [id])
   device           Device?      @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  links            DeviceGrantLink[]
 
   @@index([organizationId, accountId, createdAt])
   @@index([organizationId, deletedAt, expiresAt])
   @@map("device_grants")
+}
+
+model DeviceGrantLink {
+  id              String      @id @default(uuid()) @db.Uuid
+  deviceGrantId   String      @map("device_grant_id") @db.Uuid
+  secretHash      String      @unique @map("secret_hash")
+  secretEncrypted Json?       @map("secret_encrypted")
+  secretHint      String      @map("secret_hint")
+  expiresAt       DateTime?   @map("expires_at")
+  revokedAt       DateTime?   @map("revoked_at")
+  consumedAt      DateTime?   @map("consumed_at")
+  createdById     String      @map("created_by_id") @db.Uuid
+  createdAt       DateTime    @default(now()) @map("created_at")
+  deviceGrant     DeviceGrant @relation(fields: [deviceGrantId], references: [id], onDelete: Cascade)
+  createdBy       Account     @relation("DeviceGrantLinkCreator", fields: [createdById], references: [id])
+
+  @@index([deviceGrantId, createdAt])
+  @@map("device_grant_links")
 }
 
 model Channel {
