@@ -138,4 +138,48 @@ describe('DeviceGrants mounted grouped list', () => {
     expect(clipboard).toHaveBeenCalledWith('https://example.test/connect#replacement-secret')
     wrapper.unmount()
   })
+
+  it('shows background refresh failures without losing the regenerated URL and clears them on retry', async () => {
+    const initial = deferred<Page<DeviceGrantUserGroup>>()
+    const post = deferred<{ connectionUrl: string }>()
+    const failedRefresh = deferred<Page<DeviceGrantUserGroup>>()
+    const successfulRefresh = deferred<Page<DeviceGrantUserGroup>>()
+    const initialGrant = grant('available')
+    const retryGrant = { ...initialGrant, currentLink: { ...initialGrant.currentLink!, id: 'link-retry', secretHint: 'link…retry', status: 'AVAILABLE' as const } }
+    let listRequest = 0
+    state.api.mockImplementation((path: string) => {
+      if (path.startsWith('/api/v1/admin/device-grants?')) {
+        return [initial.promise, failedRefresh.promise, successfulRefresh.promise][listRequest++]
+      }
+      if (path === '/api/v1/admin/device-grants/available/links') return post.promise
+      throw new Error(`Unexpected API call: ${path}`)
+    })
+    const clipboard = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: clipboard } })
+
+    const wrapper = mount(DeviceGrants, { attachTo: document.body })
+    initial.resolve(page(initialGrant))
+    await settle()
+    await wrapper.findAll('tbody tr')[0].findAll('.device-grant-link-actions button')[1].trigger('click')
+    await settle()
+    await (document.querySelector('[role="dialog"] button.primary') as HTMLButtonElement).click()
+    post.resolve({ connectionUrl: 'https://example.test/connect#failure-secret' })
+    await settle()
+    failedRefresh.reject(new Error('刷新失败'))
+    await settle()
+
+    expect(document.body.textContent).toContain('刷新失败')
+    expect((document.querySelector('textarea[aria-label="完整 URL"]') as HTMLTextAreaElement).value).toBe('https://example.test/connect#failure-secret')
+    await (document.querySelector('button[data-copy-url]') as HTMLButtonElement).click()
+    await settle()
+    expect(clipboard).toHaveBeenCalledWith('https://example.test/connect#failure-secret')
+
+    await wrapper.get('header button').trigger('click')
+    successfulRefresh.resolve(page(retryGrant))
+    await settle()
+    expect(document.body.textContent).not.toContain('刷新失败')
+    expect(document.body.textContent).toContain('link…retry')
+    expect((document.querySelector('textarea[aria-label="完整 URL"]') as HTMLTextAreaElement).value).toBe('https://example.test/connect#failure-secret')
+    wrapper.unmount()
+  })
 })
