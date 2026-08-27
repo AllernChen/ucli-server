@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { publicApi } from '../api'
-import { buildUcliConnectUrl, connectionStateForGrantPreview, connectionStateForGrantStatus, createExclusiveGrantActionGate, createGrantActionLifecycle, readGrantLink, revalidateGrantAction } from '../device-grant-connect'
+import { buildUcliConnectUrl, connectionStateForGrantPreview, connectionStateForGrantStatus, connectionStateForPreviewFailure, createExclusiveGrantActionGate, createGrantActionLifecycle, isTerminalLinkFailureState, readGrantLink, revalidateGrantAction } from '../device-grant-connect'
 
 type GrantPreview = {
   account: { displayName: string }
@@ -38,10 +38,14 @@ function updatePreview(latest: GrantPreview) {
 
 function previewErrorMessage(error: unknown) {
   const code = error instanceof Error ? error.message : ''
-  if (['link_expired', 'link_revoked', 'link_consumed'].includes(code)) {
-    return '授权链接已失效，请联系管理员创建新的授权链接。'
-  }
-  return '授权链接无效，请联系管理员创建新的授权链接。'
+  return connectionStateForPreviewFailure(code).message
+}
+
+function clearTerminalLinkFailure() {
+  grantLink = ''
+  notice.value = ''
+  preview.value = null
+  error.value = connectionState.value.message
 }
 
 function setActionPending(value: boolean) {
@@ -54,6 +58,7 @@ async function revalidateAction() {
   if (lifecycle.disposed) return false
   connectionState.value = latest.state
   if (latest.preview) preview.value = latest.preview
+  if (isTerminalLinkFailureState(latest.state)) clearTerminalLinkFailure()
   return latest.state.canConnect
 }
 
@@ -140,7 +145,7 @@ onUnmounted(() => { lifecycle.dispose(); grantLink = '' })
           <div><dt>用户</dt><dd>{{ preview.account.displayName }}</dd></div>
           <div><dt>URL 状态</dt><dd>{{ preview.link.status }}</dd></div>
           <div><dt>URL 有效期</dt><dd>{{ expiryLabel(preview.link.expiresAt) }}</dd></div>
-          <div><dt>授权状态</dt><dd>{{ connectionState.label }}</dd></div>
+          <div><dt>授权状态</dt><dd>{{ connectionStateForGrantStatus(preview.authorization.status).label }}</dd></div>
           <div><dt>授权有效期</dt><dd>{{ expiryLabel(preview.authorization.expiresAt) }}</dd></div>
           <div><dt>服务器时间</dt><dd>{{ expiryLabel(preview.authorization.serverTime) }}</dd></div>
         </dl>

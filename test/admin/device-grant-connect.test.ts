@@ -72,7 +72,7 @@ describe('device grant browser connection', () => {
     const result = await revalidateGrantAction(token, async () => { throw new Error(token) })
 
     expect(result.preview).toBeUndefined()
-    expect(result.state.canConnect).toBe(false)
+    expect(result.state).toEqual(connectionStateForGrantStatus(''))
     expect(JSON.stringify(result)).not.toContain(token)
   })
 
@@ -146,7 +146,7 @@ describe('device grant browser connection', () => {
   })
 
   it('returns contact-administrator guidance for stable link failures during revalidation', async () => {
-    for (const code of ['link_expired', 'link_revoked', 'link_consumed']) {
+    for (const code of ['invalid_link', 'link_expired', 'link_revoked', 'link_consumed']) {
       const result = await revalidateGrantAction('grant-secret', async () => { throw new Error(code) })
       expect(result.state).toMatchObject({ canConnect: false, message: expect.stringContaining('请联系管理员创建新的授权链接') })
     }
@@ -177,7 +177,7 @@ describe('device grant browser connection', () => {
   it('guards launch and copy actions behind the available status', async () => {
     const source = (await readFile(resolve('apps/admin/src/views/Connect.vue'), 'utf8')).replace(/\r\n/g, '\n')
     expect(source).toContain('v-if="connectionState.canConnect"')
-    expect(source).toContain('{{ connectionState.label }}')
+    expect(source).toContain('{{ connectionStateForGrantStatus(preview.authorization.status).label }}')
     expect(source).toContain('{{ connectionState.message }}')
     expect(source).toContain('createExclusiveGrantActionGate()')
     expect(source).toContain('createGrantActionLifecycle()')
@@ -206,9 +206,7 @@ describe('device grant browser connection', () => {
 
   it('maps stable link failures to contact-administrator guidance', async () => {
     const source = (await readFile(resolve('apps/admin/src/views/Connect.vue'), 'utf8')).replace(/\r\n/g, '\n')
-    for (const code of ['link_expired', 'link_revoked', 'link_consumed']) {
-      expect(source).toContain(code)
-    }
-    expect(source).toContain('请联系管理员创建新的授权链接。')
+    expect(source).toContain('connectionStateForPreviewFailure(code).message')
+    expect(source).toContain('clearTerminalLinkFailure()')
   })
 })

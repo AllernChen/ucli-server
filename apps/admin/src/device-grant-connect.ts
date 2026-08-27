@@ -43,12 +43,21 @@ export function connectionStateForGrantPreview(preview: GrantActionPreview): Gra
   return linkState.canConnect ? connectionStateForGrantStatus(preview.authorization.status) : linkState
 }
 
-function connectionStateForPreviewFailure(code: string): GrantConnectionState {
+export function connectionStateForPreviewFailure(code: string): GrantConnectionState {
+  const linkStatus = new Map([
+    ['invalid_link', 'INVALID'], ['link_expired', 'EXPIRED'],
+    ['link_revoked', 'REVOKED'], ['link_consumed', 'CONSUMED']
+  ]).get(code)
+  if (linkStatus) return connectionStateForLinkStatus(linkStatus)
   const authorizationStatus = new Map([
     ['grant_disabled', 'DISABLED'], ['grant_expired', 'EXPIRED'],
     ['grant_deleted', 'DELETED'], ['grant_already_bound', 'BOUND']
   ]).get(code)
-  return authorizationStatus ? connectionStateForGrantStatus(authorizationStatus) : connectionStateForLinkStatus(code.replace(/^link_/, '').toUpperCase())
+  return authorizationStatus ? connectionStateForGrantStatus(authorizationStatus) : connectionStateForGrantStatus('')
+}
+
+export function isTerminalLinkFailureState(state: GrantConnectionState): boolean {
+  return ['URL 已过期', 'URL 已撤销', 'URL 已使用', 'URL 无效'].includes(state.label)
 }
 
 export async function revalidateGrantAction<T extends GrantActionPreview>(
