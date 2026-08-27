@@ -319,16 +319,9 @@ END $$;
 }
 finally {
   if ($startedContainer) {
-    $currentContainerId = & docker ps -aq --filter "name=^/${Container}$"
+    & docker rm -f $startedContainerId | Out-Null
     if ($LASTEXITCODE -ne 0) {
-      Write-Error "Unable to inspect disposable rehearsal container $Container during cleanup (exit code $LASTEXITCODE)."
-    } elseif ($currentContainerId -eq $startedContainerId) {
-      & docker rm -f $Container | Out-Null
-      if ($LASTEXITCODE -ne 0) {
-        Write-Error "Failed to remove disposable rehearsal container $Container (exit code $LASTEXITCODE)."
-      }
-    } elseif ($currentContainerId) {
-      Write-Error "Refusing to remove rehearsal container $Container because its ID no longer belongs to this invocation."
+      Write-Error "Failed to remove disposable rehearsal container $startedContainerId (exit code $LASTEXITCODE)."
     }
   }
 }
