@@ -177,15 +177,27 @@ describe('device grant links service', () => {
     })
   })
 
-  it('recovers an expired current URL even if its grant is later disabled', async () => {
-    const { links, state, previousUrl } = makeHarness({
-      disabledAt: new Date(), linkExpiresAt: new Date(Date.now() - 1)
-    })
+  it('recovers an expired current URL while its grant remains available', async () => {
+    const { links, state, previousUrl } = makeHarness({ linkExpiresAt: new Date(Date.now() - 1) })
 
     await expect(links.viewCurrent('org-1', 'actor-1', 'grant-1')).resolves.toMatchObject({
       connectionUrl: previousUrl, currentLink: { status: 'EXPIRED' }
     })
     expect(state.audits[0].metadata).toMatchObject({ deviceGrantId: 'grant-1', secretHint: state.links[0].secretHint, status: 'EXPIRED' })
+  })
+
+  it.each([
+    ['disabled', { disabledAt: new Date() }, 'grant_disabled'],
+    ['deleted', { deletedAt: new Date() }, 'grant_deleted']
+  ])('refuses to reveal a recoverable URL for a %s grant', async (_, options, expectedCode) => {
+    const { links, state, previousUrl } = makeHarness(options)
+
+    const error = await links.viewCurrent('org-1', 'actor-1', 'grant-1').catch(error => error)
+
+    expect(error).toBeInstanceOf(BadRequestException)
+    expect(code(error).code).toBe(expectedCode)
+    expect(JSON.stringify(error)).not.toContain(previousUrl)
+    expect(state.audits).toHaveLength(0)
   })
 
   it.each([

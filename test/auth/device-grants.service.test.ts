@@ -18,7 +18,7 @@ type Grant = {
   updatedAt: Date
 }
 
-function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string; membershipRole?: string; accountStatus?: string; organizationEnabled?: boolean; deactivateBeforeTransaction?: 'account' | 'membership' | 'organization'; secondUser?: boolean; bindOnLock?: boolean } = {}) {
+function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string; membershipRole?: string; accountStatus?: string; organizationEnabled?: boolean; deactivateBeforeTransaction?: 'account' | 'membership' | 'organization'; secondUser?: boolean; bindOnLock?: boolean; eligibilityLockTime?: Date } = {}) {
   process.env.MASTER_KEY ||= Buffer.alloc(32, 7).toString('base64')
   const createdAt = new Date('2026-08-26T00:00:00.000Z')
   const state: { organization: any; accounts: any[]; memberships: any[]; grants: Grant[]; links: any[]; devices: any[]; audits: any[] } = {
@@ -32,7 +32,7 @@ function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string;
     }],
     links: [{ id: 'link-1', deviceGrantId: 'grant-1', issuanceOrder: 1n, secretHash: 'existing-secret-hash', secretHint: '••••secret', secretEncrypted: { ciphertext: 'encrypted-secret' }, expiresAt: null, revokedAt: null, consumedAt: null, createdAt }], devices: options.bound ? [{ id: 'device-1', organizationId: 'org-1', accountId: 'account-1', name: 'Member laptop', platform: 'windows', clientVersion: '1.0.0', revokedAt: null, lastSeenAt: null, createdAt }] : [], audits: []
   }
-  const calls = { rowLocks: [] as unknown[][], eligibilityLocks: [] as unknown[][], grantReadsAfterLock: [] as boolean[], linkCreate: [] as any[] }
+  const calls = { rowLocks: [] as unknown[][], rowLockTables: [] as string[], eligibilityLocks: [] as unknown[][], grantReadsAfterLock: [] as boolean[], linkCreate: [] as any[] }
   let lockHeld = false
   if (options.secondUser) {
     state.accounts.push({ id: 'account-2', email: 'other@example.com', displayName: 'Other', status: 'ACTIVE' })
@@ -120,6 +120,19 @@ function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string;
       }
     },
     deviceGrantLink: {
+      findFirst: async ({ where }: any) => state.links
+        .filter(link => link.deviceGrantId === where.deviceGrantId)
+        .filter(link => where.revokedAt === undefined || link.revokedAt === where.revokedAt)
+        .filter(link => where.consumedAt === undefined || link.consumedAt === where.consumedAt)
+        .sort((left, right) => left.issuanceOrder > right.issuanceOrder ? -1 : 1)[0] ?? null,
+      updateMany: async ({ where, data }: any) => {
+        const links = state.links
+          .filter(link => link.deviceGrantId === where.deviceGrantId)
+          .filter(link => where.revokedAt === undefined || link.revokedAt === where.revokedAt)
+          .filter(link => where.consumedAt === undefined || link.consumedAt === where.consumedAt)
+        links.forEach(link => Object.assign(link, data, { secretEncrypted: data.secretEncrypted ? null : link.secretEncrypted }))
+        return { count: links.length }
+      },
       create: async ({ data }: any) => {
         calls.linkCreate.push(data)
         const link = { id: `link-${state.links.length + 1}`, createdAt: new Date(), revokedAt: null, consumedAt: null, ...data }
@@ -138,14 +151,22 @@ function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string;
       const sql = query.strings?.join('') || ''
       if (sql.includes('memberships') && sql.includes('FOR UPDATE OF m, a, o')) {
         calls.eligibilityLocks.push(query.values)
+        if (options.eligibilityLockTime) vi.setSystemTime(options.eligibilityLockTime)
         const [organizationId, accountId] = query.values
         const membership = membershipFor(organizationId, accountId)
         const account = accountFor(accountId)
         return membership && account ? [{ role: membership.role, membershipStatus: membership.status, accountStatus: account.status, organizationEnabled: state.organization.enabled }] : []
       }
+      if (sql.includes('device_grant_links') && sql.includes('FOR UPDATE')) {
+        calls.rowLocks.push(query.values)
+        calls.rowLockTables.push('device_grant_links')
+        const current = state.links.find(link => link.deviceGrantId === query.values[0] && !link.revokedAt && !link.consumedAt)
+        return current ? [{ id: current.id }] : []
+      }
       if (sql.includes('device_grants') && sql.includes('FOR UPDATE')) {
         lockHeld = true
         calls.rowLocks.push(query.values)
+        calls.rowLockTables.push('device_grants')
         if (options.bindOnLock && state.grants[0].deviceId === null) {
           const device = {
             id: 'device-bound-during-delete', organizationId: 'org-1', accountId: 'account-1', name: 'Bound during delete',
@@ -155,6 +176,8 @@ function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string;
           state.grants[0].deviceId = device.id
           state.grants[0].boundAt = new Date()
         }
+        const [grantId, organizationId] = query.values
+        return state.grants.some(grant => grant.id === grantId && grant.organizationId === organizationId) ? [{ id: grantId }] : []
       }
       return []
     },
@@ -264,6 +287,25 @@ describe('device grants', () => {
     await expect(service.create('org-1', 'admin-1', 'account-1', { linkExpiresAt: new Date().toISOString() })).rejects.toMatchObject({ status: 400 })
   })
 
+  it('revalidates a custom link expiry after waiting for the eligibility lock', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-27T00:00:00.000Z'))
+    const previousPublicUrl = process.env.PUBLIC_URL
+    process.env.PUBLIC_URL = 'http://10.0.0.8:3000'
+    try {
+      const { service, state } = makeGrantHarness({ eligibilityLockTime: new Date('2026-08-27T00:02:00.000Z') })
+      await expect(service.create('org-1', 'admin-1', 'account-1', {
+        linkExpiresAt: '2026-08-27T00:01:00.000Z'
+      })).rejects.toMatchObject({ status: 400 })
+      expect(state.grants).toHaveLength(1)
+      expect(state.links).toHaveLength(1)
+    } finally {
+      if (previousPublicUrl === undefined) delete process.env.PUBLIC_URL
+      else process.env.PUBLIC_URL = previousPublicUrl
+      vi.useRealTimers()
+    }
+  })
+
   it('rejects a missing public origin before creating a grant', async () => {
     const { service, state } = makeGrantHarness()
     const previousPublicUrl = process.env.PUBLIC_URL
@@ -277,13 +319,25 @@ describe('device grants', () => {
     }
   })
 
-  it('disables reversibly without revoking the device', async () => {
+  it('disables reversibly without revoking the device but permanently revokes the current link', async () => {
     const { service, state } = makeGrantHarness({ bound: true })
     await service.disable('org-1', 'admin-1', 'grant-1')
     expect(state.grants[0].disabledAt).toBeInstanceOf(Date)
     expect(state.devices[0].revokedAt).toBeNull()
+    expect(state.links[0]).toMatchObject({ revokedAt: expect.any(Date), secretEncrypted: null })
     await service.enable('org-1', 'admin-1', 'grant-1')
     expect(state.grants[0].disabledAt).toBeNull()
+    expect(state.links[0]).toMatchObject({ revokedAt: expect.any(Date), secretEncrypted: null })
+  })
+
+  it('locks link before grant when disabling so an old URL cannot revive after enable', async () => {
+    const { service, state, calls } = makeGrantHarness()
+
+    await service.disable('org-1', 'admin-1', 'grant-1')
+    await service.enable('org-1', 'admin-1', 'grant-1')
+
+    expect(calls.rowLockTables.slice(0, 2)).toEqual(['device_grant_links', 'device_grants'])
+    expect(state.links[0]).toMatchObject({ revokedAt: expect.any(Date), secretEncrypted: null })
   })
 
   it('soft deletes and permanently revokes the bound device', async () => {
@@ -291,13 +345,23 @@ describe('device grants', () => {
     await service.delete('org-1', 'admin-1', 'grant-1')
     expect(state.grants[0].deletedAt).toBeInstanceOf(Date)
     expect(state.devices[0].revokedAt).toBeInstanceOf(Date)
+    expect(state.links[0]).toMatchObject({ revokedAt: expect.any(Date), secretEncrypted: null })
     expect(state.audits).toContainEqual(expect.objectContaining({ action: 'device_grant.delete', resourceType: 'device_grant', resourceId: 'grant-1' }))
+  })
+
+  it('locks link before grant and clears the recoverable URL when deleting an unbound grant', async () => {
+    const { service, state, calls } = makeGrantHarness()
+
+    await service.delete('org-1', 'admin-1', 'grant-1')
+
+    expect(calls.rowLockTables.slice(0, 2)).toEqual(['device_grant_links', 'device_grants'])
+    expect(state.links[0]).toMatchObject({ revokedAt: expect.any(Date), secretEncrypted: null })
   })
 
   it('locks before reading the grant and revokes a device bound while delete waits for that lock', async () => {
     const { service, state, calls } = makeGrantHarness({ bindOnLock: true })
     await service.delete('org-1', 'admin-1', 'grant-1')
-    expect(calls.rowLocks).toEqual([['grant-1', 'org-1']])
+    expect(calls.rowLocks).toEqual([['grant-1'], ['grant-1', 'org-1']])
     expect(calls.grantReadsAfterLock).toEqual([true])
     expect(state.devices[0].revokedAt).toBeInstanceOf(Date)
   })

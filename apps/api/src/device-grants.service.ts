@@ -49,7 +49,7 @@ type RedemptionGrant = Prisma.DeviceGrantGetPayload<{ include: typeof redemption
 type EligibleGrant = PreviewGrant | RedemptionGrant
 type GrantMembership = Pick<Membership, 'role' | 'status'>
 type KnownGrant = Pick<RedemptionGrant, 'id' | 'organizationId' | 'accountId' | 'expiresAt' | 'deviceId'>
-type KnownLink = { secretHint: string }
+type KnownLink = { id: string; secretHint: string }
 
 function parseExpiry(value: string | null | undefined, required: boolean): Date | null {
   if (value === undefined) {
@@ -144,14 +144,14 @@ function isInstallationIdConflict(error: unknown): boolean {
   return fields.some(field => typeof field === 'string' && (field === 'installation_id' || field === 'installationId' || field.includes('installation_id')))
 }
 
+const retryGrantLifecycleMutation = Symbol('retryGrantLifecycleMutation')
+
 @Injectable()
 export class DeviceGrantsService {
   constructor(private readonly prisma: PrismaService, private readonly links?: DeviceGrantLinksService) {}
 
   async create(organizationId: string, actorId: string, accountId: string, input: CreateDeviceGrantDto) {
     const expiresAt = parseExpiry(input.expiresAt, false)
-    const now = new Date()
-    const linkExpiresAt = parseLinkExpiry(input.linkExpiresAt, now)
     const links = this.links ?? new DeviceGrantLinksService()
     const credential = links.prepareCredential()
     const grant = await this.prisma.$transaction(async transaction => {
@@ -176,6 +176,7 @@ export class DeviceGrantsService {
       if (target.membershipStatus !== 'ACTIVE' || target.accountStatus !== 'ACTIVE' || !target.organizationEnabled) {
         throw new ForbiddenException('Managed user is inactive')
       }
+      const linkExpiresAt = parseLinkExpiry(input.linkExpiresAt, new Date())
       const origin = requirePublicUrl()
       const created = await transaction.deviceGrant.create({ data: {
         organizationId, accountId, createdById: actorId, expiresAt
@@ -265,7 +266,7 @@ export class DeviceGrantsService {
           const role = this.assertEligibleGrant(grant, membership)
           const refreshToken = createOpaqueToken()
           await transaction.device.update({ where: { id: device.id }, data: { refreshTokenHash: hashOpaqueToken(refreshToken), lastSeenAt: now } })
-          await this.writeAudit(transaction, grant.accountId, grant.organizationId, grant.id, 'redeem', {
+          await this.writeRedeemAudit(transaction, grant, link, {
             outcome: 'success', secretHint: link.secretHint, deviceId: device.id, expiresAt: grant.expiresAt, mode: 'idempotent_retry'
           })
           return this.credentials(grant, role, device.id, refreshToken, now)
@@ -288,7 +289,7 @@ export class DeviceGrantsService {
             deviceId: device.id, boundAt: now, redeemRetryUntil: new Date(now.getTime() + 10 * 60_000)
           } })
           await transaction.deviceGrantLink.update({ where: { id: link.id }, data: { consumedAt: now, secretEncrypted: Prisma.DbNull } })
-          await this.writeAudit(transaction, grant.accountId, grant.organizationId, grant.id, 'redeem', {
+          await this.writeRedeemAudit(transaction, grant, link, {
             outcome: 'success', secretHint: link.secretHint, deviceId: device.id, expiresAt: grant.expiresAt, mode: 'first_bind'
           })
           return this.credentials(grant, role, device.id, refreshToken, now)
@@ -386,7 +387,16 @@ export class DeviceGrantsService {
 
   async disable(organizationId: string, actorId: string, grantId: string) {
     const disabledAt = new Date()
-    await this.auditLifecycle(organizationId, actorId, grantId, 'disable', { disabledAt }, { disabledAt })
+    await this.withLockedCurrentLinkAndGrant(organizationId, grantId, async (transaction, grant, currentLink) => {
+      const updated = await transaction.deviceGrant.updateMany({
+        where: { id: grantId, organizationId, deletedAt: null }, data: { disabledAt }
+      })
+      if (updated.count !== 1) throw new NotFoundException('Device grant not found')
+      await this.revokeCurrentLink(transaction, grantId, disabledAt)
+      await this.writeAudit(transaction, actorId, organizationId, grantId, 'disable', {
+        outcome: 'success', secretHint: currentLink?.secretHint ?? null, disabledAt
+      })
+    })
     return { id: grantId, disabledAt }
   }
 
@@ -397,26 +407,64 @@ export class DeviceGrantsService {
 
   async delete(organizationId: string, actorId: string, grantId: string) {
     const deletedAt = new Date()
-    return this.prisma.$transaction(async transaction => {
-      await transaction.$queryRaw(Prisma.sql`
-        SELECT "id"
-        FROM "device_grants"
-        WHERE "id" = ${grantId}::uuid AND "organization_id" = ${organizationId}::uuid
-        FOR UPDATE
-      `)
-      const grant = await transaction.deviceGrant.findFirst({
-        where: { id: grantId, organizationId }, select: { id: true, deviceId: true, deletedAt: true }
-      })
-      if (!grant || grant.deletedAt) throw new NotFoundException('Device grant not found')
+    return this.withLockedCurrentLinkAndGrant(organizationId, grantId, async (transaction, grant) => {
       const updated = await transaction.deviceGrant.updateMany({
         where: { id: grantId, organizationId, deletedAt: null }, data: { deletedAt }
       })
       if (updated.count !== 1) throw new NotFoundException('Device grant not found')
+      await this.revokeCurrentLink(transaction, grantId, deletedAt)
       if (grant.deviceId) {
         await transaction.device.updateMany({ where: { id: grant.deviceId, organizationId }, data: { revokedAt: deletedAt } })
       }
       await this.writeAudit(transaction, actorId, organizationId, grantId, 'delete', { outcome: 'success', deviceId: grant.deviceId, deletedAt })
       return { id: grantId, deletedAt }
+    })
+  }
+
+  private async withLockedCurrentLinkAndGrant<T>(
+    organizationId: string,
+    grantId: string,
+    operation: (transaction: any, grant: { id: string; deviceId: string | null }, currentLink: { id: string; secretHint: string } | null) => Promise<T>
+  ): Promise<T> {
+    for (;;) {
+      try {
+        return await this.prisma.$transaction(async transaction => {
+          const lockedCurrent = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+            SELECT "id"
+            FROM "device_grant_links"
+            WHERE "device_grant_id" = ${grantId}::uuid AND "revoked_at" IS NULL AND "consumed_at" IS NULL
+            ORDER BY "issuance_order" DESC
+            LIMIT 1
+            FOR UPDATE
+          `)
+          const lockedGrant = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+            SELECT "id"
+            FROM "device_grants"
+            WHERE "id" = ${grantId}::uuid AND "organization_id" = ${organizationId}::uuid
+            FOR UPDATE
+          `)
+          if (!lockedGrant[0]) throw new NotFoundException('Device grant not found')
+          const grant = await transaction.deviceGrant.findFirst({
+            where: { id: grantId, organizationId, deletedAt: null }, select: { id: true, deviceId: true }
+          })
+          if (!grant) throw new NotFoundException('Device grant not found')
+          const currentLink = await transaction.deviceGrantLink.findFirst({
+            where: { deviceGrantId: grantId, revokedAt: null, consumedAt: null },
+            orderBy: { issuanceOrder: 'desc' }, select: { id: true, secretHint: true }
+          })
+          if (!lockedCurrent[0] && currentLink) throw retryGrantLifecycleMutation
+          return operation(transaction, grant, currentLink)
+        })
+      } catch (error) {
+        if (error !== retryGrantLifecycleMutation) throw error
+      }
+    }
+  }
+
+  private async revokeCurrentLink(transaction: any, grantId: string, revokedAt: Date) {
+    await transaction.deviceGrantLink.updateMany({
+      where: { deviceGrantId: grantId, revokedAt: null, consumedAt: null },
+      data: { revokedAt, secretEncrypted: Prisma.DbNull }
     })
   }
 
@@ -439,12 +487,25 @@ export class DeviceGrantsService {
     await transaction.auditLog.create({ data: { actorAccountId, organizationId, action: `device_grant.${action}`, resourceType: 'device_grant', resourceId, metadata } })
   }
 
+  private async writeRedeemAudit(transaction: any, grant: KnownGrant, link: KnownLink, metadata: Record<string, unknown>) {
+    if (!transaction.auditLog) return
+    await transaction.auditLog.create({ data: {
+      actorAccountId: grant.accountId,
+      organizationId: grant.organizationId,
+      action: 'device_grant_link.redeem',
+      resourceType: 'device_grant_link',
+      resourceId: link.id,
+      metadata: { deviceGrantId: grant.id, ...metadata }
+    } })
+  }
+
   private async writeFailureAudit(grant: KnownGrant, link: KnownLink, error: unknown) {
     const response = typeof error === 'object' && error !== null && 'getResponse' in error && typeof (error as any).getResponse === 'function' ? (error as any).getResponse() : null
     const code = typeof response === 'object' && response !== null && 'code' in response && typeof (response as any).code === 'string' ? (response as any).code : 'redemption_failed'
     try {
-      if (!this.prisma.auditLog) return
-      await this.prisma.auditLog.create({ data: { actorAccountId: grant.accountId, organizationId: grant.organizationId, action: 'device_grant.redeem', resourceType: 'device_grant', resourceId: grant.id, metadata: { outcome: 'failure', code, secretHint: link.secretHint, deviceId: grant.deviceId, expiresAt: grant.expiresAt } } })
+      await this.writeRedeemAudit(this.prisma, grant, link, {
+        outcome: 'failure', code, secretHint: link.secretHint, deviceId: grant.deviceId, expiresAt: grant.expiresAt
+      })
     } catch (auditError) {
       console.error('device-grant-audit-write-failed', { error: auditError instanceof Error ? auditError.message : String(auditError) })
     }

@@ -6,6 +6,7 @@ import {
   canViewGrantLink,
   createExclusiveAsyncRequestGate,
   createRequestLifecycle,
+  deviceGrantErrorMessage,
   linkExpiryPayload,
   type LinkExpiryForm,
   type DeviceGrantSummary
@@ -30,10 +31,6 @@ const regenerationLifecycle = createRequestLifecycle()
 const copyLifecycle = createRequestLifecycle()
 const viewGate = createExclusiveAsyncRequestGate(pending => { viewPending.value = pending })
 const regenerationGate = createExclusiveAsyncRequestGate(pending => { regenerationPending.value = pending })
-
-function errorMessage(value: unknown, fallback: string) {
-  return value instanceof Error && value.message ? value.message : fallback
-}
 
 function clearConnectionUrl() {
   copyLifecycle.next()
@@ -61,7 +58,7 @@ async function viewConnectionUrl() {
     connectionUrl.value = result.connectionUrl
   } catch (value: unknown) {
     if (!viewGate.isCurrent(operation) || !viewLifecycle.isCurrent(requestGeneration)) return
-    viewError.value = errorMessage(value, '获取 URL 失败')
+    viewError.value = deviceGrantErrorMessage(value, '获取 URL 失败')
   }
 }
 
@@ -102,7 +99,7 @@ async function regenerateConnectionUrl() {
     emit('changed')
   } catch (value: unknown) {
     if (!regenerationGate.isCurrent(operation) || !regenerationLifecycle.isCurrent(requestGeneration)) return
-    regenerationError.value = errorMessage(value, '重新生成 URL 失败')
+    regenerationError.value = deviceGrantErrorMessage(value, '重新生成 URL 失败')
   }
 }
 
@@ -118,7 +115,7 @@ async function copyConnectionUrl() {
     copyNotice.value = 'URL 已复制'
   } catch (value: unknown) {
     if (!copyLifecycle.isCurrent(requestGeneration) || connectionUrl.value !== url) return
-    copyError.value = errorMessage(value, '复制失败，请手动复制 URL')
+    copyError.value = deviceGrantErrorMessage(value, '复制失败，请手动复制 URL')
   }
 }
 
@@ -151,7 +148,7 @@ onBeforeUnmount(() => {
     </template>
   </Drawer>
 
-  <Drawer :open="Boolean(connectionUrl)" title="URL" description="关闭后无法再次查看完整 URL" @close="clearConnectionUrl">
+  <Drawer :open="Boolean(connectionUrl)" title="URL" description="关闭只会清除当前页面中的 URL 副本；管理员仍可再次查看恢复。" @close="clearConnectionUrl">
     <label>完整 URL<textarea readonly :value="connectionUrl || ''" aria-label="完整 URL"></textarea></label>
     <p v-if="copyNotice" class="state">{{ copyNotice }}</p>
     <p v-if="copyError" class="state error">{{ copyError }}</p>

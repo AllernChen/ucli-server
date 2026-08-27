@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildUcliConnectUrl, connectionStateForGrantStatus, connectionStateForPreviewFailure, createExclusiveGrantActionGate, createGrantActionLifecycle, isTerminalAuthorizationFailureState, readGrantLink, revalidateGrantAction } from '../../apps/admin/src/device-grant-connect.js'
-import { publicApi } from '../../apps/admin/src/api.js'
+import { api, publicApi } from '../../apps/admin/src/api.js'
 
 describe('device grant browser connection', () => {
   afterEach(() => vi.unstubAllGlobals())
@@ -153,10 +153,14 @@ describe('device grant browser connection', () => {
   })
 
   it('retains established authorization guidance for grant failures during revalidation', async () => {
-    for (const [code, status] of [['grant_disabled', 'DISABLED'], ['grant_expired', 'EXPIRED'], ['grant_deleted', 'DELETED']] as const) {
+    for (const [code, status] of [['grant_disabled', 'DISABLED'], ['grant_expired', 'EXPIRED'], ['grant_deleted', 'DELETED'], ['grant_bound', 'BOUND']] as const) {
       const result = await revalidateGrantAction('grant-secret', async () => { throw new Error(code) })
       expect(result.state).toEqual(connectionStateForGrantStatus(status))
     }
+  })
+
+  it('does not preserve the removed grant_already_bound alias', () => {
+    expect(connectionStateForPreviewFailure('grant_already_bound')).toEqual(connectionStateForGrantStatus(''))
   })
 
   it.each([
@@ -176,6 +180,14 @@ describe('device grant browser connection', () => {
     await expect(publicApi('/api/v1/auth/device-grants/preview', {
       method: 'POST', body: JSON.stringify({ link: 'grant-secret' })
     })).rejects.toThrow('link_expired')
+  })
+
+  it('preserves a stable error code from an authenticated admin API response without a message', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ code: 'grant_bound' }), { status: 400 })))
+    vi.stubGlobal('localStorage', { getItem: vi.fn(() => 'admin-token'), removeItem: vi.fn() })
+
+    await expect(api('/api/v1/admin/device-grants/grant-1/links', { method: 'POST' }))
+      .rejects.toThrow('grant_bound')
   })
 
   it('keeps raw links out of the connection page DOM and diagnostic paths', async () => {

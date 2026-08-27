@@ -166,14 +166,34 @@ describe('link-based device grant redemption', () => {
     expect(state.grants[0]).toMatchObject({ deviceId: 'device-1', boundAt: expect.any(Date), redeemRetryUntil: expect.any(Date) })
     expect(state.links[0]).toMatchObject({ consumedAt: expect.any(Date), secretHash: hashOpaqueToken(link), secretHint: '••••link', secretEncrypted: null })
     expect(calls.rowLocks).toEqual([[hashOpaqueToken(link)], ['grant-1']]); expect(JSON.stringify(result)).not.toContain(link); expect(JSON.stringify(state.audits)).not.toContain(link); expect(JSON.stringify(state.audits)).not.toContain(hashOpaqueToken(link))
-    expect(state.audits).toContainEqual(expect.objectContaining({ metadata: expect.objectContaining({ secretHint: '••••link', mode: 'first_bind' }) }))
+    expect(state.audits).toContainEqual(expect.objectContaining({
+      action: 'device_grant_link.redeem', resourceType: 'device_grant_link', resourceId: 'link-1',
+      metadata: expect.objectContaining({ deviceGrantId: 'grant-1', secretHint: '••••link', mode: 'first_bind' })
+    }))
   })
   it('allows only same-installation retry before the window and rotates its refresh token', async () => {
     const { service, state } = makeRedeemHarness({ boundInstallationId: installationId, linkConsumedAt: createdAt, retryUntil: new Date(Date.now() + 60_000) }); const first = await service.redeem(redeemInput()); const second = await service.redeem(redeemInput()); expect(second.refreshToken).not.toBe(first.refreshToken); expect(state.devices).toHaveLength(1)
+    expect(state.audits).toHaveLength(2)
+    expect(state.audits).toEqual(expect.arrayContaining([expect.objectContaining({
+      action: 'device_grant_link.redeem', resourceType: 'device_grant_link', resourceId: 'link-1',
+      metadata: expect.objectContaining({ deviceGrantId: 'grant-1', secretHint: '••••link', mode: 'idempotent_retry' })
+    })]))
   })
   it.each([
     ['another installation', redeemInput(otherInstallationId), { boundInstallationId: installationId, linkConsumedAt: createdAt, retryUntil: new Date(Date.now() + 60_000) }], ['expired retry window', redeemInput(), { boundInstallationId: installationId, linkConsumedAt: createdAt, retryUntil: new Date(Date.now() - 1) }], ['revoked existing device', redeemInput(), { boundInstallationId: installationId, linkConsumedAt: createdAt, deviceRevokedAt: createdAt, retryUntil: new Date(Date.now() + 60_000) }]
   ])('rejects %s retry as consumed', async (_name, input, options) => { const { service } = makeRedeemHarness(options); await expect(service.redeem(input)).rejects.toSatisfy(error => errorCode(error) === 'link_consumed') })
+  it('audits a failed redeem against the link without retaining credential material', async () => {
+    const { service, state } = makeRedeemHarness({ linkExpiresAt: new Date('2026-08-25T00:00:00.000Z') })
+
+    await expect(service.redeem(redeemInput())).rejects.toSatisfy(error => errorCode(error) === 'link_expired')
+
+    expect(state.audits).toContainEqual(expect.objectContaining({
+      action: 'device_grant_link.redeem', resourceType: 'device_grant_link', resourceId: 'link-1',
+      metadata: expect.objectContaining({ outcome: 'failure', code: 'link_expired', deviceGrantId: 'grant-1', secretHint: '••••link' })
+    }))
+    expect(JSON.stringify(state.audits)).not.toContain(link)
+    expect(JSON.stringify(state.audits)).not.toContain(hashOpaqueToken(link))
+  })
   it('serializes simultaneous first redemption to exactly one bound device', async () => {
     const { service, state } = makeRedeemHarness(); const results = await Promise.allSettled([service.redeem(redeemInput()), service.redeem(redeemInput(otherInstallationId))]); expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1); expect(errorCode((results.find(result => result.status === 'rejected') as PromiseRejectedResult).reason)).toBe('link_consumed'); expect(state.devices).toHaveLength(1); expect(state.links[0].consumedAt).toEqual(expect.any(Date))
   })

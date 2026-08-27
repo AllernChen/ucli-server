@@ -27,6 +27,26 @@ const linkStatusLabels: Record<DeviceGrantLinkStatus, string> = {
   AVAILABLE: '可用', EXPIRED: '已过期', REVOKED: '已撤销', CONSUMED: '已使用'
 }
 
+const deviceGrantErrorMessages: Record<string, string> = {
+  invalid_link: 'URL 无效；请重新生成 URL。',
+  link_expired: 'URL 已过期；请重新生成 URL。',
+  link_revoked: 'URL 已被撤销；请重新生成 URL。',
+  link_consumed: 'URL 已被使用；请重新生成 URL。',
+  grant_disabled: '授权已禁用；请先重新启用授权。',
+  grant_expired: '授权已过期；请先更新授权有效期。',
+  grant_deleted: '授权已删除，无法继续操作。',
+  grant_bound: '授权已绑定设备，不能重新生成 URL。',
+  invalid_grant: '授权无效或已不存在。',
+  account_inactive: '账号或当前组织成员关系不可用。',
+  organization_inactive: '组织不可用。',
+  invalid_device: '设备信息无效。'
+}
+
+export function deviceGrantErrorMessage(value: unknown, fallback: string): string {
+  const message = value instanceof Error && value.message ? value.message : ''
+  return deviceGrantErrorMessages[message] ?? (message || fallback)
+}
+
 export function linkStatusLabel(status: DeviceGrantLinkStatus): string {
   return linkStatusLabels[status]
 }

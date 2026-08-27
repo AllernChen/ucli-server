@@ -13,7 +13,8 @@ export async function api<T = any>(path: string, init: RequestInit = {}): Promis
       localStorage.removeItem('ucli.accessToken')
       window.location.reload()
     }
-    throw new Error((await response.json().catch(() => null))?.message || `HTTP ${response.status}`)
+    const body = await response.json().catch(() => null)
+    throw new Error(typeof body?.message === 'string' ? body.message : typeof body?.code === 'string' ? body.code : `HTTP ${response.status}`)
   }
   return response.json() as Promise<T>
 }
@@ -41,7 +42,8 @@ export async function apiSse(
     ...init, headers: { authorization: `Bearer ${token()}`, 'content-type': 'application/json', ...init.headers }
   })
   if (!response.ok || !response.body) {
-    throw new Error((await response.json().catch(() => null))?.message || `HTTP ${response.status}`)
+    const body = await response.json().catch(() => null)
+    throw new Error(typeof body?.message === 'string' ? body.message : typeof body?.code === 'string' ? body.code : `HTTP ${response.status}`)
   }
   const reader = response.body.getReader()
   const decoder = new TextDecoder()

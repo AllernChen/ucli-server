@@ -57,7 +57,9 @@ describe('device grant admin views', () => {
     expect(confirm).toContain('aria-describedby')
     expect(detailView).toContain('<Drawer :open="grantOpen"')
     expect(detailView).toContain('<Drawer :open="Boolean(createdSecret)"')
-    expect(detailView).toContain('description="创建后会显示一次完整连接链接')
+    expect(detailView).toContain('description="创建后会显示完整连接链接')
+    expect(detailView).toContain('关闭只会清除当前页面中的副本')
+    expect(detailView).not.toContain('显示一次完整连接链接')
     expect(detailView).toContain('以后仍可在授权列表中查看当前 URL')
   })
 

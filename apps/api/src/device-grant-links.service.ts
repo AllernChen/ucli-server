@@ -91,8 +91,12 @@ export class DeviceGrantLinksService {
 
   async viewCurrent(organizationId: string, actorId: string, grantId: string) {
     if (!this.prisma) throw new Error('PrismaService is required to view device grant links')
-    const grant = await this.prisma.deviceGrant.findFirst({ where: { id: grantId, organizationId }, select: { id: true } })
+    const grant = await this.prisma.deviceGrant.findFirst({
+      where: { id: grantId, organizationId }, select: { id: true, disabledAt: true, deletedAt: true }
+    })
     if (!grant) throw linkNotFound()
+    if (grant.deletedAt) throw new BadRequestException({ code: 'grant_deleted' })
+    if (grant.disabledAt) throw new BadRequestException({ code: 'grant_disabled' })
     const link = await this.prisma.deviceGrantLink.findFirst({
       where: { deviceGrantId: grant.id }, orderBy: { issuanceOrder: 'desc' }
     })

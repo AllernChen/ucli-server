@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createExclusiveAsyncRequestGate, createRequestLifecycle, deviceGrantQuery, grantActions, grantExpiryPayload, grantStatusLabel, linkExpiryPayload, linkStatusLabel, type DeviceGrantSummary, type DeviceGrantLinkStatus, type ManagedUser } from '../../apps/admin/src/device-grants.js'
+import { createExclusiveAsyncRequestGate, createRequestLifecycle, deviceGrantErrorMessage, deviceGrantQuery, grantActions, grantExpiryPayload, grantStatusLabel, linkExpiryPayload, linkStatusLabel, type DeviceGrantSummary, type DeviceGrantLinkStatus, type ManagedUser } from '../../apps/admin/src/device-grants.js'
 
 type Expect<T extends true> = T
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
@@ -35,6 +35,14 @@ describe('device grant administration helpers', () => {
       ['AVAILABLE', '可用'], ['EXPIRED', '已过期'], ['REVOKED', '已撤销'], ['CONSUMED', '已使用']
     ]
     for (const [status, label] of cases) expect(linkStatusLabel(status)).toBe(label)
+  })
+
+  it('maps stable device-grant API codes to user-readable admin guidance', () => {
+    expect(deviceGrantErrorMessage(new Error('grant_disabled'), '操作失败')).toBe('授权已禁用；请先重新启用授权。')
+    expect(deviceGrantErrorMessage(new Error('grant_bound'), '操作失败')).toBe('授权已绑定设备，不能重新生成 URL。')
+    expect(deviceGrantErrorMessage(new Error('link_consumed'), '操作失败')).toBe('URL 已被使用；请重新生成 URL。')
+    expect(deviceGrantErrorMessage(new Error('unexpected'), '操作失败')).toBe('unexpected')
+    expect(deviceGrantErrorMessage(null, '操作失败')).toBe('操作失败')
   })
 
   it('offers reversible actions for disabled grants and no actions for deleted grants', () => {

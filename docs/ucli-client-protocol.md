@@ -10,7 +10,7 @@ UCLI 可独立安装、独立使用。未注册、服务端不可达或授权失
 
 ## 浏览器链接和秘密边界
 
-管理端创建设备授权 API 的一次性 `connectionUrl` 响应是链接秘密的唯一输出，绝不返回裸链接秘密字段；对应的一次性 Vue 弹窗仅短暂保存并展示完整连接链接。示例：
+管理端创建、查看或重新生成设备授权 URL 的 `connectionUrl` 响应是链接秘密的受控输出，绝不返回裸链接秘密字段；对应的 Vue 弹窗仅短暂保存并展示完整连接链接。关闭只会清除当前页面 DOM 中的 URL 副本；只要当前链接未撤销、未使用且授权可用，管理员仍可再次查看当前 URL 恢复副本。示例：
 
 ### 创建响应
 
@@ -32,7 +32,7 @@ ucli://connect?server=http%3A%2F%2F10.0.0.8%3A3000#link=<secret>
 
 协议处理器和设置页粘贴链接都只接受 HTTP(S) origin 与 `#link=` fragment，拒绝用户信息、路径注入和其他协议，并先打开确认页；未确认不得 redeem。页面显示服务端、组织、用户、URL 状态、URL 有效期、授权状态、授权有效期和服务器时间。
 
-链接秘密仅在从 fragment 发起 preview/redeem 或同一 installationId 的 10 分钟重试时存在内存。弹窗关闭、创建失败、切换用户、确认页关闭、注册失败、注册成功、取消、断开或卸载时清空。浏览器跳转至 `ucli://` 后和组件卸载时也清空。链接秘密不得进入 DOM、URL query、请求路径、日志、异常、审计、storage、遥测、崩溃报告或最近打开记录；`secretHash` 与 refresh token 哈希永不展示。
+链接秘密仅在从 fragment 发起 preview/redeem、同一 installationId 的 10 分钟重试，或管理端当前 URL 恢复响应时存在内存。弹窗关闭、创建失败、切换用户、确认页关闭、注册失败、注册成功、取消、断开或卸载时清空当前页面副本。浏览器跳转至 `ucli://` 后和组件卸载时也清空。管理端清空页面副本不撤销服务端当前链接，授权管理员之后仍可再次查看恢复。链接秘密不得进入 DOM 隐藏字段、URL query、请求路径、日志、异常、审计、storage、遥测、崩溃报告或最近打开记录；`secretHash` 与 refresh token 哈希永不展示。
 
 ## Preview
 
@@ -155,6 +155,8 @@ redeem、refresh 和 bootstrap 都同步 `authorization.expiresAt` 与 `authoriz
 
 ## 稳定错误与能力降级
 
+`grant_bound` 只适用于管理端 `POST /api/v1/admin/device-grants/:id/links`，表示稳定授权已经绑定设备，不能再生成连接 URL。对于已消费链接，公开 Preview/Redeem 则返回 `link_consumed`；同一 installationId 在 10 分钟窗口内的幂等 Redeem 除外。两者不得互换或保留旧别名。
+
 | 错误码 | UCLI 行为 |
 | --- | --- |
 | `invalid_link` | 链接秘密无效；保留当前连接，并提示联系管理员创建新的授权链接。 |
@@ -163,7 +165,7 @@ redeem、refresh 和 bootstrap 都同步 `authorization.expiresAt` 与 `authoriz
 | `link_consumed` | URL 已使用或重试窗口结束；提示联系管理员创建新的授权链接。 |
 | `grant_disabled` | 停用服务端能力，提示联系管理员启用。 |
 | `grant_expired` | 停用服务端能力，显示授权有效期并提示联系管理员延期。 |
-| `grant_already_bound` | 授权已绑定设备，提示联系管理员创建新的授权链接。 |
+| `grant_bound` | 管理端重新生成被拒：授权已绑定设备，不能再生成 URL。 |
 | `grant_deleted` | 停用服务端能力，要求新的授权链接。 |
 | `account_inactive` | 停用服务端能力，提示账号或当前组织成员关系不可用。 |
 | `organization_inactive` | 停用服务端能力，提示组织不可用。 |

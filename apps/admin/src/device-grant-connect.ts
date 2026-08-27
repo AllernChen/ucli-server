@@ -51,7 +51,7 @@ export function connectionStateForPreviewFailure(code: string): GrantConnectionS
   if (linkStatus) return connectionStateForLinkStatus(linkStatus)
   const authorizationStatus = new Map([
     ['grant_disabled', 'DISABLED'], ['grant_expired', 'EXPIRED'],
-    ['grant_deleted', 'DELETED'], ['grant_already_bound', 'BOUND']
+    ['grant_deleted', 'DELETED'], ['grant_bound', 'BOUND']
   ]).get(code)
   if (authorizationStatus) return connectionStateForGrantStatus(authorizationStatus)
   const authorizationFailure = new Map<string, GrantConnectionState>([

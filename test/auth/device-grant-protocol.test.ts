@@ -100,9 +100,13 @@ describe('device grant release contract', () => {
     for (const status of ['AVAILABLE', 'BOUND', 'DISABLED', 'EXPIRED', 'DELETED']) expect(protocol).toContain(status)
     for (const code of [
       'invalid_link', 'link_expired', 'link_revoked', 'link_consumed',
-      'grant_disabled', 'grant_expired', 'grant_already_bound', 'grant_deleted',
+      'grant_disabled', 'grant_expired', 'grant_bound', 'grant_deleted',
       'account_inactive', 'organization_inactive', 'invalid_device'
     ]) expect(protocol).toContain(code)
+    expect(protocol).not.toContain('grant_already_bound')
+    expect(clientUpgrade).not.toContain('grant_already_bound')
+    expect(protocol).toContain('`grant_bound` 只适用于管理端 `POST /api/v1/admin/device-grants/:id/links`')
+    expect(protocol).toContain('Preview/Redeem 则返回 `link_consumed`')
   })
 
   it('keeps the client independently implementable and confines raw credential material', () => {
@@ -116,10 +120,12 @@ describe('device grant release contract', () => {
     expect(clientUpgrade).not.toMatch(/\]\([^)]*\.md\)/)
 
     for (const text of [
-      '管理端创建设备授权 API 的一次性 `connectionUrl` 响应', '绝不返回裸链接秘密字段', '对应的一次性 Vue 弹窗',
+      '管理端创建、查看或重新生成设备授权 URL 的 `connectionUrl` 响应', '绝不返回裸链接秘密字段',
+      '关闭只会清除当前页面 DOM 中的 URL 副本', '管理员仍可再次查看当前 URL 恢复副本',
       '弹窗关闭', '创建失败', '切换用户', '卸载时清空', 'secretHash` 与 refresh token 哈希永不展示',
       'URL query', '日志、异常、审计、storage'
     ]) expect(protocol).toContain(text)
+    expect(protocol).not.toContain('对应的一次性 Vue 弹窗')
     expect(design).not.toContain('"token": "one-time-secret"')
     expect(plan).not.toContain('result.token')
     expect(plan).not.toContain('Return `token` and `connectionUrl`')

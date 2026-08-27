@@ -2,7 +2,7 @@
 import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
-import { createRequestLifecycle, deviceGrantQuery, grantActions, grantExpiryPayload, grantStatusLabel, linkStatusLabel, type DeviceGrantSummary, type DeviceGrantUserGroup, type Page } from '../device-grants'
+import { createRequestLifecycle, deviceGrantErrorMessage, deviceGrantQuery, grantActions, grantExpiryPayload, grantStatusLabel, linkStatusLabel, type DeviceGrantSummary, type DeviceGrantUserGroup, type Page } from '../device-grants'
 import { toast } from '../toast'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import DeviceGrantLinkActions from '../components/DeviceGrantLinkActions.vue'
@@ -40,7 +40,7 @@ async function load() {
     hasLoaded.value = true
   } catch (value: any) {
     if (!loadLifecycle.isCurrent(generation)) return
-    error.value = value.message
+    error.value = deviceGrantErrorMessage(value, '加载授权失败')
   } finally {
     if (loadLifecycle.isCurrent(generation)) loading.value = false
   }
@@ -86,7 +86,7 @@ async function saveExpiry() {
     toast('授权有效期已更新')
     await load()
   } catch (value: any) {
-    editError.value = value.message
+    editError.value = deviceGrantErrorMessage(value, '更新授权有效期失败')
   } finally {
     actionPending.value = false
   }
@@ -107,7 +107,7 @@ async function confirmAction() {
     }
     await load()
   } catch (value: any) {
-    error.value = value.message
+    error.value = deviceGrantErrorMessage(value, '更新授权失败')
   } finally {
     actionPending.value = false
   }
@@ -120,7 +120,7 @@ async function enable(grant: DeviceGrantSummary) {
     toast('授权已启用；如仍过期，请先修改有效期')
     await load()
   } catch (value: any) {
-    error.value = value.message
+    error.value = deviceGrantErrorMessage(value, '启用授权失败')
   } finally {
     actionPending.value = false
   }

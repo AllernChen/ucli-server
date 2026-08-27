@@ -20,7 +20,7 @@ UCLI 必须保持独立安装、独立使用。没有服务端连接、服务端
 ucli://connect?server=http%3A%2F%2F10.0.0.8%3A3000#link=<secret>
 ```
 
-链接秘密只能为 preview、redeem 或同一 installationId 的 10 分钟重试暂存于内存。确认页关闭、注册失败、切换用户、注册成功、取消、断开或卸载时清空；redeem 成功后不再持久化链接秘密。普通配置、操作系统安全存储、DOM、最近打开记录、日志、异常、审计、遥测和崩溃报告都不得保存它。服务端管理端仅返回 `connectionUrl`，不返回裸链接秘密字段。
+链接秘密只能为 preview、redeem、同一 installationId 的 10 分钟重试或管理端恢复当前 URL 暂存于内存。确认页关闭、注册失败、切换用户、注册成功、取消、断开或卸载时清空当前页面副本；redeem 成功后不再持久化链接秘密。管理端关闭 URL 弹窗只清除 DOM 中的当前副本，不撤销服务端链接；授权管理员之后仍可再次查看当前 URL。普通配置、操作系统安全存储、DOM 隐藏字段、最近打开记录、日志、异常、审计、遥测和崩溃报告都不得保存它。服务端管理端仅返回 `connectionUrl`，不返回裸链接秘密字段。
 
 ## API 契约
 
@@ -104,6 +104,8 @@ Authorization: Bearer <accessToken>
 
 ## 稳定错误映射与能力隔离
 
+`grant_bound` 只适用于管理端 `POST /api/v1/admin/device-grants/:id/links`，表示授权已绑定而不能重新生成 URL。公开 Preview/Redeem 遇到已消费链接时返回 `link_consumed`，同一 installationId 在 10 分钟幂等窗口内可重试；不要兼容旧的绑定错误别名。
+
 | 错误码 | 客户端行为 |
 | --- | --- |
 | `invalid_link` | 链接无效，保留当前连接，提示联系管理员创建新的授权链接。 |
@@ -112,7 +114,7 @@ Authorization: Bearer <accessToken>
 | `link_consumed` | URL 已消费或重试窗口结束，提示联系管理员创建新的授权链接。 |
 | `grant_disabled` | 停用服务端能力，提示联系管理员启用。 |
 | `grant_expired` | 停用服务端能力，显示授权有效期并提示联系管理员延期。 |
-| `grant_already_bound` | 授权已绑定设备，提示联系管理员创建新的授权链接。 |
+| `grant_bound` | 管理端重新生成被拒：授权已绑定设备，不能再生成 URL。 |
 | `grant_deleted` | 停用服务端能力，要求新的授权链接。 |
 | `account_inactive` | 停用服务端能力，提示账号或当前组织成员关系不可用。 |
 | `organization_inactive` | 停用服务端能力，提示组织不可用。 |

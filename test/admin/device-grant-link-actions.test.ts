@@ -47,6 +47,8 @@ describe('DeviceGrantLinkActions', () => {
     get.resolve({ connectionUrl: secret })
     await settle()
     expect((document.querySelector('textarea[aria-label="完整 URL"]') as HTMLTextAreaElement).value).toBe(secret)
+    expect(document.body.textContent).toContain('关闭只会清除当前页面中的 URL 副本；管理员仍可再次查看恢复')
+    expect(document.body.textContent).not.toContain('关闭后无法再次查看完整 URL')
 
     ;(document.querySelector('button[aria-label="关闭"]') as HTMLButtonElement).click()
     await settle()
@@ -128,6 +130,23 @@ describe('DeviceGrantLinkActions', () => {
     await (document.querySelector('[role="dialog"] button.primary') as HTMLButtonElement).click()
     await settle()
     expect(document.body.textContent).toContain('无法重新生成 URL')
+    wrapper.unmount()
+  })
+
+  it('shows user-readable guidance for stable API error codes', async () => {
+    const wrapper = mountActions()
+    state.api.mockRejectedValueOnce(new Error('grant_disabled'))
+    await wrapper.get('button').trigger('click')
+    await settle()
+    expect(wrapper.text()).toContain('授权已禁用；请先重新启用授权。')
+    expect(wrapper.text()).not.toContain('grant_disabled')
+
+    state.api.mockRejectedValueOnce(new Error('grant_bound'))
+    await wrapper.get('button:nth-child(2)').trigger('click')
+    await (document.querySelector('[role="dialog"] button.primary') as HTMLButtonElement).click()
+    await settle()
+    expect(document.body.textContent).toContain('授权已绑定设备，不能重新生成 URL。')
+    expect(document.body.textContent).not.toContain('grant_bound')
     wrapper.unmount()
   })
 

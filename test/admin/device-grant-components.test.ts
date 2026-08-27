@@ -254,6 +254,43 @@ describe('UserDetail mounted async behavior', () => {
     wrapper.unmount()
   })
 
+  it('keeps a regenerated URL mounted and copyable while its background refresh is delayed or fails', async () => {
+    const refresh = deferred<any>()
+    const clipboard = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: clipboard } })
+    const grant = {
+      id: 'grant-1', currentLink: { id: 'link-1', secretHint: 'link…abcd', status: 'AVAILABLE', expiresAt: null, createdAt: '2026-08-27T00:00:00.000Z' },
+      expiresAt: null, disabledAt: null, deletedAt: null, boundAt: null, deviceId: null,
+      createdAt: '2026-08-27T00:00:00.000Z', updatedAt: '2026-08-27T00:00:00.000Z', status: 'AVAILABLE'
+    }
+    const replacementUrl = 'https://example/connect#link=replacement-secret'
+    state.api
+      .mockResolvedValueOnce({ ...user('user-1', '用户一'), deviceGrantCount: 1, deviceGrants: [grant] })
+      .mockResolvedValueOnce({ connectionUrl: replacementUrl })
+      .mockReturnValueOnce(refresh.promise)
+    const wrapper = mount(UserDetail, { attachTo: document.body })
+    await settle()
+
+    await wrapper.get('.device-grant-link-actions button:nth-child(2)').trigger('click')
+    await settle()
+    ;(document.querySelector('button[form="regenerate-grant-link-form"]') as HTMLButtonElement).click()
+    await settle()
+
+    expect((document.querySelector('textarea[aria-label="完整 URL"]') as HTMLTextAreaElement)?.value).toBe(replacementUrl)
+    ;(document.querySelector('button[data-copy-url]') as HTMLButtonElement).click()
+    await settle()
+    expect(clipboard).toHaveBeenLastCalledWith(replacementUrl)
+
+    refresh.reject(new Error('刷新用户详情失败'))
+    await settle()
+    expect(document.body.textContent).toContain('刷新用户详情失败')
+    expect((document.querySelector('textarea[aria-label="完整 URL"]') as HTMLTextAreaElement)?.value).toBe(replacementUrl)
+    ;(document.querySelector('button[data-copy-url]') as HTMLButtonElement).click()
+    await settle()
+    expect(clipboard).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
   it('keeps a same-route created secret when refresh GETs race or later fail', async () => {
     const initial = deferred<any>()
     const post = deferred<any>()
