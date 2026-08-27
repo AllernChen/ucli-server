@@ -1,14 +1,15 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Header, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { UuidPipe } from '../../../packages/http/src/uuid.pipe.js'
 import { AuthGuard, Roles } from '../../../packages/security/src/auth.js'
-import { CreateDeviceGrantDto, DeviceGrantPageQueryDto, UpdateDeviceGrantDto } from './device-grants.dto.js'
+import { CreateDeviceGrantDto, CreateDeviceGrantLinkDto, DeviceGrantPageQueryDto, UpdateDeviceGrantDto } from './device-grants.dto.js'
+import { DeviceGrantLinksService } from './device-grant-links.service.js'
 import { DeviceGrantsService } from './device-grants.service.js'
 
 @ApiTags('admin/device-grants') @ApiBearerAuth() @UseGuards(AuthGuard)
 @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Controller('api/v1/admin')
 export class DeviceGrantsController {
-  constructor(private readonly grants: DeviceGrantsService) {}
+  constructor(private readonly grants: DeviceGrantsService, private readonly links: DeviceGrantLinksService) {}
 
   @Post('users/:userId/device-grants')
   create(@Req() req: any, @Param('userId', UuidPipe) userId: string, @Body() body: CreateDeviceGrantDto) {
@@ -38,5 +39,17 @@ export class DeviceGrantsController {
   @Delete('device-grants/:id')
   delete(@Req() req: any, @Param('id', UuidPipe) id: string) {
     return this.grants.delete(req.principal.organizationId, req.principal.sub, id)
+  }
+
+  @Get('device-grants/:id/link')
+  @Header('Cache-Control', 'no-store')
+  viewLink(@Req() req: any, @Param('id', UuidPipe) id: string) {
+    return this.links.viewCurrent(req.principal.organizationId, req.principal.sub, id)
+  }
+
+  @Post('device-grants/:id/links')
+  @Header('Cache-Control', 'no-store')
+  regenerateLink(@Req() req: any, @Param('id', UuidPipe) id: string, @Body() body: CreateDeviceGrantLinkDto) {
+    return this.links.regenerate(req.principal.organizationId, req.principal.sub, id, body)
   }
 }

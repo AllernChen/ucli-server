@@ -4,6 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick, reactive } from 'vue'
 import Drawer from '../../apps/admin/src/components/Drawer.vue'
 import ConfirmDialog from '../../apps/admin/src/components/ConfirmDialog.vue'
+import LinkExpiryFields from '../../apps/admin/src/components/LinkExpiryFields.vue'
 
 const state = vi.hoisted(() => ({ route: null as any, api: vi.fn(), push: vi.fn(), toast: vi.fn() }))
 vi.mock('../../apps/admin/src/api.js', () => ({ api: state.api }))
@@ -19,8 +20,8 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-const user = (id: string, displayName = id) => ({
-  id, organizationId: 'org', email: `${id}@example.com`, displayName, status: 'ACTIVE', role: 'MEMBER', createdAt: '2026-01-01T00:00:00.000Z',
+const user = (id: string, displayName = id, role: 'MEMBER' | 'ORG_ADMIN' | 'PLATFORM_ADMIN' = 'MEMBER', status: 'ACTIVE' | 'DISABLED' = 'ACTIVE') => ({
+  id, organizationId: 'org', email: `${id}@example.com`, displayName, status, role, createdAt: '2026-01-01T00:00:00.000Z',
   deviceCount: 0, deviceGrantCount: 0, devices: [], deviceGrants: []
 })
 
@@ -80,6 +81,27 @@ describe('admin dialog components', () => {
     openDrawer.unmount()
     expect(unmountFocus).toHaveBeenCalledOnce()
   })
+
+  it('renders every link expiry option and enables custom datetime only for custom mode', async () => {
+    const wrapper = mount(LinkExpiryFields, { props: { modelValue: { mode: '7d', customExpiresAt: '' } } })
+    const select = wrapper.get('select')
+    const custom = wrapper.get('input[type="datetime-local"]')
+    expect(wrapper.text()).toContain('URL 有效期')
+    expect(select.findAll('option').map(option => option.text())).toEqual(['1 天', '7 天（默认）', '30 天', '永久', '自定义'])
+    expect(custom.attributes('required')).toBeUndefined()
+    expect(custom.attributes('disabled')).toBeDefined()
+
+    for (const mode of ['1d', '7d', '30d', 'permanent', 'custom'] as const) {
+      await select.setValue(mode)
+      const emittedValue = wrapper.emitted('update:modelValue')?.at(-1)?.[0]
+      expect(emittedValue).toEqual({ mode, customExpiresAt: '' })
+      await wrapper.setProps({ modelValue: emittedValue as { mode: typeof mode; customExpiresAt: string } })
+      expect(custom.attributes('required')).toBe(mode === 'custom' ? '' : undefined)
+      expect(custom.attributes('disabled')).toBe(mode === 'custom' ? undefined : '')
+    }
+    await wrapper.setProps({ modelValue: { mode: 'custom', customExpiresAt: '2026-08-28T00:00' } })
+    expect((wrapper.get('input[type="datetime-local"]').element as HTMLInputElement).value).toBe('2026-08-28T00:00')
+  })
 })
 
 describe('UserDetail mounted async behavior', () => {
@@ -90,6 +112,184 @@ describe('UserDetail mounted async behavior', () => {
     state.toast.mockReset()
   })
   afterEach(() => { document.body.innerHTML = '' })
+
+  it('creates grants for every active membership role with permanent authorization and the default URL expiry', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-27T00:00:00.000Z'))
+    try {
+      for (const role of ['MEMBER', 'ORG_ADMIN', 'PLATFORM_ADMIN'] as const) {
+        state.api.mockReset()
+        state.api
+          .mockResolvedValueOnce(user('user-1', '用户一', role))
+          .mockResolvedValueOnce({ connectionUrl: `https://example/connect#${role}-secret` })
+          .mockResolvedValueOnce(user('user-1', '用户一', role))
+        const wrapper = mount(UserDetail, { attachTo: document.body })
+        await settle()
+
+        const openButton = wrapper.get('header .actions button.primary')
+        expect((openButton.element as HTMLButtonElement).disabled).toBe(false)
+        await openButton.trigger('click')
+        await settle()
+        const expirySelect = document.querySelector('#grant-form .link-expiry-fields select') as HTMLSelectElement
+        expirySelect.value = '30d'
+        expirySelect.dispatchEvent(new Event('change', { bubbles: true }))
+        await settle()
+        await (Array.from(document.querySelectorAll('[role="dialog"] button')).find(button => button.textContent === '取消') as HTMLButtonElement).click()
+        await settle()
+        await openButton.trigger('click')
+        await settle()
+        expect((document.querySelector('#grant-form .link-expiry-fields select') as HTMLSelectElement).value).toBe('7d')
+        await (document.querySelector('button[form="grant-form"]') as HTMLButtonElement).click()
+        await settle()
+
+        const createCall = state.api.mock.calls.find(([path, options]) =>
+          path === '/api/v1/admin/users/user-1/device-grants' && (options as { method?: string } | undefined)?.method === 'POST'
+        )
+        expect(createCall).toEqual([
+          '/api/v1/admin/users/user-1/device-grants',
+          { method: 'POST', body: JSON.stringify({ expiresAt: null, linkExpiresAt: '2026-09-03T00:00:00.000Z' }) }
+        ])
+        expect(document.body.textContent).toContain('以后仍可在授权列表中查看当前 URL')
+        expect((document.querySelector('textarea[aria-label="完整连接链接"]') as HTMLTextAreaElement).value).toContain(`${role}-secret`)
+        await (document.querySelector('[role="dialog"] button.primary') as HTMLButtonElement).click()
+        await settle()
+        expect(document.querySelector('textarea[aria-label="完整连接链接"]')).toBeNull()
+        wrapper.unmount()
+        document.body.innerHTML = ''
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('explains why a disabled membership cannot create a grant', async () => {
+    state.api.mockResolvedValue(user('user-1', '已禁用用户', 'ORG_ADMIN', 'DISABLED'))
+    const wrapper = mount(UserDetail, { attachTo: document.body })
+    await settle()
+
+    expect((wrapper.get('header .actions button.primary').element as HTMLButtonElement).disabled).toBe(true)
+    expect(document.body.textContent).toContain('仅可为已启用的用户创建授权')
+    wrapper.unmount()
+  })
+
+  it('resets the URL expiry selection when the detail route changes', async () => {
+    state.api.mockResolvedValue(user('user-1', '用户一'))
+    const wrapper = mount(UserDetail, { attachTo: document.body })
+    await settle()
+
+    await wrapper.get('header .actions button.primary').trigger('click')
+    const expirySelect = document.querySelector('#grant-form .link-expiry-fields select') as HTMLSelectElement
+    expirySelect.value = '30d'
+    expirySelect.dispatchEvent(new Event('change', { bubbles: true }))
+    await settle()
+    expect(expirySelect.value).toBe('30d')
+
+    state.route.params.id = 'user-2'
+    await settle()
+    await wrapper.get('header .actions button.primary').trigger('click')
+    expect((document.querySelector('#grant-form .link-expiry-fields select') as HTMLSelectElement).value).toBe('7d')
+    wrapper.unmount()
+  })
+
+  it('renders current URL summaries and the shared recovery actions for each grant', async () => {
+    const detail = {
+      ...user('user-1', '用户一'),
+      deviceGrantCount: 1,
+      deviceGrants: [{
+        id: 'grant-1', currentLink: { id: 'link-1', secretHint: 'link…abcd', status: 'AVAILABLE', expiresAt: '2026-09-03T00:00:00.000Z', createdAt: '2026-08-27T00:00:00.000Z' },
+        expiresAt: null, disabledAt: null, deletedAt: null, boundAt: null, deviceId: null,
+        createdAt: '2026-08-27T00:00:00.000Z', updatedAt: '2026-08-27T00:00:00.000Z', status: 'AVAILABLE'
+      }]
+    }
+    state.api.mockResolvedValue(detail)
+    const wrapper = mount(UserDetail, { attachTo: document.body })
+    await settle()
+
+    expect(document.body.textContent).toContain('link…abcd')
+    expect(document.body.textContent).toContain('可用')
+    expect(document.body.textContent).toContain('查看 URL')
+    wrapper.unmount()
+  })
+
+  it('marks a grant without a current URL as unavailable instead of permanent', async () => {
+    state.api.mockResolvedValue({
+      ...user('user-1', '用户一'),
+      deviceGrantCount: 1,
+      deviceGrants: [{
+        id: 'grant-1', currentLink: null, expiresAt: null, disabledAt: null, deletedAt: null, boundAt: null, deviceId: null,
+        createdAt: '2026-08-27T00:00:00.000Z', updatedAt: '2026-08-27T00:00:00.000Z', status: 'AVAILABLE'
+      }]
+    })
+    const wrapper = mount(UserDetail, { attachTo: document.body })
+    await settle()
+
+    expect(wrapper.find('.table-panel tbody tr').findAll('td')[2].text()).toBe('—')
+    wrapper.unmount()
+  })
+
+  it('reloads its detail when a grant link action changes a grant', async () => {
+    const grant = {
+      id: 'grant-1', currentLink: { id: 'link-1', secretHint: 'link…abcd', status: 'AVAILABLE', expiresAt: null, createdAt: '2026-08-27T00:00:00.000Z' },
+      expiresAt: null, disabledAt: null, deletedAt: null, boundAt: null, deviceId: null,
+      createdAt: '2026-08-27T00:00:00.000Z', updatedAt: '2026-08-27T00:00:00.000Z', status: 'AVAILABLE'
+    }
+    state.api
+      .mockResolvedValueOnce({ ...user('user-1', '创建前'), deviceGrantCount: 1, deviceGrants: [grant] })
+      .mockResolvedValueOnce({ connectionUrl: 'https://example/connect#replacement' })
+      .mockResolvedValueOnce({ ...user('user-1', '创建后'), deviceGrantCount: 1, deviceGrants: [grant] })
+    const wrapper = mount(UserDetail, { attachTo: document.body })
+    await settle()
+
+    await wrapper.get('.device-grant-link-actions button:nth-child(2)').trigger('click')
+    await settle()
+    await (document.querySelector('button[form="regenerate-grant-link-form"]') as HTMLButtonElement).click()
+    await settle()
+
+    expect(document.body.textContent).toContain('创建后')
+    expect(state.api.mock.calls.map(([path]) => path)).toEqual([
+      '/api/v1/admin/users/user-1',
+      '/api/v1/admin/device-grants/grant-1/links',
+      '/api/v1/admin/users/user-1'
+    ])
+    wrapper.unmount()
+  })
+
+  it('keeps a regenerated URL mounted and copyable while its background refresh is delayed or fails', async () => {
+    const refresh = deferred<any>()
+    const clipboard = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: clipboard } })
+    const grant = {
+      id: 'grant-1', currentLink: { id: 'link-1', secretHint: 'link…abcd', status: 'AVAILABLE', expiresAt: null, createdAt: '2026-08-27T00:00:00.000Z' },
+      expiresAt: null, disabledAt: null, deletedAt: null, boundAt: null, deviceId: null,
+      createdAt: '2026-08-27T00:00:00.000Z', updatedAt: '2026-08-27T00:00:00.000Z', status: 'AVAILABLE'
+    }
+    const replacementUrl = 'https://example/connect#link=replacement-secret'
+    state.api
+      .mockResolvedValueOnce({ ...user('user-1', '用户一'), deviceGrantCount: 1, deviceGrants: [grant] })
+      .mockResolvedValueOnce({ connectionUrl: replacementUrl })
+      .mockReturnValueOnce(refresh.promise)
+    const wrapper = mount(UserDetail, { attachTo: document.body })
+    await settle()
+
+    await wrapper.get('.device-grant-link-actions button:nth-child(2)').trigger('click')
+    await settle()
+    ;(document.querySelector('button[form="regenerate-grant-link-form"]') as HTMLButtonElement).click()
+    await settle()
+
+    expect((document.querySelector('textarea[aria-label="完整 URL"]') as HTMLTextAreaElement)?.value).toBe(replacementUrl)
+    ;(document.querySelector('button[data-copy-url]') as HTMLButtonElement).click()
+    await settle()
+    expect(clipboard).toHaveBeenLastCalledWith(replacementUrl)
+
+    refresh.reject(new Error('刷新用户详情失败'))
+    await settle()
+    expect(document.body.textContent).toContain('刷新用户详情失败')
+    expect((document.querySelector('textarea[aria-label="完整 URL"]') as HTMLTextAreaElement)?.value).toBe(replacementUrl)
+    ;(document.querySelector('button[data-copy-url]') as HTMLButtonElement).click()
+    await settle()
+    expect(clipboard).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
 
   it('keeps a same-route created secret when refresh GETs race or later fail', async () => {
     const initial = deferred<any>()
@@ -106,7 +306,7 @@ describe('UserDetail mounted async behavior', () => {
     await wrapper.get('header .actions button:not(.primary)').trigger('click')
     post.resolve({ connectionUrl: 'https://example/connect#token=secret' })
     await settle()
-    expect(document.body.textContent).toContain('关闭后无法再次查看完整令牌')
+    expect(document.body.textContent).toContain('以后仍可在授权列表中查看当前 URL')
     expect((document.querySelector('textarea') as HTMLTextAreaElement).value).toContain('secret')
     refresh.resolve(user('user-1', '旧刷新'))
     afterCreate.reject(new Error('刷新失败'))
@@ -136,7 +336,7 @@ describe('UserDetail mounted async behavior', () => {
     post.resolve({ connectionUrl: 'https://example/#token=stale' })
     userTwo.resolve(user('user-2', '用户二'))
     await settle()
-    expect(document.body.textContent).not.toContain('关闭后无法再次查看完整令牌')
+    expect(document.body.textContent).not.toContain('以后仍可在授权列表中查看当前 URL')
     expect(document.body.textContent).toContain('用户二')
     wrapper.unmount()
   })

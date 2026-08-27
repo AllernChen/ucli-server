@@ -182,7 +182,6 @@ describe('refresh token rotation', () => {
     ['permanently revoked device', { revokedAt: new Date() }, 'invalid_device'],
     ['inactive account', { accountStatus: 'DISABLED' }, 'account_inactive'],
     ['inactive organization', { organizationEnabled: false }, 'organization_inactive'],
-    ['non-member membership', { membershipRole: 'ORG_ADMIN' }, 'account_inactive'],
     ['missing membership', { membershipMissing: true }, 'account_inactive'],
     ['inactive membership', { membershipStatus: 'DISABLED' }, 'account_inactive']
   ] as const)('returns the stable %s error during refresh', async (_name, options, code) => {
@@ -196,6 +195,11 @@ describe('refresh token rotation', () => {
     const result = await service.refresh(oldRefreshToken)
     expect(JSON.stringify(result)).not.toContain(oldRefreshHash)
     expect(JSON.stringify(result)).not.toContain(device.refreshTokenHash)
+  })
+
+  it.each(['PLATFORM_ADMIN', 'ORG_ADMIN', 'MEMBER'])('refreshes a live device for an active %s grant owner', async membershipRole => {
+    const { service } = makeRefreshHarness({ membershipRole })
+    await expect(service.refresh(oldRefreshToken)).resolves.toMatchObject({ accessToken: expect.any(String), refreshToken: expect.any(String) })
   })
 
   it('does not consume an old refresh token when access-token signing fails', async () => {

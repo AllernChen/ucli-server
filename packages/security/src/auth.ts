@@ -64,7 +64,7 @@ export class AuthGuard implements CanActivate {
       const failure = deviceGrantFailure(device.grant)
       if (failure) throw authorizationFailure(failure)
       if (device.revokedAt) throw authorizationFailure('invalid_device')
-      await this.assertActiveMembership(principal, 'MEMBER')
+      await this.assertActiveMembership(principal, principal.role)
       await this.prisma.device.update({ where: { id: device.id }, data: { lastSeenAt: new Date() } })
     } else {
       await this.assertActiveMembership(principal, principal.role)

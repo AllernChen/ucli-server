@@ -1,0 +1,321 @@
+import 'reflect-metadata'
+import { BadRequestException, NotFoundException } from '@nestjs/common'
+import { Prisma } from '@prisma/client'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { DeviceGrantLinksService } from '../../apps/api/src/device-grant-links.service.js'
+import { createDeviceGrantLinkCredential } from '../../packages/security/src/device-grant-links.js'
+
+const masterKey = Buffer.alloc(32, 7)
+
+function code(error: unknown) {
+  return (error as BadRequestException).getResponse() as { code: string }
+}
+
+function makeHarness(options: Partial<{
+  organizationId: string
+  boundAt: Date | null
+  deviceId: string | null
+  disabledAt: Date | null
+  deletedAt: Date | null
+  expiresAt: Date | null
+  linkExpiresAt: Date | null
+  secretEncrypted: unknown
+  pauseFirstLock: boolean
+  noCurrentLink: boolean
+}> = {}) {
+  process.env.MASTER_KEY = masterKey.toString('base64')
+  process.env.PUBLIC_URL = 'https://ucli.example.test'
+  const previousCredential = createDeviceGrantLinkCredential(masterKey)
+  const createdAt = new Date('2026-08-27T00:00:00.000Z')
+  const state = {
+    grant: {
+      id: 'grant-1', organizationId: options.organizationId ?? 'org-1', boundAt: options.boundAt ?? null,
+      deviceId: options.deviceId ?? null, disabledAt: options.disabledAt ?? null, deletedAt: options.deletedAt ?? null,
+      expiresAt: options.expiresAt ?? null
+    },
+    links: (options.noCurrentLink ? [] : [{
+      id: 'link-1', deviceGrantId: 'grant-1', createdById: 'actor-0', secretHash: previousCredential.secretHash,
+      secretHint: previousCredential.secretHint, secretEncrypted: options.secretEncrypted === undefined ? previousCredential.secretEncrypted : options.secretEncrypted,
+      issuanceOrder: 1n, expiresAt: options.linkExpiresAt ?? null, revokedAt: null, consumedAt: null, createdAt
+    }]) as any[],
+    audits: [] as any[]
+  }
+  const locks = new Map<string, Promise<void>>()
+  let firstLockEntered: (() => void) | undefined
+  let releaseFirstLock: (() => void) | undefined
+  const firstLockWaiter = new Promise<void>(resolve => { firstLockEntered = resolve })
+  const firstLockPause = new Promise<void>(resolve => { releaseFirstLock = resolve })
+  const calls = { linkCreate: [] as any[], linkUpdates: [] as any[], rowLocks: [] as unknown[][], rowLockTables: [] as string[], latestLinkOrder: [] as string[] }
+  const linkMatches = (link: any, where: any) =>
+    (!where.deviceGrantId || link.deviceGrantId === where.deviceGrantId) &&
+    (where.revokedAt === undefined || link.revokedAt === where.revokedAt) &&
+    (where.consumedAt === undefined || link.consumedAt === where.consumedAt)
+  const prisma: any = {
+    deviceGrant: {
+      findFirst: async ({ where }: any) => state.grant.id === where.id && state.grant.organizationId === where.organizationId ? state.grant : null
+    },
+    deviceGrantLink: {
+      findFirst: async ({ where, orderBy }: any) => {
+        const field = Object.keys(orderBy || { createdAt: 'desc' })[0]
+        calls.latestLinkOrder.push(field)
+        return state.links.filter(link => linkMatches(link, where)).sort((a, b) => a[field] === b[field] ? 0 : a[field] > b[field] ? -1 : 1)[0] ?? null
+      },
+      updateMany: async ({ where, data }: any) => {
+        calls.linkUpdates.push({ where, data })
+        const matching = state.links.filter(link => linkMatches(link, where))
+        matching.forEach(link => Object.assign(link, { ...data, secretEncrypted: data.secretEncrypted === Prisma.DbNull ? null : data.secretEncrypted }))
+        return { count: matching.length }
+      },
+      create: async ({ data }: any) => {
+        calls.linkCreate.push(data)
+        if (state.links.some(link => link.deviceGrantId === data.deviceGrantId && !link.revokedAt && !link.consumedAt)) {
+          throw { code: 'P2002', meta: { target: ['device_grant_links_one_current_per_grant'] } }
+        }
+        const link = { id: `link-${state.links.length + 1}`, createdAt: new Date(), revokedAt: null, consumedAt: null, ...data }
+        state.links.push(link)
+        return link
+      }
+    },
+    auditLog: { create: async ({ data }: any) => { state.audits.push(data); return data } },
+    $transaction: async (operation: any) => {
+      const releases: Array<() => void> = []
+      const transaction = {
+        ...prisma,
+        $queryRaw: async (query: any) => {
+          const linkLock = query.strings.join('').includes('device_grant_links')
+          if (linkLock) calls.latestLinkOrder.push(query.strings.join('').includes('ORDER BY "issuance_order" DESC') ? 'issuanceOrder' : 'createdAt')
+          const current = linkLock ? state.links.filter(link => link.deviceGrantId === query.values[0] && !link.revokedAt && !link.consumedAt)
+            .sort((a, b) => b.issuanceOrder > a.issuanceOrder ? 1 : -1)[0] : null
+          if (linkLock && !current) {
+            calls.rowLocks.push(query.values)
+            calls.rowLockTables.push('device_grant_links')
+            return []
+          }
+          const key = `${linkLock ? 'link' : 'grant'}:${current?.id ?? query.values[0]}`
+          const previous = locks.get(key) ?? Promise.resolve()
+          const held = new Promise<void>(resolve => { releases.push(resolve) })
+          locks.set(key, previous.then(() => held))
+          await previous
+          calls.rowLocks.push(query.values)
+          calls.rowLockTables.push(linkLock ? 'device_grant_links' : 'device_grants')
+          if (options.pauseFirstLock && calls.rowLocks.length === 1) {
+            firstLockEntered!()
+            await firstLockPause
+          }
+          if (linkLock) return current ? [{ id: current.id }] : []
+          return state.grant.id === query.values[0] && state.grant.organizationId === query.values[1] ? [{ id: state.grant.id }] : []
+        }
+      }
+      try { return await operation(transaction) } finally { releases.forEach(release => release()) }
+    }
+  }
+  return {
+    links: new DeviceGrantLinksService(prisma), state, calls,
+    previousUrl: `https://ucli.example.test/connect#link=${encodeURIComponent(previousCredential.secret)}`,
+    waitForFirstLock: () => firstLockWaiter, releaseFirstLock: () => releaseFirstLock!()
+  }
+}
+
+afterEach(() => vi.useRealTimers())
+
+describe('device grant links service', () => {
+  it('persists exactly a prepared credential for an initial link', async () => {
+    const previousMasterKey = process.env.MASTER_KEY
+    process.env.MASTER_KEY = Buffer.alloc(32, 7).toString('base64')
+    const creates: any[] = []
+    try {
+      const service = new DeviceGrantLinksService()
+      const credential = service.prepareCredential()
+      const expiresAt = new Date('2026-09-03T00:00:00.000Z')
+      const result = await service.createInTransaction({
+        deviceGrantLink: { create: async ({ data }: any) => {
+          creates.push(data)
+          return { id: 'link-1', createdAt: new Date('2026-08-27T00:00:00.000Z'), ...data }
+        } }
+      } as any, {
+        organizationId: 'org-1', actorId: 'actor-1', grantId: 'grant-1', expiresAt, action: 'create', credential
+      })
+      expect(creates).toEqual([{
+        deviceGrantId: 'grant-1', createdById: 'actor-1', expiresAt,
+        secretHash: credential.secretHash, secretHint: credential.secretHint, secretEncrypted: credential.secretEncrypted
+      }])
+      expect(result).toEqual(expect.objectContaining({ id: 'link-1', secret: credential.secret, secretHint: credential.secretHint, expiresAt }))
+    } finally {
+      if (previousMasterKey === undefined) delete process.env.MASTER_KEY
+      else process.env.MASTER_KEY = previousMasterKey
+    }
+  })
+
+  it('returns the same recoverable URL without rotating it', async () => {
+    const { links, calls, state, previousUrl } = makeHarness()
+
+    const first = await links.viewCurrent('org-1', 'actor-1', 'grant-1')
+    const second = await links.viewCurrent('org-1', 'actor-1', 'grant-1')
+
+    expect(first.connectionUrl).toBe(previousUrl)
+    expect(second.connectionUrl).toBe(first.connectionUrl)
+    expect(second.currentLink).toMatchObject({ id: 'link-1', status: 'AVAILABLE' })
+    expect(calls.linkCreate).toHaveLength(0)
+    expect(state.audits.map(audit => audit.action)).toEqual(['device_grant_link.view', 'device_grant_link.view'])
+  })
+
+  it('views the most recently issued link when transaction timestamps are out of order', async () => {
+    const { links, state } = makeHarness()
+    const replacementCredential = createDeviceGrantLinkCredential(masterKey)
+    state.links[0].createdAt = new Date('2026-08-28T00:00:00.000Z')
+    state.links[0].revokedAt = new Date('2026-08-28T00:00:00.000Z')
+    state.links.push({
+      id: 'link-2', deviceGrantId: 'grant-1', createdById: 'actor-1', issuanceOrder: 2n,
+      secretHash: replacementCredential.secretHash, secretHint: replacementCredential.secretHint,
+      secretEncrypted: replacementCredential.secretEncrypted, expiresAt: null, revokedAt: null, consumedAt: null,
+      createdAt: new Date('2026-08-27T00:00:00.000Z')
+    })
+
+    await expect(links.viewCurrent('org-1', 'actor-1', 'grant-1')).resolves.toMatchObject({
+      currentLink: { id: 'link-2', secretHint: replacementCredential.secretHint, status: 'AVAILABLE' },
+      connectionUrl: `https://ucli.example.test/connect#link=${encodeURIComponent(replacementCredential.secret)}`
+    })
+  })
+
+  it('recovers an expired current URL while its grant remains available', async () => {
+    const { links, state, previousUrl } = makeHarness({ linkExpiresAt: new Date(Date.now() - 1) })
+
+    await expect(links.viewCurrent('org-1', 'actor-1', 'grant-1')).resolves.toMatchObject({
+      connectionUrl: previousUrl, currentLink: { status: 'EXPIRED' }
+    })
+    expect(state.audits[0].metadata).toMatchObject({ deviceGrantId: 'grant-1', secretHint: state.links[0].secretHint, status: 'EXPIRED' })
+  })
+
+  it.each([
+    ['disabled', { disabledAt: new Date() }, 'grant_disabled'],
+    ['deleted', { deletedAt: new Date() }, 'grant_deleted']
+  ])('refuses to reveal a recoverable URL for a %s grant', async (_, options, expectedCode) => {
+    const { links, state, previousUrl } = makeHarness(options)
+
+    const error = await links.viewCurrent('org-1', 'actor-1', 'grant-1').catch(error => error)
+
+    expect(error).toBeInstanceOf(BadRequestException)
+    expect(code(error).code).toBe(expectedCode)
+    expect(JSON.stringify(error)).not.toContain(previousUrl)
+    expect(state.audits).toHaveLength(0)
+  })
+
+  it.each([
+    ['another organization', 'org-2', {}],
+    ['missing ciphertext', 'org-1', { secretEncrypted: null }],
+    ['revoked current link', 'org-1', { secretEncrypted: null }]
+  ])('does not disclose a URL for %s', async (_, organizationId, options) => {
+    const { links, state } = makeHarness(options)
+    if (_ === 'revoked current link') state.links[0].revokedAt = new Date()
+
+    await expect(links.viewCurrent(organizationId, 'actor-1', 'grant-1')).rejects.toBeInstanceOf(NotFoundException)
+  })
+
+  it('does not leak the secret when ciphertext cannot be decrypted with the current master key', async () => {
+    const { links, previousUrl } = makeHarness()
+    process.env.MASTER_KEY = Buffer.alloc(32, 8).toString('base64')
+    const wrongKeyService = new DeviceGrantLinksService((links as any).prisma)
+
+    const error = await wrongKeyService.viewCurrent('org-1', 'actor-1', 'grant-1').catch(error => error)
+
+    expect(error).toBeInstanceOf(Error)
+    expect(String(error)).not.toContain(previousUrl)
+  })
+
+  it('revokes and clears every current ciphertext before inserting one replacement', async () => {
+    const { links, state, calls, previousUrl } = makeHarness()
+
+    const result = await links.regenerate('org-1', 'actor-1', 'grant-1', { expiresAt: null })
+
+    expect(result.connectionUrl).not.toBe(previousUrl)
+    expect(result.currentLink).toMatchObject({ id: 'link-2', status: 'AVAILABLE', expiresAt: null })
+    expect(state.links[0]).toMatchObject({ revokedAt: expect.any(Date), secretEncrypted: null })
+    expect(state.links.filter(link => !link.revokedAt && !link.consumedAt)).toHaveLength(1)
+    expect(state.audits).toContainEqual(expect.objectContaining({
+      action: 'device_grant_link.regenerate', resourceId: 'link-2',
+      metadata: expect.objectContaining({ previousLinkId: 'link-1', newLinkId: 'link-2' })
+    }))
+    expect(calls.latestLinkOrder).toEqual(['issuanceOrder', 'issuanceOrder'])
+  })
+
+  it.each([
+    ['bound', { boundAt: new Date(), deviceId: 'device-1' }, 'grant_bound'],
+    ['disabled', { disabledAt: new Date() }, 'grant_disabled'],
+    ['deleted', { deletedAt: new Date() }, 'grant_deleted'],
+    ['expired', { expiresAt: new Date(Date.now() - 1) }, 'grant_expired']
+  ])('refuses regeneration for a %s grant', async (_, options, expectedCode) => {
+    const { links, calls } = makeHarness(options)
+
+    await expect(links.regenerate('org-1', 'actor-1', 'grant-1', { expiresAt: null }))
+      .rejects.toSatisfy(error => error instanceof BadRequestException && code(error).code === expectedCode)
+    expect(calls.linkCreate).toHaveLength(0)
+  })
+
+  it('uses the independent seven-day default and rejects a past URL expiry', async () => {
+    const { links } = makeHarness()
+    const before = Date.now()
+
+    const result = await links.regenerate('org-1', 'actor-1', 'grant-1', {})
+    await expect(links.regenerate('org-1', 'actor-1', 'grant-1', { expiresAt: new Date(Date.now() - 1).toISOString() }))
+      .rejects.toBeInstanceOf(BadRequestException)
+
+    expect(result.currentLink.expiresAt!.getTime()).toBeGreaterThanOrEqual(before + 7 * 24 * 60 * 60_000 - 50)
+  })
+
+  it('serializes concurrent regenerations so exactly one current link remains', async () => {
+    const { links, state, calls } = makeHarness()
+
+    const results = await Promise.all([
+      links.regenerate('org-1', 'actor-1', 'grant-1', { expiresAt: null }),
+      links.regenerate('org-1', 'actor-2', 'grant-1', { expiresAt: null })
+    ])
+
+    expect(results[0].connectionUrl).not.toBe(results[1].connectionUrl)
+    expect(state.links.filter(link => !link.revokedAt && !link.consumedAt)).toHaveLength(1)
+    expect(calls.rowLocks).toEqual([['grant-1'], ['grant-1', 'org-1'], ['grant-1'], ['grant-1', 'org-1']])
+  })
+
+  it('rechecks a no-current-link attempt after the grant lock and retries from the link lock', async () => {
+    const { links, state, calls } = makeHarness({ noCurrentLink: true })
+
+    const results = await Promise.all([
+      links.regenerate('org-1', 'actor-1', 'grant-1', { expiresAt: null }),
+      links.regenerate('org-1', 'actor-2', 'grant-1', { expiresAt: null })
+    ])
+
+    expect(results[0].connectionUrl).not.toBe(results[1].connectionUrl)
+    expect(state.links.filter(link => !link.revokedAt && !link.consumedAt)).toHaveLength(1)
+    expect(calls.rowLockTables).toEqual(['device_grant_links', 'device_grant_links', 'device_grants', 'device_grants', 'device_grant_links', 'device_grants'])
+  })
+
+  it('rejects an explicit expiry that elapses while waiting for the grant lock', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-27T00:00:00.000Z'))
+    const { links, state, calls, waitForFirstLock, releaseFirstLock } = makeHarness({ pauseFirstLock: true })
+
+    const first = links.regenerate('org-1', 'actor-1', 'grant-1', {})
+    await waitForFirstLock()
+    const second = links.regenerate('org-1', 'actor-2', 'grant-1', { expiresAt: new Date(Date.now() + 1_000).toISOString() })
+    await vi.advanceTimersByTimeAsync(2_000)
+    releaseFirstLock()
+    await first
+
+    await expect(second).rejects.toBeInstanceOf(BadRequestException)
+    expect(calls.linkUpdates).toHaveLength(1)
+    expect(calls.linkCreate).toHaveLength(1)
+    expect(state.links.filter(link => !link.revokedAt && !link.consumedAt)).toHaveLength(1)
+  })
+
+  it('keeps secrets, hashes, ciphertext, and URLs out of link audits', async () => {
+    const { links, state, previousUrl } = makeHarness()
+
+    await links.viewCurrent('org-1', 'actor-1', 'grant-1')
+    await links.regenerate('org-1', 'actor-1', 'grant-1', { expiresAt: null })
+
+    const auditText = JSON.stringify(state.audits)
+    expect(auditText).not.toContain(previousUrl)
+    expect(auditText).not.toContain(state.links[0].secretHash)
+    expect(auditText).not.toContain(state.links[1].secretHash)
+    expect(auditText).not.toContain(JSON.stringify(state.links[1].secretEncrypted))
+  })
+})
