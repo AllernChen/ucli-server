@@ -194,6 +194,8 @@ http://<server>/connect#link=<secret>
 7. 标记链接 `consumedAt` 并清空 `secretEncrypted`；
 8. 签发设备访问令牌并提交事务。
 
+若首次 Redeem 已提交但响应丢失，客户端可以在现有 10 分钟幂等窗口内使用同一链接凭证和同一 `installationId` 重试。服务端不得创建第二台设备，只轮换该设备的刷新令牌并重新返回凭证。超过窗口、安装 ID 不同或设备状态不一致时返回 `link_consumed`。链接密文在首次成功绑定后仍立即清除；幂等重试只依赖保留的链接哈希。
+
 稳定错误至少包括：
 
 - `invalid_link`
@@ -276,6 +278,7 @@ http://<server>/connect#link=<secret>
 - 有效期：授权与 URL 的永久、预设、自定义和交叉过期组合。
 - 轮换：查看返回同一 URL；重新生成返回新 URL；旧 URL 立即返回 `link_revoked`。
 - 并发：并发重新生成只保留一个当前链接；并发 Redeem 只有一个设备绑定成功。
+- 幂等重试：首次 Redeem 响应丢失后，同一安装 ID 在 10 分钟内可重新获得凭证；其他安装 ID 和超时重试返回 `link_consumed`。
 - 管理 API：组织隔离、角色权限、`Cache-Control: no-store` 和稳定错误。
 - 管理端：真实点击创建、查看、复制、重新生成；禁用原因可见；错误有反馈；DOM、地址栏和诊断路径不泄露凭证。
 - 协议契约：`#link=`、Preview/Redeem JSON、稳定错误和客户端升级文档一致。
