@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - 服务端固定为公司内网单实例 `http://10.44.100.100`，本次允许 HTTP；不得把该信任扩展到公网、其他 IP 或重定向来源。
-- 服务端基线固定为提交 `a65361df27d9566903a25120d16338f644d60608`，已部署 runtime 镜像固定为 `sha256:d351803a621daa5aa5ef77aab47d18b75402b8fa1e0b1b7405869a9b94cd405e`。
+- 服务端基线固定为提交 `28bdc40fa3c541f7a68d446a1ac599da1b9a5d7d`，已部署 runtime 镜像固定为 `sha256:ef15c26f8d8007a49394831ebdd13744ecbc370d1e9c459fb782259c4e51fae1`。
 - 客户端目标版本固定为 `0.12.0`；UCLI 未注册服务端时必须继续独立可用，本方案不改变该行为。
 - 协议固定为 Device Grant Link v1，不保留旧注册流程兼容。
 - 一个设备授权只能绑定一个设备；一个用户可以拥有多个设备和多个设备授权。
@@ -19,10 +19,10 @@
 - URL 只允许首次绑定使用一次。首次 Redeem 后，仅同一 installationId 可在十分钟窗口内进行协议内幂等 Redeem；不同 installationId 不得复用已消费 URL。
 - `test/server-integration-smoke.test.mjs` 每次启动都创建新的临时数据库和 installationId。因此一旦一次 smoke 已完成 Redeem，任何跨进程重跑都必须创建新的设备授权，不能复用已绑定授权或已消费 URL。
 - Preview、Redeem、Refresh 的成功和错误 JSON 响应都必须带 `Cache-Control: no-store`；客户端继续 fail closed，不放宽校验。
-- 服务端当前有 4 个可用公共模型，但没有已发布 Skill。完整 smoke 前必须发布本方案定义的联调 Skill。
+- 服务端当前有 3 个可下发公共模型；缺少官方上下文长度依据的 `deepseek-v4-flash-vision-exp` 保持 `contextSize = NULL` 并由 Bootstrap 隔离。联调 Skill `ucli-live-integration-smoke-20260828@0.1.0` 已发布。
 - 联调 Skill 只用于 catalog、ZIP 下载和 SHA-256 边界验证；smoke 不把它安装到用户真实 Skill 目录，也不执行其内容。
 - 完整 URL、URL fragment、link secret、access token、refresh token、本地代理 bearer、Authorization header、Cookie、登录密码和成功响应正文不得进入终端命令历史、日志、截图、工单、聊天群、提交或验收文档。
-- 本方案生成阶段不创建 Skill、不创建授权、不访问管理员凭证、不修改生产数据。执行阶段的生产变更限于发布一个联调 Skill、创建一个新授权，以及联调结束后的撤销和禁用。
+- 本方案执行产生的生产变更限于发布一个联调 Skill、按测试轮次创建设备授权、部署 Bootstrap 模型目录修复、写入 3 个已核实的上下文长度，以及联调结束后的撤销和禁用；不得为实验视觉模型填写推测值。
 
 ---
 
@@ -32,14 +32,21 @@
 
 | 检查项 | 当前证据 |
 | --- | --- |
-| 服务端提交 | `a65361d` 已推送到 `origin/codex/device-grant-link-implementation` |
-| 服务端部署 | API 与 Gateway healthy；`/healthz`、`/gateway/healthz`、`/connect` 均返回 HTTP 200 |
+| 服务端提交 | `28bdc40` 已推送到 `origin/codex/device-grant-link-implementation` |
+| 服务端部署 | runtime `sha256:ef15c26f8d80`、web `sha256:4c81608a6a49`；API 与 Gateway healthy，`/healthz` 与 `/gateway/healthz` 均返回 HTTP 200 |
 | Refresh 线上合同 | 无效占位 token 返回 HTTP 401、JSON、`Cache-Control: no-store`、稳定码 `invalid_grant` |
-| 服务端回归 | 目标授权测试 64/64 通过；全量测试 555 通过，1 个环境 Nginx 测试跳过 |
+| 服务端回归 | `npm run verify` 通过：84 个测试文件、557 个测试全部通过，覆盖率 94.19%；服务端与管理端构建、许可证门均通过 |
 | 客户端离线合同 | `server-contract-fixtures`、`server-device-grant-client`、`server-connection-manager`、`server-skills-catalog` 共 45/45 通过 |
-| 上一轮真实 smoke | Preview、首次 Redeem、同 installationId 幂等 Redeem 通过；当时因 Refresh 缺少 `no-store` 被阻断，该服务端缺口现已修复并部署 |
-| 上一轮授权 | 已绑定上一轮 smoke 设备，不能用于本次重跑 |
-| 联调数据 | 公共模型可用；Skill catalog 为空，尚不能完成 Skills 下载验证 |
+| 上一轮真实 smoke | 客户端提交 `bbdd795`：45/45 本地合同、Preview、首次与幂等 Redeem、强制 Refresh 通过；Bootstrap 因生产模型 `contextSize = NULL` 被严格客户端合同阻断，模型与 Skills 阶段未执行 |
+| 上一轮授权 | 已绑定上一轮 smoke 设备，不能跨进程复用；平台已有另一个保持 `AVAILABLE`、未绑定的 1 天 URL 授权用于修复后重跑 |
+| 联调数据 | 生产运行时 Bootstrap 探针返回 3 个模型、无无效 `contextSize`；联调 Skill 已发布，具备继续模型与 Skills 验证的前提 |
+
+### Bootstrap 阻断修复证据
+
+- 服务端发布检查新增 `MODEL_CONTEXT_SIZE_REQUIRED`，上下文长度缺失或非正整数的公共模型不能再发布。
+- Bootstrap 查询只下发 `contextSize > 0` 的已发布模型，不为历史 `NULL` 值提供客户端兼容默认值。
+- 生产数据仅更新有可靠依据的 3 个模型：`deepseek-v4-flash = 1048576`、`deepseek-v4-pro = 1048576`、`qwen3.8-27b = 32768`；实验视觉模型继续隔离。
+- 部署后在 API 容器内调用实际 `ClientController.bootstrap()`，结果为 `modelCount = 3`、`invalidModelCount = 0`。
 
 ## File Structure
 
@@ -84,13 +91,13 @@
 Run:
 
 ```powershell
-git merge-base --is-ancestor a65361df27d9566903a25120d16338f644d60608 HEAD
+git merge-base --is-ancestor 28bdc40fa3c541f7a68d446a1ac599da1b9a5d7d HEAD
 git rev-parse HEAD
 git status --short
 git diff -- apps/api/src/auth.controller.ts
 ```
 
-Expected: 第一条命令退出码为 0，证明当前 HEAD 包含服务端基线 `a65361df27d9566903a25120d16338f644d60608`；HEAD 可以额外包含本方案文档提交。`auth.controller.ts` 无未提交差异；其他非重叠用户文件即使存在也不得还原或覆盖。
+Expected: 第一条命令退出码为 0，证明当前 HEAD 包含服务端基线 `28bdc40fa3c541f7a68d446a1ac599da1b9a5d7d`；HEAD 可以额外包含本方案文档提交。`auth.controller.ts` 无未提交差异；其他非重叠用户文件即使存在也不得还原或覆盖。
 
 - [x] **Step 2: 运行不带真实凭证的线上健康与 Refresh 探针**
 
@@ -125,7 +132,7 @@ Expected: 最后一行只输出 `Production preflight: PASS`；任何断言失�
 
 ```bash
 cd /data/ucli-server
-test "$(docker inspect ucli-server-api --format '{{.Image}}')" = "sha256:d351803a621daa5aa5ef77aab47d18b75402b8fa1e0b1b7405869a9b94cd405e"
+test "$(docker inspect ucli-server-api --format '{{.Image}}')" = "sha256:ef15c26f8d8007a49394831ebdd13744ecbc370d1e9c459fb782259c4e51fae1"
 docker-compose -f conf/docker-compose.yml -p ucli-server ps
 ```
 
@@ -270,7 +277,7 @@ Expected: 完整 URL 形如 `http://10.44.100.100/connect#link=...`，无 query 
 - Consumes: Task 3 的未消费完整连接 URL。
 - Produces: Preview、首次 Redeem、同 installationId 幂等 Redeem、强制 Refresh、Bootstrap、模型列表、最小流式模型调用、Skill catalog、ZIP 下载和 SHA-256 验证的单次结果。
 
-- [ ] **Step 1: 在不读取连接 URL 的情况下运行客户端本地硬门**
+- [x] **Step 1: 在不读取连接 URL 的情况下运行客户端本地硬门**
 
 在 `F:\projects\ucli` 运行：
 
@@ -284,7 +291,7 @@ node --test --test-concurrency=1 `
 
 Expected: `tests 45`、`pass 45`、`fail 0`、`skipped 0`。`MODULE_TYPELESS_PACKAGE_JSON` 仅为已知性能 warning，不是联调阻断；任何测试失败都停止，不读取或消费连接 URL。
 
-- [ ] **Step 2: 检查客户端工作树并记录当前提交**
+- [x] **Step 2: 检查客户端工作树并记录当前提交**
 
 Run:
 
@@ -408,19 +415,19 @@ Expected: `sensitive-term count: 0` 且命令退出码为 0。若错误数非零
 将 `docs/release-acceptance.md` 的“真实内网冒烟”行替换为：
 
 ```markdown
-| 真实内网冒烟 | 通过（2026-08-28，Asia/Shanghai）：在服务端提交 `a65361d` / runtime 镜像 `sha256:d351803a621d` 上，Preview、首次 Redeem、同 installationId 幂等 Redeem、强制 Refresh、Bootstrap、模型列表、最小模型流、Skills catalog、ZIP 下载和 SHA-256 校验全部通过；测试未安装或执行服务端 Skill，临时数据库、凭证环境变量和 smoke 目录已清理。 |
+| 真实内网冒烟 | 通过（2026-08-28，Asia/Shanghai）：在服务端提交 `28bdc40` / runtime 镜像 `sha256:ef15c26f8d80` 上，Preview、首次 Redeem、同 installationId 幂等 Redeem、强制 Refresh、Bootstrap、模型列表、最小模型流、Skills catalog、ZIP 下载和 SHA-256 校验全部通过；测试未安装或执行服务端 Skill，临时数据库、凭证环境变量和 smoke 目录已清理。 |
 ```
 
 将 `docs/ucli-client-protocol.md` 末尾的旧阻断段落替换为：
 
 ```markdown
-2026-08-28 的真实内网 smoke 已在服务端提交 `a65361d` 上完整通过。Preview、首次 Redeem、同 installationId 幂等 Redeem、强制 Refresh、Bootstrap、模型列表、最小模型流、Skills catalog、ZIP 下载和 SHA-256 校验均实际执行；Refresh 的成功响应满足 `Cache-Control: no-store`。测试没有安装或执行下载的 Skill，临时数据库、环境变量和 staging 文件已清理，验收记录不包含连接 URL 或任何 token。
+2026-08-28 的真实内网 smoke 已在服务端提交 `28bdc40` 上完整通过。Preview、首次 Redeem、同 installationId 幂等 Redeem、强制 Refresh、Bootstrap、模型列表、最小模型流、Skills catalog、ZIP 下载和 SHA-256 校验均实际执行；Refresh 的成功响应满足 `Cache-Control: no-store`。测试没有安装或执行下载的 Skill，临时数据库、环境变量和 staging 文件已清理，验收记录不包含连接 URL 或任何 token。
 ```
 
 将 `docs/ucli-client-registration-upgrade.md` 末尾的旧阻断说明替换为：
 
 ```markdown
-2026-08-28，UCLI Client 0.12.0 已使用新的单次设备授权完成目标内网真实联调：Preview、首次 Redeem、同 installationId 幂等 Redeem、Refresh、Bootstrap、模型列表、最小模型流和 Skills 下载哈希检查全部通过。服务端基线为提交 `a65361d`；下载的联调 Skill 只经过隔离验证，没有安装到真实用户目录或执行。UCLI 未注册服务端时的独立使用能力保持不变。
+2026-08-28，UCLI Client 0.12.0 已使用新的单次设备授权完成目标内网真实联调：Preview、首次 Redeem、同 installationId 幂等 Redeem、Refresh、Bootstrap、模型列表、最小模型流和 Skills 下载哈希检查全部通过。服务端基线为提交 `28bdc40`；下载的联调 Skill 只经过隔离验证，没有安装到真实用户目录或执行。UCLI 未注册服务端时的独立使用能力保持不变。
 ```
 
 - [ ] **Step 4: 运行客户端文档与发布门**
@@ -538,7 +545,7 @@ Expected: 只删除两个固定 `%TEMP%` 目标并输出 `Integration window cle
 ```text
 timestamp: ISO-8601 with timezone
 clientCommit: short SHA
-serverCommitOrImage: a65361d or sha256:d351803a621d
+serverCommitOrImage: 28bdc40 or sha256:ef15c26f8d80
 grantHint: server-displayed secretHint only
 stage: preflight | skill-publish | preview | redeem | idempotent-redeem | refresh | bootstrap | models | model-stream | skills-catalog | skill-download | cleanup
 httpStatus: number or not-received
