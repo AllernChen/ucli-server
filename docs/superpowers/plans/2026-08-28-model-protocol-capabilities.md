@@ -817,12 +817,12 @@ Deployment and live smoke begin only after Task 6 is complete. They are intentio
 
 ## Implementation Evidence
 
-- Source SHA: `86cf768`
+- Source SHA: `a6994f2`
 - Focused regression: 9 test files passed; 83/83 tests passed; 0 failures and 0 skips.
-- Full repository suite: 85 test files passed and 1 skipped (86 total); 572 tests passed and 1 skipped (573 total).
-- Coverage (all files): 94.29% statements, 86.79% branches, 91.66% functions, 94.29% lines.
+- Full repository suite: 86/86 test files passed; 573/573 tests passed; 0 failures and 0 skips.
+- Coverage (all files): 94.29% statements, 86.77% branches, 91.66% functions, 94.29% lines.
 - Release artifacts: TypeScript typecheck passed; server build passed; admin production build passed (690 modules transformed); license gate passed for 455 package records.
-- The historical archive line-ending test timeout remains non-reproducible; this fresh `npm run verify` passed that test in 3961ms without a timeout or source workaround.
+- Archive timing budget: this fresh `npm run verify` passed the historical archive line-ending test in 5322ms under its explicit per-test 15_000ms timeout; no global timeout or source workaround was applied.
 - Database migration: none
 - Client implementation: NOT PERFORMED in this repository; handoff document generated
 - Production Responses route: NOT CONFIGURED by code; administrator action required before live smoke
