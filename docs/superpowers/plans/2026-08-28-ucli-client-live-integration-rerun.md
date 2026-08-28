@@ -125,8 +125,8 @@ Expected: 最后一行只输出 `Production preflight: PASS`；任何断言失�
 
 ```bash
 cd /data/ucli-server
-test "$(docker inspect ucli-prod-api-1 --format '{{.Image}}')" = "sha256:d351803a621daa5aa5ef77aab47d18b75402b8fa1e0b1b7405869a9b94cd405e"
-docker compose -p ucli-prod ps
+test "$(docker inspect ucli-server-api --format '{{.Image}}')" = "sha256:d351803a621daa5aa5ef77aab47d18b75402b8fa1e0b1b7405869a9b94cd405e"
+docker-compose -f conf/docker-compose.yml -p ucli-server ps
 ```
 
 Expected: 第一条检查退出码为 0；API 和 Gateway 显示 healthy，Worker 和 Web 显示 running。
@@ -395,8 +395,8 @@ Expected:
 
 ```bash
 cd /data/ucli-server
-log_errors="$(docker compose -p ucli-prod logs --since 30m api gateway worker 2>&1 | grep -Eic 'error|fatal|panic' || true)"
-secret_hits="$(docker compose -p ucli-prod logs --since 30m api gateway worker 2>&1 | grep -Eic 'refreshToken|accessToken|Authorization|Bearer|#link=' || true)"
+log_errors="$(docker-compose -f conf/docker-compose.yml -p ucli-server logs --since 30m api gateway worker 2>&1 | grep -Eic 'error|fatal|panic' || true)"
+secret_hits="$(docker-compose -f conf/docker-compose.yml -p ucli-server logs --since 30m api gateway worker 2>&1 | grep -Eic 'refreshToken|accessToken|Authorization|Bearer|#link=' || true)"
 printf 'error/fatal/panic count: %s\nsensitive-term count: %s\n' "$log_errors" "$secret_hits"
 test "$secret_hits" -eq 0
 ```
