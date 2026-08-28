@@ -32,14 +32,15 @@ export interface RelayResult {
   }>
 }
 
-export async function relayRequest({ candidates, body, incomingHeaders, fetcher = fetch, signal }: {
+export async function relayRequest({ candidates, body, incomingHeaders, fetcher = fetch, signal, requestId }: {
   candidates: RelayCandidate[]
   body: Record<string, unknown>
   incomingHeaders?: Record<string, string | undefined>
   fetcher?: typeof fetch
   signal?: AbortSignal
+  requestId?: string
 }): Promise<RelayResult> {
-  const requestId = randomUUID()
+  const resolvedRequestId = requestId ?? randomUUID()
   const attempts: RelayResult['attempts'] = []
   for (const candidate of candidates) {
     for (let retry = 0; retry <= Math.max(0, candidate.maxRetries); retry += 1) {
@@ -54,7 +55,7 @@ export async function relayRequest({ candidates, body, incomingHeaders, fetcher 
         controller.abort()
       }, candidate.timeoutMs)
       try {
-      const headers: Record<string, string> = { 'content-type': 'application/json', 'x-ucli-request-id': requestId }
+      const headers: Record<string, string> = { 'content-type': 'application/json', 'x-ucli-request-id': resolvedRequestId }
       let url: string
       let outgoingBody: Record<string, unknown>
       if (candidate.protocol === 'gemini') {
@@ -85,13 +86,13 @@ export async function relayRequest({ candidates, body, incomingHeaders, fetcher 
           const upstream = Readable.fromWeb(response.body as any)
           const translator = new GeminiStreamTranslator(candidate.upstreamModel)
           const webStream = Readable.toWeb(upstream.pipe(translator)) as unknown as ReadableStream
-          return { requestId, response: new Response(webStream, { status: response.status, headers: { 'content-type': 'text/event-stream' } }), usage: normalizeUsage(undefined), candidate, attempts }
+          return { requestId: resolvedRequestId, response: new Response(webStream, { status: response.status, headers: { 'content-type': 'text/event-stream' } }), usage: normalizeUsage(undefined), candidate, attempts }
         }
         const raw = await response.text()
         let translated = geminiResponseToOpenAI(null, candidate.upstreamModel)
         try { translated = geminiResponseToOpenAI(JSON.parse(raw), candidate.upstreamModel) } catch { /* 空/异常响应回退为空消息 */ }
         const usage = normalizeUsage((translated as any).usage)
-        return { requestId, response: new Response(JSON.stringify(translated), { status: response.status, headers: { 'content-type': 'application/json' } }), usage, candidate, attempts }
+        return { requestId: resolvedRequestId, response: new Response(JSON.stringify(translated), { status: response.status, headers: { 'content-type': 'application/json' } }), usage, candidate, attempts }
       }
       let usage = normalizeUsage(undefined)
       if (!body.stream && response.ok) {
@@ -106,7 +107,7 @@ export async function relayRequest({ candidates, body, incomingHeaders, fetcher 
           }
         }
       }
-      return { requestId, response, usage, candidate, attempts }
+      return { requestId: resolvedRequestId, response, usage, candidate, attempts }
       } catch (error) {
         const errorCode = timedOut || (error as { name?: string })?.name === 'AbortError'
           ? 'UPSTREAM_TIMEOUT'
@@ -118,5 +119,5 @@ export async function relayRequest({ candidates, body, incomingHeaders, fetcher 
       } finally { clearTimeout(timeout); signal?.removeEventListener('abort', cancel) }
     }
   }
-  throw Object.assign(new Error('No upstream channel succeeded'), { code: 'UPSTREAM_UNAVAILABLE', requestId, attempts })
+  throw Object.assign(new Error('No upstream channel succeeded'), { code: 'UPSTREAM_UNAVAILABLE', requestId: resolvedRequestId, attempts })
 }

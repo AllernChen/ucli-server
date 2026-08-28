@@ -7,6 +7,7 @@ function readText(path: string) {
 
 const protocol = readText('docs/ucli-client-protocol.md')
 const clientUpgrade = readText('docs/ucli-client-registration-upgrade.md')
+const modelProtocolUpgrade = readText('docs/ucli-client-model-protocol-upgrade.md')
 const design = readText('docs/superpowers/specs/2026-08-26-device-grant-registration-design.md')
 const plan = readText('docs/superpowers/plans/2026-08-26-device-grant-registration.md')
 const readme = readText('README.md')
@@ -34,19 +35,30 @@ function fencedBlock(source: string, heading: string, language: string): string 
   return source.slice(bodyStart, end)
 }
 
+function sectionFencedBlock(source: string, heading: string, language: string): string {
+  const marker = `## ${heading}\n\n\`\`\`${language}\n`
+  const start = source.indexOf(marker)
+  expect(start, `Missing ${language} section contract: ${heading}`).toBeGreaterThanOrEqual(0)
+  const bodyStart = start + marker.length
+  const end = source.indexOf('\n```', bodyStart)
+  expect(end, `Unclosed ${language} section contract: ${heading}`).toBeGreaterThan(bodyStart)
+  return source.slice(bodyStart, end)
+}
+
 function sqlWithoutComments(source: string) {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/--[^\n]*/g, '').replace(/\s+/g, ' ').trim()
 }
 
 describe('device grant release contract', () => {
   it('uses the exact link fragment browser handoff and registration routes without legacy fields', () => {
-    expect(protocol).toContain('http://10.0.0.8:3000/connect#link=one-time-link-secret')
-    expect(protocol).toContain('ucli://connect?server=http%3A%2F%2F10.0.0.8%3A3000#link=<secret>')
+    expect(protocol).toContain('http://10.44.100.100/connect#link=one-time-link-secret')
+    expect(protocol).toContain('ucli://connect?server=http%3A%2F%2F10.44.100.100#link=<secret>')
     expect(protocol).not.toContain('#token=')
     expect(protocol).not.toContain('connect?link=')
     expect(fencedBlock(protocol, 'Preview HTTP', 'http')).toBe('POST /api/v1/auth/device-grants/preview\nContent-Type: application/json')
     expect(fencedBlock(protocol, 'Redeem HTTP', 'http')).toBe('POST /api/v1/auth/device-grants/redeem\nContent-Type: application/json')
     expect(fencedBlock(protocol, 'Refresh HTTP', 'http')).toBe('POST /api/v1/auth/token/refresh\nContent-Type: application/json')
+    expect(fencedBlock(protocol, 'Refresh 响应头', 'http')).toBe('Cache-Control: no-store')
     expect(fencedBlock(protocol, 'Bootstrap HTTP', 'http')).toBe('GET /api/v1/client/bootstrap\nAuthorization: Bearer <accessToken>')
     expect(protocol).not.toMatch(/(?:GET|POST) \/api\/v1\/auth\/device\/(?:code|token|approve)/)
     expect(protocol).not.toContain('/api/v1/auth/invitations/accept')
@@ -54,7 +66,7 @@ describe('device grant release contract', () => {
 
   it('publishes parseable preview, redeem, refresh, and bootstrap JSON contracts', () => {
     expect(jsonBlock('创建响应')).toEqual({
-      id: 'grant-uuid', connectionUrl: 'http://10.0.0.8:3000/connect#link=one-time-link-secret', expiresAt: null
+      id: 'grant-uuid', connectionUrl: 'http://10.44.100.100/connect#link=one-time-link-secret', expiresAt: null
     })
     expect(jsonBlock('Preview 请求')).toEqual({ link: '<secret>' })
     expect(jsonBlock('Preview 响应')).toEqual({
@@ -80,9 +92,9 @@ describe('device grant release contract', () => {
     })
     expect(jsonBlock('Bootstrap 响应')).toEqual({
       organization: { id: 'organization-uuid', name: '组织名称', timezone: 'Asia/Shanghai' },
-      gateway: { baseUrl: 'http://10.0.0.8:3001' },
-      models: [{ id: 'example-model', displayName: '示例模型', contextSize: 128000 }],
-      skillsCatalogUrl: 'http://10.0.0.8:3000/api/v1/skills/catalog',
+      gateway: { baseUrl: 'http://10.44.100.100/gateway' },
+      models: [{ id: 'example-model', displayName: '示例模型', contextSize: 128000, protocols: ['openai_responses'] }],
+      skillsCatalogUrl: 'http://10.44.100.100/api/v1/skills/catalog',
       authorization: { expiresAt: null, serverTime: '2026-08-27T04:00:00.000Z' }
     })
   })
@@ -149,6 +161,59 @@ describe('device grant release contract', () => {
     expect(deploy).toContain('事务整体回滚')
     expect(deploy).toContain('数据库备份和上一版应用镜像')
     expect(changelog).toContain('旧邀请、设备码和旧设备 refresh token 全部失效')
+  })
+
+  it('publishes model capabilities, gateway catalog extensions, and stable route failures', () => {
+    expect(jsonBlock('Gateway 模型列表响应')).toEqual({
+      object: 'list',
+      data: [{
+        id: 'example-model', object: 'model', owned_by: 'ucli', display_name: '示例模型',
+        context_size: 128000, protocols: ['openai_responses']
+      }]
+    })
+    expect(jsonBlock('Gateway 路由错误响应')).toEqual({
+      statusCode: 503,
+      code: 'model_protocol_unavailable',
+      message: 'The model does not support the requested protocol',
+      requestId: 'request-uuid',
+      retryable: false
+    })
+
+    for (const text of [
+      'openai_responses', 'openai_chat', 'anthropic_messages',
+      'model_protocol_unavailable', 'model_channel_unavailable', 'upstream_unavailable',
+      'X-UCLI-Request-ID', 'Cache-Control: no-store', 'models[0]'
+    ]) {
+      expect(protocol).toContain(text)
+      expect(modelProtocolUpgrade).toContain(text)
+    }
+
+    expect(protocol).toContain('`GEMINI` 是服务端内部上游/转换协议，仅贡献 `openai_chat`')
+    expect(modelProtocolUpgrade).toContain('`GEMINI` 是服务端内部上游/转换协议，仅贡献 `openai_chat`')
+    expect(protocol).not.toContain('`gemini` 能力选择')
+    expect(modelProtocolUpgrade).not.toContain('`gemini` 能力选择')
+
+    expect(sectionFencedBlock(modelProtocolUpgrade, '回传格式', 'yaml')).toBe(`timestamp: null
+clientVersion: null
+clientCommit: null
+serverCommit: null
+serverRuntimeImage: null
+localContractGate: null
+selectedModelId: "not-selected"
+selectedProtocol: "not-selected"
+failedStage: null
+httpStatus: "not-received"
+contentType: "not-received"
+cacheControl: "not-received"
+stableCode: "not-received"
+requestId: "not-received"
+retryable: null
+streamReceivedNonEmptyData: false
+authorizationExpiresAt: "not-recorded"
+serverTimePresent: false
+skillsCatalog: "NOT_RUN"
+skillDownloadHash: "NOT_RUN"
+cleanup: "NOT_RUN"`)
   })
 
   it('documents independent link operations and recovery boundaries', () => {

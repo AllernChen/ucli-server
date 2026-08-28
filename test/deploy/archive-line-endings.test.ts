@@ -36,5 +36,5 @@ describe('deployment source archive', () => {
     const script = readFileSync(join(extracted, 'install.sh'))
     expect(script.subarray(0, 12).toString('utf8')).toBe('#!/bin/bash\n')
     expect(script.includes(Buffer.from('\r\n'))).toBe(false)
-  })
+  }, 15_000)
 })

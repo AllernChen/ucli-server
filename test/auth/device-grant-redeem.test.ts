@@ -233,4 +233,19 @@ describe('public device-grant routes', () => {
     expect(grants.preview).toHaveBeenLastCalledWith(undefined)
     for (const handler of [controller.preview, controller.redeem]) { expect(Reflect.getMetadata(PATH_METADATA, handler)).toMatch(/^device-grants\/(preview|redeem)$/); expect(Reflect.getMetadata(METHOD_METADATA, handler)).toBe(RequestMethod.POST); expect(Reflect.getMetadata(GUARDS_METADATA, handler)).toBeUndefined(); expect(Reflect.getMetadata(HEADERS_METADATA, handler)).toContainEqual({ name: 'Cache-Control', value: 'no-store' }) }
   })
+
+  it('exposes refresh as an unguarded no-store route', async () => {
+    const auth = { refresh: vi.fn(async () => ({})) }
+    const controller = new AuthController(auth as any, {} as any)
+
+    await controller.refresh({ refreshToken: 'opaque-refresh-token' })
+
+    expect(auth.refresh).toHaveBeenCalledWith('opaque-refresh-token')
+    expect(Reflect.getMetadata(PATH_METADATA, controller.refresh)).toBe('token/refresh')
+    expect(Reflect.getMetadata(METHOD_METADATA, controller.refresh)).toBe(RequestMethod.POST)
+    expect(Reflect.getMetadata(GUARDS_METADATA, controller.refresh)).toBeUndefined()
+    expect(Reflect.getMetadata(HEADERS_METADATA, controller.refresh)).toEqual([
+      { name: 'Cache-Control', value: 'no-store' }
+    ])
+  })
 })

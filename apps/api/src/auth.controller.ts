@@ -16,7 +16,8 @@ export class AuthController {
   preview(@Body() body: PreviewDeviceGrantDto) { return this.grants.preview(body.link) }
   @Header('Cache-Control', 'no-store') @Post('device-grants/redeem')
   redeem(@Body() body: RedeemDeviceGrantDto) { return this.grants.redeem(body) }
-  @Post('token/refresh') refresh(@Body() body: any) { return this.auth.refresh(String(body.refreshToken || '')) }
+  @Header('Cache-Control', 'no-store') @Post('token/refresh')
+  refresh(@Body() body: any) { return this.auth.refresh(String(body.refreshToken || '')) }
   @ApiBearerAuth() @UseGuards(AuthGuard) @Post('password')
   changePassword(@Body() body: any, @Req() request: any) {
     return this.auth.changePassword(request.principal.sub, {

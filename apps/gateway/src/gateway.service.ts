@@ -1,4 +1,4 @@
-import { HttpException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
+import { HttpException, Injectable, NotFoundException } from '@nestjs/common'
 import type { GatewayProtocol as PrismaProtocol } from '@prisma/client'
 import { Response as ExpressResponse } from 'express'
 import { Readable, Transform } from 'node:stream'
@@ -15,18 +15,12 @@ import { RedisQuotaService } from '../../../packages/quota/src/redis-quota.js'
 import { recordQuotaRejection, recordQuotaSettlement } from '../../../packages/monitoring/src/quota-metrics.js'
 import { StreamUsageCollector } from '../../../packages/gateway-core/src/stream-usage.js'
 import { canAccessModel, type ModelAccessPrincipal } from '../../../packages/gateway-core/src/access-policy.js'
+import { configuredClientProtocols, upstreamProtocolsForClient } from '../../../packages/gateway-core/src/model-capabilities.js'
 import { highestReservationCost, resolveChannelCost, type ResolvedCost, type ScheduledCost } from '../../../packages/gateway-core/src/cost-schedule.js'
+import { gatewayUnavailable, logGatewayFailure, type GatewayUnavailableCode } from './gateway-errors.js'
 
 const PRISMA_PROTOCOL: Record<GatewayProtocol, PrismaProtocol> = {
   openai_responses: 'OPENAI_RESPONSES', openai_chat: 'OPENAI_CHAT', anthropic_messages: 'ANTHROPIC_MESSAGES', gemini: 'GEMINI'
-}
-
-// 客户端协议 → 可服务的上游协议集合（openai_chat 客户端可翻译到 Gemini）。
-const CLIENT_UPSTREAMS: Record<GatewayProtocol, PrismaProtocol[]> = {
-  openai_responses: ['OPENAI_RESPONSES'],
-  openai_chat: ['OPENAI_CHAT', 'GEMINI'],
-  anthropic_messages: ['ANTHROPIC_MESSAGES'],
-  gemini: ['GEMINI']
 }
 
 const PRISMA_TO_PROTOCOL: Record<PrismaProtocol, GatewayProtocol> = {
@@ -38,15 +32,29 @@ export class GatewayService {
   constructor(private readonly prisma: PrismaService, private readonly quota: RedisQuotaService) {}
 
   async models(principal: ModelAccessPrincipal) {
-    const models = await this.prisma.publicModel.findMany({ where: { enabled: true, deletedAt: null },
-      include: { policies: true } })
+    const models = await this.prisma.publicModel.findMany({
+      where: { enabled: true, deletedAt: null, contextSize: { gt: 0 } },
+      include: {
+        policies: true,
+        channelModels: { select: {
+          protocol: true, enabled: true, deletedAt: true,
+          channel: { select: {
+            enabled: true, deletedAt: true,
+            keys: { select: { enabled: true, deletedAt: true } }
+          } }
+        } }
+      }
+    })
     return models.filter(model => canAccessModel(model.policies, principal))
-      .map(({ id, displayName, contextSize }) => ({ id, displayName, contextSize }))
+      .map(({ id, displayName, contextSize, channelModels }) => ({
+        id, displayName, contextSize, protocols: configuredClientProtocols(channelModels)
+      }))
+      .filter(model => model.protocols.length > 0)
   }
 
   private async candidates(publicModelId: string, protocol: GatewayProtocol, at: Date, fallbackPrice?: any): Promise<RelayCandidate[]> {
     const abilities = await this.prisma.channelModel.findMany({ where: {
-      publicModelId, protocol: { in: CLIENT_UPSTREAMS[protocol] }, enabled: true, deletedAt: null,
+      publicModelId, protocol: { in: upstreamProtocolsForClient(protocol) }, enabled: true, deletedAt: null,
       publicModel: { deletedAt: null },
       health: { in: ['HEALTHY', 'DEGRADED'] },
       channel: { enabled: true, deletedAt: null, health: { in: ['HEALTHY', 'DEGRADED'] }, OR: [{ circuitOpenUntil: null }, { circuitOpenUntil: { lt: new Date() } }] }
@@ -110,14 +118,36 @@ export class GatewayService {
     const startedAt = new Date()
     const model = await this.prisma.publicModel.findFirst({ where: { id: publicModelId, enabled: true, deletedAt: null }, include: {
       policies: true,
+      channelModels: { select: {
+        protocol: true, enabled: true, deletedAt: true,
+        channel: { select: {
+          enabled: true, deletedAt: true,
+          keys: { select: { enabled: true, deletedAt: true } }
+        } }
+      } },
       prices: { where: { deletedAt: null, enabled: true, validFrom: { lte: startedAt }, OR: [{ validUntil: null }, { validUntil: { gt: startedAt } }] }, orderBy: { validFrom: 'desc' }, take: 1 }
     } })
     if (!model || !canAccessModel(model.policies, { organizationId: principal.organizationId, accountId: principal.sub, role: principal.role })) {
       throw new NotFoundException('Model is unavailable')
     }
+    const requestId = randomUUID()
+    response.setHeader('x-ucli-request-id', requestId)
+    response.setHeader('cache-control', 'no-store')
+    const logFailure = (code: GatewayUnavailableCode, routeAttempts: number) => logGatewayFailure({
+      requestId, organizationId: principal.organizationId, accountId: principal.sub, deviceId: principal.deviceId,
+      publicModelId, protocol, code, routeAttempts
+    })
+    const configuredProtocols = configuredClientProtocols(model.channelModels)
+    if (!configuredProtocols.includes(protocol)) {
+      logFailure('model_protocol_unavailable', 0)
+      throw gatewayUnavailable('model_protocol_unavailable', requestId)
+    }
     const price = model.prices[0]
     const candidates = await this.candidates(publicModelId, protocol, startedAt, price)
-    if (!candidates.length) throw new ServiceUnavailableException('No healthy model channel')
+    if (!candidates.length) {
+      logFailure('model_channel_unavailable', 0)
+      throw gatewayUnavailable('model_channel_unavailable', requestId)
+    }
     const context = parseUcliContext(headers)
     const policies = await this.prisma.quotaPolicy.findMany({ where: {
       OR: [
@@ -175,7 +205,7 @@ export class GatewayService {
     const anthropicVersion = headers['anthropic-version']
     let result
     try {
-      result = await relayRequest({ candidates, body, incomingHeaders: {
+      result = await relayRequest({ requestId, candidates, body, incomingHeaders: {
         'anthropic-version': Array.isArray(anthropicVersion) ? anthropicVersion[0] : anthropicVersion
       } })
     } catch (error) {
@@ -184,7 +214,7 @@ export class GatewayService {
       const finishedAt = new Date()
       const fallback = candidates[0]!
       await this.prisma.usageLog.create({ data: {
-        requestId: failure.requestId || randomUUID(), organizationId: principal.organizationId,
+        requestId, organizationId: principal.organizationId,
         accountId: principal.sub, deviceId: principal.deviceId, sessionId: context.sessionId,
         projectId: context.projectId, cliType: context.cliType, clientVersion: context.clientVersion,
         timezone: context.timezone, protocol: PRISMA_PROTOCOL[protocol], publicModelId,
@@ -194,7 +224,7 @@ export class GatewayService {
         costSnapshot: { ...fallback.cost }, costUsd: '0',
         startedAt, finishedAt, durationMs: finishedAt.getTime() - startedAt.getTime(),
         usageSource: 'ESTIMATED', streaming: body.stream === true, statusCode: 503,
-        errorCode: failure.code || 'UPSTREAM_UNAVAILABLE', routeAttempts: failure.attempts?.length || 1,
+        errorCode: 'UPSTREAM_UNAVAILABLE', routeAttempts: failure.attempts?.length || 1,
         switched: (failure.attempts?.length || 1) > 1,
         routes: failure.attempts?.length ? { create: failure.attempts.map((attempt: any, index: number) => ({
           channelId: attempt.channelId, channelKeyId: attempt.keyId, attempt: index + 1,
@@ -209,12 +239,13 @@ export class GatewayService {
         .map(channelId => this.prisma.channel.updateMany({ where: { id: channelId, deletedAt: null }, data: {
           health: 'DEGRADED', circuitOpenUntil: new Date(Date.now() + 60_000)
         } })))
-      throw new ServiceUnavailableException(`No upstream channel succeeded (request: ${failure.requestId})`)
+      logFailure('upstream_unavailable', failure.attempts?.length || 1)
+      throw gatewayUnavailable('upstream_unavailable', requestId)
     }
     response.status(result.response.status)
     response.setHeader('x-ucli-request-id', result.requestId)
     result.response.headers.forEach((value, name) => {
-      if (!['content-length', 'content-encoding', 'transfer-encoding', 'connection'].includes(name.toLowerCase())) response.setHeader(name, value)
+      if (!['content-length', 'content-encoding', 'transfer-encoding', 'connection', 'x-ucli-request-id', 'cache-control'].includes(name.toLowerCase())) response.setHeader(name, value)
     })
     let firstTokenMs: number | null = null
     let streamInterrupted = false
