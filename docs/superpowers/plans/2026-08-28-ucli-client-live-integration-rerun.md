@@ -79,7 +79,7 @@
 - Consumes: 已部署的 `http://10.44.100.100` 和无效占位 refresh token。
 - Produces: 健康状态、部署镜像和 Refresh 错误合同的 PASS 证据；不创建或读取任何真实凭证。
 
-- [ ] **Step 1: 在服务端仓库确认基线提交和干净目标文件**
+- [x] **Step 1: 在服务端仓库确认基线提交和干净目标文件**
 
 Run:
 
@@ -92,7 +92,7 @@ git diff -- apps/api/src/auth.controller.ts
 
 Expected: 第一条命令退出码为 0，证明当前 HEAD 包含服务端基线 `a65361df27d9566903a25120d16338f644d60608`；HEAD 可以额外包含本方案文档提交。`auth.controller.ts` 无未提交差异；其他非重叠用户文件即使存在也不得还原或覆盖。
 
-- [ ] **Step 2: 运行不带真实凭证的线上健康与 Refresh 探针**
+- [x] **Step 2: 运行不带真实凭证的线上健康与 Refresh 探针**
 
 Run:
 
@@ -119,7 +119,7 @@ if ($body.code -ne 'invalid_grant') { throw "Refresh expected invalid_grant, got
 
 Expected: 最后一行只输出 `Production preflight: PASS`；任何断言失败都停止本次联调，不创建 Skill 或授权。
 
-- [ ] **Step 3: 在生产主机核对不可变 API 镜像**
+- [x] **Step 3: 在生产主机核对不可变 API 镜像**
 
 在 `10.44.100.100` 的 `/data/ucli-server` 运行：
 
@@ -149,7 +149,7 @@ Expected: 第一条检查退出码为 0；API 和 Gateway 显示 healthy，Worke
 - Consumes: Task 1 的全部 PASS 证据和现有 Skill ZIP 扫描规则。
 - Produces: slug 为 `ucli-live-integration-smoke-20260828`、版本为 `0.1.0`、状态为 `PUBLISHED` 的临时联调 Skill。
 
-- [ ] **Step 1: 在管理员工作站生成内容固定的最小 ZIP**
+- [x] **Step 1: 在管理员工作站生成内容固定的最小 ZIP**
 
 Run:
 
@@ -185,7 +185,7 @@ if ($size -le 0 -or $size -gt 20MB) { throw "Skill ZIP size is invalid: $size" }
 
 Expected: ZIP 只包含根目录 `SKILL.md`，大小小于 20 MiB，并输出本地 SHA-256；归档中没有脚本、可执行文件或凭证。
 
-- [ ] **Step 2: 通过管理端创建 Skill 元数据**
+- [x] **Step 2: 通过管理端创建 Skill 元数据**
 
 在 `http://10.44.100.100` 使用 `PLATFORM_ADMIN` 登录，打开“技能超市”，创建：
 
@@ -197,7 +197,7 @@ slug: ucli-live-integration-smoke-20260828
 
 Expected: 技能列表出现该 slug，版本区域显示“无”。如果该 slug 已存在，只允许在确认它正是本方案上一次未清理的记录后继续，禁止创建拼写不同的重复 Skill。
 
-- [ ] **Step 3: 上传并发布固定版本**
+- [x] **Step 3: 上传并发布固定版本**
 
 在该 Skill 的“上传新版本”区域输入版本 `0.1.0`，选择 `%TEMP%\ucli-live-integration-smoke-20260828.zip`，依次点击“上传”和“发布”。
 
@@ -220,7 +220,7 @@ Expected: 版本显示 `v0.1.0 · PUBLISHED`。上传扫描或发布失败时停
 - Consumes: Task 2 的 `PUBLISHED` Skill、现有至少一个已发布模型，以及上一轮 smoke 用户的 ACTIVE 组织成员关系和可创建授权的管理员角色。
 - Produces: 一个状态为 `AVAILABLE` 的新设备授权和一个 1 天内有效、未消费的连接 URL。
 
-- [ ] **Step 1: 在管理端确认联调用户和资源前置条件**
+- [x] **Step 1: 在管理端确认联调用户和资源前置条件**
 
 打开“用户管理”，找到上一轮 smoke 用户并进入详情；同时检查“模型管理”和“技能超市”。
 
@@ -231,7 +231,7 @@ Expected:
 - `ucli-live-integration-smoke-20260828` 的 `v0.1.0` 为 `PUBLISHED`。
 - 上一轮授权保持原状态，不删除、不重新生成 URL，也不用于本次联调。
 
-- [ ] **Step 2: 为同一用户创建一个新的授权**
+- [x] **Step 2: 为同一用户创建一个新的授权**
 
 在用户详情点击“创建授权”，选择：
 
