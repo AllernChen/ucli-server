@@ -32,7 +32,7 @@ describe('catalog runtime isolation', () => {
     await controller.bootstrap({ principal: { sub: 'account-1', organizationId: 'org-1', role: 'MEMBER' } })
 
     expect(prisma.publicModel.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ enabled: true, deletedAt: null })
+      where: expect.objectContaining({ enabled: true, deletedAt: null, contextSize: { gt: 0 } })
     }))
   })
 

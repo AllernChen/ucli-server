@@ -20,7 +20,10 @@ export class ClientController {
     if (failure) throw authorizationFailure(failure)
     const [organization, models] = await Promise.all([
       this.prisma.organization.findUniqueOrThrow({ where: { id: request.principal.organizationId } }),
-      this.prisma.publicModel.findMany({ where: { enabled: true, deletedAt: null }, include: { policies: true } })
+      this.prisma.publicModel.findMany({
+        where: { enabled: true, deletedAt: null, contextSize: { gt: 0 } },
+        include: { policies: true }
+      })
     ])
     return {
       organization: { id: organization.id, name: organization.name, timezone: organization.timezone },

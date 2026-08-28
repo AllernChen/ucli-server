@@ -111,8 +111,7 @@ export class ModelsService {
   }
 
   async publish(id: string) {
-    await this.requireActiveModel(id)
-    const check = await this.channelModels.publishCheck(id)
+    const check = await this.publishCheck(id)
     if (!check.ready) throw new BadRequestException({ message: 'Model is not ready to publish', blockers: check.blockers })
     return this.prisma.publicModel.update({ where: { id }, data: { enabled: true } })
   }
@@ -123,8 +122,14 @@ export class ModelsService {
   }
 
   async publishCheck(id: string) {
-    await this.requireActiveModel(id)
-    return this.channelModels.publishCheck(id)
+    const model = await this.requireActiveModel(id)
+    const check = await this.channelModels.publishCheck(id)
+    const blockers: string[] = [...check.blockers]
+    const contextSize = model.contextSize
+    if (typeof contextSize !== 'number' || !Number.isSafeInteger(contextSize) || contextSize <= 0) {
+      blockers.push('MODEL_CONTEXT_SIZE_REQUIRED')
+    }
+    return { ...check, ready: blockers.length === 0, blockers }
   }
 
   async createAbility(id: string, input: CreateAbilityInput) {

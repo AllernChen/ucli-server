@@ -167,6 +167,8 @@ Authorization: Bearer <accessToken>
 }
 ```
 
+`models` 只包含已发布且 `contextSize` 为正整数的公共模型；草稿或历史上缺少有效上下文长度的目录项不会下发。客户端仍应按正整数校验该字段，协议不提供 `null` 或默认值兼容。
+
 redeem、refresh 和 bootstrap 都同步 `authorization.expiresAt` 与 `authorization.serverTime`。客户端使用授权有效期（不是 URL 有效期）在临近到期及到期后显示具体时间，并提示联系管理员延期。
 
 ## 稳定错误与能力降级

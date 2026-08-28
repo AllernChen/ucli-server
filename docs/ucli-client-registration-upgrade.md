@@ -229,6 +229,8 @@ Authorization: Bearer <accessToken>
 }
 ```
 
+`models` 只包含已发布且 `contextSize` 为正整数的公共模型；缺少有效上下文长度的历史目录项不会下发。UCLI 保持严格校验，不为 `null` 或缺失值增加兼容默认值。
+
 客户端不得自行拼装或缓存永久网关地址，应以最近一次 Bootstrap 返回值为准。每次成功 Redeem、Refresh 和 Bootstrap 都更新授权有效期与服务器时间。
 
 ## 7. URL 有效期与设备授权有效期

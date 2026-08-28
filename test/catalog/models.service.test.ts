@@ -220,6 +220,22 @@ describe('public model management', () => {
     await expect(service.update(modelId, { displayName: 'Renamed' })).rejects.toMatchObject({ status: 404 })
   })
 
+  it('blocks publishing a model without a positive context size', async () => {
+    const { service, state } = makeHarness()
+    state.model.contextSize = null
+    state.model.enabled = false
+
+    await expect(service.publishCheck(modelId)).resolves.toMatchObject({
+      ready: false,
+      blockers: ['MODEL_CONTEXT_SIZE_REQUIRED']
+    })
+    await expect(service.publish(modelId)).rejects.toMatchObject({
+      status: 400,
+      response: expect.objectContaining({ blockers: ['MODEL_CONTEXT_SIZE_REQUIRED'] })
+    })
+    expect(state.model.enabled).toBe(false)
+  })
+
   it('rejects a price id that belongs to another public model', async () => {
     const { service, state } = makeHarness()
     state.prices[0].publicModelId = 'another-model'

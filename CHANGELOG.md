@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 修复 Bootstrap 下发 `contextSize: null` 导致 UCLI 注册后无法加载服务端能力：公共模型发布时要求正整数上下文长度，并隔离历史无效目录项。
 - 修复设备 Refresh 成功与错误响应缺少 `Cache-Control: no-store` 的协议违约，保持 UCLI 客户端敏感响应校验 fail closed。
 - 设备授权改为独立的一次性连接 URL：URL 默认有效 7 天，授权默认永久有效；两者有效期独立管理，重新生成 URL 会立即撤销旧 URL。
 - 管理端支持查看、重新生成和追踪 URL 历史；授权绑定设备后不再生成或兑换 URL。
