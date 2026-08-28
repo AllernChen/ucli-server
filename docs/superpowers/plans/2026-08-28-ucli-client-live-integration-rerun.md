@@ -217,7 +217,7 @@ Expected: 版本显示 `v0.1.0 · PUBLISHED`。上传扫描或发布失败时停
 
 **Interfaces:**
 
-- Consumes: Task 2 的 `PUBLISHED` Skill、现有至少一个已发布模型，以及上一轮 smoke 用户的 ACTIVE 组织成员关系。
+- Consumes: Task 2 的 `PUBLISHED` Skill、现有至少一个已发布模型，以及上一轮 smoke 用户的 ACTIVE 组织成员关系和可创建授权的管理员角色。
 - Produces: 一个状态为 `AVAILABLE` 的新设备授权和一个 1 天内有效、未消费的连接 URL。
 
 - [ ] **Step 1: 在管理端确认联调用户和资源前置条件**
@@ -226,7 +226,7 @@ Expected: 版本显示 `v0.1.0 · PUBLISHED`。上传扫描或发布失败时停
 
 Expected:
 
-- 用户组织状态为“正常”，角色为 `MEMBER`。
+- 用户组织状态为“正常”，且当前角色允许创建授权；生产核对显示上一轮 smoke 用户为 `PLATFORM_ADMIN`。
 - 至少一个公共模型处于已发布且健康状态。
 - `ucli-live-integration-smoke-20260828` 的 `v0.1.0` 为 `PUBLISHED`。
 - 上一轮授权保持原状态，不删除、不重新生成 URL，也不用于本次联调。
