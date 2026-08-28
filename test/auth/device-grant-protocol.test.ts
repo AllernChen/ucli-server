@@ -40,13 +40,14 @@ function sqlWithoutComments(source: string) {
 
 describe('device grant release contract', () => {
   it('uses the exact link fragment browser handoff and registration routes without legacy fields', () => {
-    expect(protocol).toContain('http://10.0.0.8:3000/connect#link=one-time-link-secret')
-    expect(protocol).toContain('ucli://connect?server=http%3A%2F%2F10.0.0.8%3A3000#link=<secret>')
+    expect(protocol).toContain('http://10.44.100.100/connect#link=one-time-link-secret')
+    expect(protocol).toContain('ucli://connect?server=http%3A%2F%2F10.44.100.100#link=<secret>')
     expect(protocol).not.toContain('#token=')
     expect(protocol).not.toContain('connect?link=')
     expect(fencedBlock(protocol, 'Preview HTTP', 'http')).toBe('POST /api/v1/auth/device-grants/preview\nContent-Type: application/json')
     expect(fencedBlock(protocol, 'Redeem HTTP', 'http')).toBe('POST /api/v1/auth/device-grants/redeem\nContent-Type: application/json')
     expect(fencedBlock(protocol, 'Refresh HTTP', 'http')).toBe('POST /api/v1/auth/token/refresh\nContent-Type: application/json')
+    expect(fencedBlock(protocol, 'Refresh 响应头', 'http')).toBe('Cache-Control: no-store')
     expect(fencedBlock(protocol, 'Bootstrap HTTP', 'http')).toBe('GET /api/v1/client/bootstrap\nAuthorization: Bearer <accessToken>')
     expect(protocol).not.toMatch(/(?:GET|POST) \/api\/v1\/auth\/device\/(?:code|token|approve)/)
     expect(protocol).not.toContain('/api/v1/auth/invitations/accept')
@@ -54,7 +55,7 @@ describe('device grant release contract', () => {
 
   it('publishes parseable preview, redeem, refresh, and bootstrap JSON contracts', () => {
     expect(jsonBlock('创建响应')).toEqual({
-      id: 'grant-uuid', connectionUrl: 'http://10.0.0.8:3000/connect#link=one-time-link-secret', expiresAt: null
+      id: 'grant-uuid', connectionUrl: 'http://10.44.100.100/connect#link=one-time-link-secret', expiresAt: null
     })
     expect(jsonBlock('Preview 请求')).toEqual({ link: '<secret>' })
     expect(jsonBlock('Preview 响应')).toEqual({
@@ -80,9 +81,9 @@ describe('device grant release contract', () => {
     })
     expect(jsonBlock('Bootstrap 响应')).toEqual({
       organization: { id: 'organization-uuid', name: '组织名称', timezone: 'Asia/Shanghai' },
-      gateway: { baseUrl: 'http://10.0.0.8:3001' },
+      gateway: { baseUrl: 'http://10.44.100.100/gateway' },
       models: [{ id: 'example-model', displayName: '示例模型', contextSize: 128000 }],
-      skillsCatalogUrl: 'http://10.0.0.8:3000/api/v1/skills/catalog',
+      skillsCatalogUrl: 'http://10.44.100.100/api/v1/skills/catalog',
       authorization: { expiresAt: null, serverTime: '2026-08-27T04:00:00.000Z' }
     })
   })
