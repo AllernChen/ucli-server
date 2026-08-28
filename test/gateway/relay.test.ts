@@ -5,9 +5,9 @@ describe('upstream relay', () => {
   const cost = { id: 'cost', source: 'CHANNEL_COST_RULE' as const, currency: 'CNY' as const, timezone: 'UTC',
     resolvedAt: '2026-01-01T00:00:00.000Z', inputPerMillion: '1', outputPerMillion: '1', cachedPerMillion: '0', reasoningPerMillion: '0' }
   it('maps the model, hides the first failed candidate, and returns normalized usage', async () => {
-    const requests: Array<{ url: string; body: any }> = []
+    const requests: Array<{ url: string; body: any; headers: Record<string, string> }> = []
     const fetcher = async (input: URL | RequestInfo, init?: RequestInit) => {
-      requests.push({ url: String(input), body: JSON.parse(String(init?.body)) })
+      requests.push({ url: String(input), body: JSON.parse(String(init?.body)), headers: init?.headers as Record<string, string> })
       if (requests.length === 1) return new Response('{"error":"busy"}', { status: 503 })
       return new Response(JSON.stringify({ usage: { prompt_tokens: 7, completion_tokens: 2 } }), {
         status: 200, headers: { 'content-type': 'application/json' }
@@ -15,6 +15,7 @@ describe('upstream relay', () => {
     }
     const base = { apiKey: 'secret', protocol: 'openai_chat' as const, maxRetries: 0, timeoutMs: 1000, cost }
     const result = await relayRequest({
+      requestId: 'request-1',
       candidates: [
         { ...base, channelId: 'first', channelModelId: 'cm1', keyId: 'k1', baseUrl: 'https://one.example', upstreamModel: 'm1' },
         { ...base, channelId: 'second', channelModelId: 'cm2', keyId: 'k2', baseUrl: 'https://two.example', upstreamModel: 'm2' }
@@ -22,8 +23,28 @@ describe('upstream relay', () => {
       body: { model: 'public', messages: [] }, fetcher: fetcher as typeof fetch
     })
     expect(requests.map(item => item.body.model)).toEqual(['m1', 'm2'])
+    expect(requests.map(item => item.headers['x-ucli-request-id'])).toEqual(['request-1', 'request-1'])
+    expect(result.requestId).toBe('request-1')
     expect(result.candidate.channelId).toBe('second')
     expect(result.usage).toMatchObject({ inputTokens: 7, outputTokens: 2 })
+  })
+
+  it('preserves a caller-provided request ID when all candidates are exhausted', async () => {
+    let upstreamRequestId: string | undefined
+    const fetcher = async (_input: URL | RequestInfo, init?: RequestInit) => {
+      upstreamRequestId = (init?.headers as Record<string, string>)['x-ucli-request-id']
+      return new Response('{"error":"down"}', { status: 503 })
+    }
+    const error = await relayRequest({
+      requestId: 'request-1',
+      candidates: [{ channelId: 'c', channelModelId: 'cm', keyId: 'k', baseUrl: 'https://one.example', upstreamModel: 'm',
+        apiKey: 'secret', protocol: 'openai_chat', maxRetries: 0, timeoutMs: 1000, cost }],
+      body: { model: 'public', messages: [] }, fetcher: fetcher as typeof fetch
+    }).catch(error => error)
+
+    expect(upstreamRequestId).toBe('request-1')
+    expect(error).toMatchObject({ code: 'UPSTREAM_UNAVAILABLE', requestId: 'request-1' })
+    expect(error.attempts).toHaveLength(1)
   })
 
   it('requests usage in OpenAI chat streams', async () => {

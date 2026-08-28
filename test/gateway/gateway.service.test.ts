@@ -15,6 +15,13 @@ function makeKey() {
     enabled: true, health: 'HEALTHY', remainingUsd: null, expiresAt: null, isolatedUntil: null, lastUsedAt: null }
 }
 
+function makeProtocolMapping(protocol = 'OPENAI_CHAT') {
+  return {
+    protocol, enabled: true, deletedAt: null,
+    channel: { enabled: true, deletedAt: null, keys: [{ enabled: true, deletedAt: null }] }
+  }
+}
+
 function makeAbility(overrides: Record<string, any> = {}) {
   const channelId = overrides.channelId || 'ch1'
   const inputPerMillion = overrides.inputPerMillion || '1'
@@ -41,6 +48,7 @@ function makeHarness(overrides: { prisma?: Record<string, any>; quota?: Record<s
       }]),
       findFirst: vi.fn().mockResolvedValue({
         id: 'gpt-4o', enabled: true, policies: [],
+        channelModels: [makeProtocolMapping()],
         prices: [{ id: 'p1', inputPerMillion: '1', outputPerMillion: '2', cachedPerMillion: '0', reasoningPerMillion: '0', currency: 'CNY' }]
       })
     },
@@ -66,7 +74,7 @@ function makeResponse() {
   return { status: vi.fn(), setHeader: vi.fn(), send: vi.fn(), end: vi.fn(), once: vi.fn(), writableFinished: true }
 }
 
-afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('gateway service orchestration', () => {
   it('publishes accessible active models with their configured client protocols', async () => {
@@ -84,13 +92,25 @@ describe('gateway service orchestration', () => {
 
   it('relays a successful request, writes usage and marks the channel healthy', async () => {
     const { service, prisma } = makeHarness()
-    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ usage: { prompt_tokens: 7, completion_tokens: 2 } }), { status: 200 }))
+    let upstreamRequestId: string | undefined
+    vi.stubGlobal('fetch', async (_input: URL | RequestInfo, init?: RequestInit) => {
+      upstreamRequestId = (init?.headers as Record<string, string>)['x-ucli-request-id']
+      return new Response(JSON.stringify({ usage: { prompt_tokens: 7, completion_tokens: 2 } }), {
+        status: 200, headers: { 'x-ucli-request-id': 'upstream-id', 'cache-control': 'public, max-age=3600' }
+      })
+    })
     const response = makeResponse()
     await service.relay({ protocol: 'openai_chat', body: { model: 'gpt-4o', messages: [] }, headers: {}, principal, response: response as any })
     expect(response.status).toHaveBeenCalledWith(200)
     expect(response.setHeader).toHaveBeenCalledWith('x-ucli-request-id', expect.any(String))
+    expect(response.setHeader).toHaveBeenCalledWith('cache-control', 'no-store')
     expect(response.send).toHaveBeenCalled()
     const data = prisma.usageLog.create.mock.calls[0][0].data
+    const externalRequestId = response.setHeader.mock.calls.filter(([name]) => name === 'x-ucli-request-id').at(-1)?.[1]
+    expect(upstreamRequestId).toBe(externalRequestId)
+    expect(data.requestId).toBe(externalRequestId)
+    expect(externalRequestId).not.toBe('upstream-id')
+    expect(response.setHeader.mock.calls.filter(([name]) => name === 'cache-control').at(-1)?.[1]).toBe('no-store')
     expect(data.publicModelId).toBe('gpt-4o')
     expect(data.statusCode).toBe(200)
     expect(data.inputTokens).toBe(7)
@@ -120,22 +140,103 @@ describe('gateway service orchestration', () => {
     expect(prisma.usageLog.create).not.toHaveBeenCalled()
   })
 
-  it('returns 503 when no healthy channel is available', async () => {
-    const { service } = makeHarness({ prisma: { channelModel: { findMany: vi.fn().mockResolvedValue([]) } } })
-    await expect(service.relay({ protocol: 'openai_chat', body: { model: 'gpt-4o', messages: [] }, headers: {}, principal, response: makeResponse() as any }))
-      .rejects.toBeInstanceOf(ServiceUnavailableException)
+  it('returns model_protocol_unavailable before candidate or quota work', async () => {
+    const { service, prisma, quota } = makeHarness()
+    const response = makeResponse()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    const error = await service.relay({ protocol: 'openai_responses', body: { model: 'gpt-4o', input: [] }, headers: {}, principal, response: response as any })
+      .catch(error => error)
+
+    expect(error.getResponse()).toEqual({
+      statusCode: 503,
+      code: 'model_protocol_unavailable',
+      message: 'The model does not support the requested protocol',
+      requestId: expect.any(String),
+      retryable: false
+    })
+    const requestId = error.getResponse().requestId
+    expect(prisma.channelModel.findMany).not.toHaveBeenCalled()
+    expect(quota.reserve).not.toHaveBeenCalled()
+    expect(prisma.usageLog.create).not.toHaveBeenCalled()
+    expect(response.setHeader).toHaveBeenCalledWith('cache-control', 'no-store')
+    expect(response.setHeader).toHaveBeenCalledWith('x-ucli-request-id', requestId)
+    expect(warn).toHaveBeenCalledWith('gateway-route-failed', {
+      event: 'gateway_route_failed', requestId, organizationId: 'org1', accountId: 'acct1', deviceId: 'dev1',
+      publicModelId: 'gpt-4o', protocol: 'openai_responses', code: 'model_protocol_unavailable',
+      routeAttempts: 0, timestamp: expect.any(String)
+    })
+  })
+
+  it('returns model_channel_unavailable when a compatible model has no candidates', async () => {
+    const { service, prisma, quota } = makeHarness({ prisma: { channelModel: { findMany: vi.fn().mockResolvedValue([]) } } })
+    const response = makeResponse()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    const error = await service.relay({ protocol: 'openai_chat', body: { model: 'gpt-4o', messages: [] }, headers: {}, principal, response: response as any })
+      .catch(error => error)
+
+    expect(error.getResponse()).toEqual({
+      statusCode: 503,
+      code: 'model_channel_unavailable',
+      message: 'No model channel is currently available',
+      retryable: true,
+      requestId: expect.any(String)
+    })
+    const requestId = error.getResponse().requestId
+    expect(quota.reserve).not.toHaveBeenCalled()
+    expect(prisma.usageLog.create).not.toHaveBeenCalled()
+    expect(response.setHeader).toHaveBeenCalledWith('cache-control', 'no-store')
+    expect(response.setHeader).toHaveBeenCalledWith('x-ucli-request-id', requestId)
+    expect(warn).toHaveBeenCalledWith('gateway-route-failed', {
+      event: 'gateway_route_failed', requestId, organizationId: 'org1', accountId: 'acct1', deviceId: 'dev1',
+      publicModelId: 'gpt-4o', protocol: 'openai_chat', code: 'model_channel_unavailable',
+      routeAttempts: 0, timestamp: expect.any(String)
+    })
+  })
+
+  it('keeps the access-control 404 ahead of protocol disclosure and request metadata', async () => {
+    const { service, prisma, quota } = makeHarness({ prisma: {
+      publicModel: { findFirst: vi.fn().mockResolvedValue(null) }
+    } })
+    const response = makeResponse()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    await expect(service.relay({ protocol: 'openai_responses', body: { model: 'hidden-model', input: [] }, headers: {}, principal, response: response as any }))
+      .rejects.toMatchObject({ status: 404 })
+
+    expect(prisma.channelModel.findMany).not.toHaveBeenCalled()
+    expect(quota.reserve).not.toHaveBeenCalled()
+    expect(response.setHeader).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
   })
 
   it('writes a 503 usage log and opens the circuit when the upstream fails', async () => {
     const { service, prisma } = makeHarness()
     vi.stubGlobal('fetch', async () => new Response('{"error":"down"}', { status: 503 }))
-    await expect(service.relay({ protocol: 'openai_chat', body: { model: 'gpt-4o', messages: [] }, headers: {}, principal, response: makeResponse() as any }))
-      .rejects.toMatchObject({ status: 503 })
+    const response = makeResponse()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const error = await service.relay({ protocol: 'openai_chat', body: { model: 'gpt-4o', messages: [] }, headers: {}, principal, response: response as any })
+      .catch(error => error)
+    expect(error.getResponse()).toEqual({
+      statusCode: 503,
+      code: 'upstream_unavailable',
+      message: 'No upstream channel succeeded',
+      retryable: true,
+      requestId: expect.any(String)
+    })
+    const requestId = error.getResponse().requestId
+    expect(response.setHeader).toHaveBeenCalledWith('cache-control', 'no-store')
+    expect(response.setHeader).toHaveBeenCalledWith('x-ucli-request-id', requestId)
     const data = prisma.usageLog.create.mock.calls[0][0].data
-    expect(data.statusCode).toBe(503)
-    expect(data.routeAttempts).toBe(1)
+    expect(data).toMatchObject({ requestId, statusCode: 503, routeAttempts: 1, errorCode: 'UPSTREAM_UNAVAILABLE' })
     expect(data.channelModelId).toBe('cm1')
     expect(data.costUsd).toBe('0')
+    expect(warn).toHaveBeenCalledWith('gateway-route-failed', {
+      event: 'gateway_route_failed', requestId, organizationId: 'org1', accountId: 'acct1', deviceId: 'dev1',
+      publicModelId: 'gpt-4o', protocol: 'openai_chat', code: 'upstream_unavailable',
+      routeAttempts: 1, timestamp: expect.any(String)
+    })
     expect(prisma.channelKey.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ deletedAt: null })
     }))
@@ -168,6 +269,7 @@ describe('gateway service orchestration', () => {
     expect(prisma.channelModel.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         publicModelId: 'gpt-4o', enabled: true, deletedAt: null,
+        protocol: { in: ['OPENAI_CHAT', 'GEMINI'] },
         publicModel: expect.objectContaining({ deletedAt: null }),
         channel: expect.objectContaining({ enabled: true, deletedAt: null })
       }),
@@ -209,7 +311,9 @@ describe('gateway service orchestration', () => {
 
   it('does not route a candidate when neither channel nor fallback procurement cost exists', async () => {
     const { service } = makeHarness({ prisma: {
-      publicModel: { findFirst: vi.fn().mockResolvedValue({ id: 'gpt-4o', enabled: true, policies: [], prices: [] }) },
+      publicModel: { findFirst: vi.fn().mockResolvedValue({
+        id: 'gpt-4o', enabled: true, policies: [], channelModels: [makeProtocolMapping()], prices: []
+      }) },
       channelModel: { findMany: vi.fn().mockResolvedValue([makeAbility({ costRules: [] })]) }
     } })
     await expect(service.relay({ protocol: 'openai_chat', body: { model: 'gpt-4o', messages: [] }, headers: {}, principal, response: makeResponse() as any }))
