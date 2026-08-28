@@ -88,6 +88,8 @@ docker load -i images/ucli-server-web_v0.3.0.tar.gz
 - `PUBLIC_URL`：必须是精确的 UCLI 可访问 origin，例如 `http://IP[:port]`；服务端据此生成浏览器设备授权链接。部署在可信公司内网时允许使用 HTTP，HTTP 以该内网为可信边界，不能用于不可信公网。
 - `GATEWAY_PUBLIC_URL`：员工访问的模型网关地址。
 
+Responses 客户端上线前，平台管理员必须创建独立的 `OPENAI_RESPONSES` 通道和模型映射，使用供应商 Responses API 对应的 base URL，并在管理端重新输入供应商密钥。不得复用带 `/anthropic` 的 Anthropic Messages base URL，也不得从数据库或现有通道提取密钥。模型测试通过且价格有效后才能启用映射。
+
 `conf/.env` 包含敏感信息，不得提交或打入交付压缩包。
 
 ## 验证步骤

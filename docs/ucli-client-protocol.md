@@ -161,13 +161,20 @@ Authorization: Bearer <accessToken>
 {
   "organization": { "id": "organization-uuid", "name": "组织名称", "timezone": "Asia/Shanghai" },
   "gateway": { "baseUrl": "http://10.44.100.100/gateway" },
-  "models": [{ "id": "example-model", "displayName": "示例模型", "contextSize": 128000 }],
+  "models": [{
+    "id": "example-model",
+    "displayName": "示例模型",
+    "contextSize": 128000,
+    "protocols": ["openai_responses"]
+  }],
   "skillsCatalogUrl": "http://10.44.100.100/api/v1/skills/catalog",
   "authorization": { "expiresAt": null, "serverTime": "2026-08-27T04:00:00.000Z" }
 }
 ```
 
-`models` 只包含已发布且 `contextSize` 为正整数的公共模型；草稿或历史上缺少有效上下文长度的目录项不会下发。客户端仍应按正整数校验该字段，协议不提供 `null` 或默认值兼容。
+`models` 只包含已发布且 `contextSize` 为正整数的公共模型；草稿或历史上缺少有效上下文长度的目录项不会下发。客户端仍应按正整数校验该字段，协议不提供 `null` 或默认值兼容。每个模型的 `protocols` 是必填的非空数组，表示该模型静态配置完成、可由 Gateway 调用的协议能力；它不是渠道、密钥、熔断或上游的瞬时健康状态。
+
+公开协议枚举固定为 `openai_responses`、`openai_chat`、`anthropic_messages`。`GEMINI` 是服务端内部上游/转换协议，仅贡献 `openai_chat`，UCLI 不得把 `gemini` 当作可选择的 Gateway 协议或调用原生 Gemini 端点。客户端必须按所需协议筛选模型和端点，绝不能从模型 ID、厂商或 `models[0]` 推断协议。
 
 redeem、refresh 和 bootstrap 都同步 `authorization.expiresAt` 与 `authorization.serverTime`。客户端使用授权有效期（不是 URL 有效期）在临近到期及到期后显示具体时间，并提示联系管理员延期。
 
@@ -196,6 +203,53 @@ Preview/Redeem 的稳定业务错误使用 HTTP `400`，响应体至少包含 `{
 ## 网关与技能
 
 Bootstrap 返回的 `gateway.baseUrl` 是网关基址。当前环境以 Bearer access token 调用 `GET /gateway/v1/models`、`POST /gateway/v1/responses`、`POST /gateway/v1/chat/completions`；Anthropic 兼容接口为 `POST /gateway/anthropic/v1/messages`，支持 Bearer，也允许兼容客户端通过 `x-api-key` 传入同一设备 access token。供应商 Key 永不下发。
+
+### Gateway 模型列表 HTTP
+
+```http
+GET /gateway/v1/models
+Authorization: Bearer <accessToken>
+```
+
+### Gateway 模型列表响应
+
+```json
+{
+  "object": "list",
+  "data": [{
+    "id": "example-model",
+    "object": "model",
+    "owned_by": "ucli",
+    "display_name": "示例模型",
+    "context_size": 128000,
+    "protocols": ["openai_responses"]
+  }]
+}
+```
+
+Gateway 模型项中的 `display_name`、`context_size` 和 `protocols` 是与 Bootstrap 相同模型目录的扩展字段。客户端必须校验 `protocols` 存在、非空且每一项都属于公开协议枚举；缺失、空数组或未知值都不是可猜测的兼容情形。用相应协议筛选后的模型列表为空时，显示该协议当前没有兼容的服务端模型，不能回退到 `models[0]`、模型 ID 或厂商推断的端点。
+
+### Gateway 路由错误响应
+
+```json
+{
+  "statusCode": 503,
+  "code": "model_protocol_unavailable",
+  "message": "The model does not support the requested protocol",
+  "requestId": "request-uuid",
+  "retryable": false
+}
+```
+
+所有 Gateway 路由失败均返回 HTTP `503`、`Content-Type: application/json`、`X-UCLI-Request-ID` 和 `Cache-Control: no-store`。响应体总是包含 `statusCode`、`code`、`message`、`requestId`、`retryable`：
+
+| `code` | `message` | `retryable` | UCLI 处理 |
+| --- | --- | --- | --- |
+| `model_protocol_unavailable` | `The model does not support the requested protocol` | `false` | 这是选择错误：重新按 `protocols` 筛选模型；不自动重试，不清除本地凭证。 |
+| `model_channel_unavailable` | `No model channel is currently available` | `true` | 模型有该静态能力但暂时无可路由渠道；可按退避重试，不清除本地凭证。 |
+| `upstream_unavailable` | `No upstream channel succeeded` | `true` | 兼容渠道均未成功；可按退避重试，不清除本地凭证。 |
+
+在验证流式响应成功之前，客户端先记录经脱敏的 HTTP 状态、`Content-Type`、`Cache-Control`、稳定 `code`、`requestId` 和 `retryable`。无论三种路由失败中的哪一种，都只降级服务端模型与相关服务端能力；独立模式、本地模型、已安装本地技能、本地数据、本地会话和现有凭证必须保持不变。
 
 以 Bearer access token 请求 Bootstrap 返回的 `skillsCatalogUrl`。`GET /api/v1/skills/catalog?cursor=<ISO时间>` 每次最多按 `createdAt` 升序返回 100 个当前组织可见的已发布不可变版本；客户端以最后一个 `createdAt` 作为下一次 cursor。每项包含 `id`、`version`、`sha256`、`sizeBytes`、`publishedAt`、`createdAt`、`skill.slug/name/description` 与 `downloadUrl`。下载也必须携带 Bearer token，并同时校验响应头 `x-ucli-sha256`、目录中的 `sha256` 和实际 ZIP 内容摘要。
 

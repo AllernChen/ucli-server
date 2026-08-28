@@ -46,6 +46,8 @@ Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/v1/auth/setup `
 
 后台配置顺序：**渠道与 Key**（新建渠道 → 添加上游 API Key）→ **渠道模型**（映射公共模型/上游模型/协议 → 测试健康）→ **采购成本**（维护公共兜底价、渠道基础价与分时覆盖价）→ **模型目录**（发布检查 → 发布）→ 网关即可转发。实时用量与公司采购成本见 **统计分析**，周期归档见 **运营报告**。
 
+服务端模型目录通过 `protocols` 声明每个模型可调用的 Gateway 协议。UCLI 必须按 `openai_responses`、`openai_chat` 或 `anthropic_messages` 能力选择模型和端点，不能假设列表首个模型支持 Responses；`GEMINI` 是服务端内部上游/转换协议，仅贡献 `openai_chat`，不是 UCLI 可选择的原生 Gateway 协议。
+
 ### 渠道模型运营
 
 - 渠道详情集中维护上游模型映射、Key 和模型级健康记录；采购成本摘要可深链到独立的“采购成本”工作台。
