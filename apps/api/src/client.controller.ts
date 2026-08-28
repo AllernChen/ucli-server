@@ -4,6 +4,7 @@ import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import { AuthGuard, authorizationFailure } from '../../../packages/security/src/auth.js'
 import { canAccessModel } from '../../../packages/gateway-core/src/access-policy.js'
 import { deviceGrantFailure } from '../../../packages/security/src/device-grants.js'
+import { configuredClientProtocols } from '../../../packages/gateway-core/src/model-capabilities.js'
 
 @ApiTags('client') @ApiBearerAuth() @UseGuards(AuthGuard) @Controller('api/v1/client')
 export class ClientController {
@@ -22,7 +23,16 @@ export class ClientController {
       this.prisma.organization.findUniqueOrThrow({ where: { id: request.principal.organizationId } }),
       this.prisma.publicModel.findMany({
         where: { enabled: true, deletedAt: null, contextSize: { gt: 0 } },
-        include: { policies: true }
+        include: {
+          policies: true,
+          channelModels: { select: {
+            protocol: true, enabled: true, deletedAt: true,
+            channel: { select: {
+              enabled: true, deletedAt: true,
+              keys: { select: { enabled: true, deletedAt: true } }
+            } }
+          } }
+        }
       })
     ])
     return {
@@ -30,7 +40,10 @@ export class ClientController {
       gateway: { baseUrl: process.env.GATEWAY_PUBLIC_URL || 'http://localhost:3001' },
       models: models.filter(model => canAccessModel(model.policies, { organizationId: request.principal.organizationId,
         accountId: request.principal.sub, role: request.principal.role }))
-        .map(({ id, displayName, contextSize }) => ({ id, displayName, contextSize })),
+        .map(({ id, displayName, contextSize, channelModels }) => ({
+          id, displayName, contextSize, protocols: configuredClientProtocols(channelModels)
+        }))
+        .filter(model => model.protocols.length > 0),
       skillsCatalogUrl: `${process.env.PUBLIC_URL || 'http://localhost:3000'}/api/v1/skills/catalog`,
       ...(device?.grant ? { authorization: {
         expiresAt: device.grant.expiresAt?.toISOString() ?? null, serverTime: now.toISOString()

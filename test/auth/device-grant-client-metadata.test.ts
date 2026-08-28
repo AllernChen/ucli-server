@@ -6,7 +6,7 @@ describe('device bootstrap authorization metadata', () => {
     const expiresAt = new Date('2026-12-31T16:00:00.000Z')
     const prisma: any = {
       organization: { findUniqueOrThrow: vi.fn(async () => ({ id: 'org-1', name: 'Example', timezone: 'UTC' })) },
-      publicModel: { findMany: vi.fn(async () => []) },
+      publicModel: { findMany: vi.fn(async () => [{ policies: [], channelModels: [] }]) },
       device: { findFirst: vi.fn(async () => ({ id: 'device-1', grant: { id: 'grant-1', disabledAt: null, deletedAt: null, expiresAt } })) }
     }
     const controller = new ClientController(prisma)
@@ -19,7 +19,7 @@ describe('device bootstrap authorization metadata', () => {
   it('rejects bootstrap before returning configuration when a device grant is inactive', async () => {
     const prisma: any = {
       organization: { findUniqueOrThrow: vi.fn(async () => ({ id: 'org-1', name: 'Example', timezone: 'UTC' })) },
-      publicModel: { findMany: vi.fn(async () => []) },
+      publicModel: { findMany: vi.fn(async () => [{ policies: [], channelModels: [] }]) },
       device: { findFirst: vi.fn(async () => ({ id: 'device-1', grant: { id: 'grant-1', disabledAt: new Date(), deletedAt: null, expiresAt: null } })) }
     }
     const controller = new ClientController(prisma)

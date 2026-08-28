@@ -258,7 +258,7 @@ describe('password administrator compatibility', () => {
   it('keeps administrator bootstrap response unchanged and does not query devices', async () => {
     const prisma: any = {
       organization: { findUniqueOrThrow: vi.fn(async () => ({ id: 'org-1', name: 'Example', timezone: 'UTC' })) },
-      publicModel: { findMany: vi.fn(async () => []) },
+      publicModel: { findMany: vi.fn(async () => [{ policies: [], channelModels: [] }]) },
       device: { findFirst: vi.fn() }
     }
     const controller = new ClientController(prisma)
