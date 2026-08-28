@@ -33,7 +33,12 @@ function makeAbility(overrides: Record<string, any> = {}) {
 function makeHarness(overrides: { prisma?: Record<string, any>; quota?: Record<string, any> } = {}) {
   const prisma = {
     publicModel: {
-      findMany: vi.fn().mockResolvedValue([{ id: 'gpt-4o', displayName: 'GPT-4o', contextSize: 128000, enabled: true, policies: [] }]),
+      findMany: vi.fn().mockResolvedValue([{
+        id: 'gpt-4o', displayName: 'GPT-4o', contextSize: 128000, enabled: true, policies: [], channelModels: [{
+          protocol: 'OPENAI_RESPONSES', enabled: true, deletedAt: null,
+          channel: { enabled: true, deletedAt: null, keys: [{ enabled: true, deletedAt: null }] }
+        }]
+      }]),
       findFirst: vi.fn().mockResolvedValue({
         id: 'gpt-4o', enabled: true, policies: [],
         prices: [{ id: 'p1', inputPerMillion: '1', outputPerMillion: '2', cachedPerMillion: '0', reasoningPerMillion: '0', currency: 'CNY' }]
@@ -64,13 +69,16 @@ function makeResponse() {
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 
 describe('gateway service orchestration', () => {
-  it('exposes only active public models to employees', async () => {
+  it('publishes accessible active models with their configured client protocols', async () => {
     const { service, prisma } = makeHarness()
 
-    await service.models({ organizationId: principal.organizationId, accountId: principal.sub, role: principal.role })
+    await expect(service.models({ organizationId: principal.organizationId, accountId: principal.sub, role: principal.role }))
+      .resolves.toEqual([{
+        id: 'gpt-4o', displayName: 'GPT-4o', contextSize: 128000, protocols: ['openai_responses']
+      }])
 
     expect(prisma.publicModel.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ enabled: true, deletedAt: null })
+      where: expect.objectContaining({ enabled: true, deletedAt: null, contextSize: { gt: 0 } })
     }))
   })
 

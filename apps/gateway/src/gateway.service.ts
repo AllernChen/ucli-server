@@ -15,6 +15,7 @@ import { RedisQuotaService } from '../../../packages/quota/src/redis-quota.js'
 import { recordQuotaRejection, recordQuotaSettlement } from '../../../packages/monitoring/src/quota-metrics.js'
 import { StreamUsageCollector } from '../../../packages/gateway-core/src/stream-usage.js'
 import { canAccessModel, type ModelAccessPrincipal } from '../../../packages/gateway-core/src/access-policy.js'
+import { configuredClientProtocols } from '../../../packages/gateway-core/src/model-capabilities.js'
 import { highestReservationCost, resolveChannelCost, type ResolvedCost, type ScheduledCost } from '../../../packages/gateway-core/src/cost-schedule.js'
 
 const PRISMA_PROTOCOL: Record<GatewayProtocol, PrismaProtocol> = {
@@ -38,10 +39,24 @@ export class GatewayService {
   constructor(private readonly prisma: PrismaService, private readonly quota: RedisQuotaService) {}
 
   async models(principal: ModelAccessPrincipal) {
-    const models = await this.prisma.publicModel.findMany({ where: { enabled: true, deletedAt: null },
-      include: { policies: true } })
+    const models = await this.prisma.publicModel.findMany({
+      where: { enabled: true, deletedAt: null, contextSize: { gt: 0 } },
+      include: {
+        policies: true,
+        channelModels: { select: {
+          protocol: true, enabled: true, deletedAt: true,
+          channel: { select: {
+            enabled: true, deletedAt: true,
+            keys: { select: { enabled: true, deletedAt: true } }
+          } }
+        } }
+      }
+    })
     return models.filter(model => canAccessModel(model.policies, principal))
-      .map(({ id, displayName, contextSize }) => ({ id, displayName, contextSize }))
+      .map(({ id, displayName, contextSize, channelModels }) => ({
+        id, displayName, contextSize, protocols: configuredClientProtocols(channelModels)
+      }))
+      .filter(model => model.protocols.length > 0)
   }
 
   private async candidates(publicModelId: string, protocol: GatewayProtocol, at: Date, fallbackPrice?: any): Promise<RelayCandidate[]> {
