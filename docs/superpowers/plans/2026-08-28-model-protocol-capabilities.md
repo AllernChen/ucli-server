@@ -10,10 +10,12 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-28-model-protocol-capabilities-design.md`
 
+> **Implementation correction (2026-08-28):** The approved draft incorrectly advertised native `gemini` in public model catalogs. The final implementation and this release expose exactly `openai_responses`, `openai_chat`, and `anthropic_messages`; an upstream `GEMINI` mapping contributes public `openai_chat`. Internal native `gemini` routing remains available but is not catalog-advertised until a client-facing endpoint exists. The corrected passages below supersede the earlier draft examples.
+
 ## Global Constraints
 
 - UCLI remains independently installable and usable when no server is registered or server capabilities fail.
-- Model protocol values are exactly `openai_responses`, `openai_chat`, `anthropic_messages`, and `gemini`, in that stable order.
+- Public model protocol values are exactly `openai_responses`, `openai_chat`, and `anthropic_messages`, in that stable order; internal native `gemini` is not catalog-advertised.
 - Static capabilities require an enabled, non-archived public model, mapping, channel, and at least one enabled non-archived channel key.
 - Mapping/channel/key health, key isolation, circuit state, quota, and current cost availability do not remove a static protocol capability.
 - Bootstrap and Gateway model catalogs must use the same pure protocol projection and access-policy rules.
@@ -79,7 +81,13 @@ describe('model protocol capabilities', () => {
   it('projects upstream protocols to stable deduplicated client protocols', () => {
     expect(configuredClientProtocols([
       mapping('GEMINI'), mapping('OPENAI_CHAT'), mapping('ANTHROPIC_MESSAGES'), mapping('OPENAI_RESPONSES'), mapping('GEMINI')
-    ])).toEqual(['openai_responses', 'openai_chat', 'anthropic_messages', 'gemini'])
+    ])).toEqual(['openai_responses', 'openai_chat', 'anthropic_messages'])
+  })
+
+  it('projects an eligible Gemini-only mapping as public OpenAI Chat', () => {
+    const protocols = configuredClientProtocols([mapping('GEMINI')])
+    expect(protocols).toEqual(['openai_chat'])
+    expect(protocols).not.toContain('gemini')
   })
 
   it.each([
@@ -142,7 +150,7 @@ export interface ModelProtocolMapping {
 }
 
 const CLIENT_PROTOCOL_ORDER: readonly GatewayProtocol[] = [
-  'openai_responses', 'openai_chat', 'anthropic_messages', 'gemini'
+  'openai_responses', 'openai_chat', 'anthropic_messages'
 ]
 
 const CLIENT_UPSTREAMS: Record<GatewayProtocol, readonly UpstreamGatewayProtocol[]> = {
@@ -164,6 +172,8 @@ export function configuredClientProtocols(mappings: readonly ModelProtocolMappin
   return CLIENT_PROTOCOL_ORDER.filter(protocol => CLIENT_UPSTREAMS[protocol].some(item => upstream.has(item)))
 }
 ```
+
+The `gemini: ['GEMINI']` entry remains in the internal routing map for existing relay behavior, but omitting `gemini` from `CLIENT_PROTOCOL_ORDER` prevents it from being projected into public catalogs.
 
 - [ ] **Step 4: Run the focused test and typecheck**
 
@@ -207,7 +217,7 @@ Extend the Bootstrap harness with one public model containing `OPENAI_RESPONSES`
 ```ts
 expect(result.models).toEqual([{
   id: 'model-1', displayName: 'Model 1', contextSize: 128000,
-  protocols: ['openai_responses', 'openai_chat', 'gemini']
+  protocols: ['openai_responses', 'openai_chat']
 }])
 expect(prisma.publicModel.findMany).toHaveBeenCalledWith(expect.objectContaining({
   where: { enabled: true, deletedAt: null, contextSize: { gt: 0 } },
@@ -587,7 +597,7 @@ models: [{
 }]
 ```
 
-Parse a new `### Gateway 路由错误响应` JSON block and assert the exact `statusCode`, `code`, `message`, `requestId`, and `retryable` fields. Assert both documents contain all four protocol values, all three 503 codes, `X-UCLI-Request-ID`, `Cache-Control: no-store`, prohibition of `models[0]`, and the required handoff YAML keys.
+Parse a new `### Gateway 路由错误响应` JSON block and assert the exact `statusCode`, `code`, `message`, `requestId`, and `retryable` fields. Assert both documents contain all three public protocol values, identify `GEMINI` only as an internal upstream/translation protocol that contributes `openai_chat`, contain all three 503 codes, `X-UCLI-Request-ID`, `Cache-Control: no-store`, prohibit `models[0]`, and include the required handoff YAML keys.
 
 - [ ] **Step 2: Run the documentation contract and confirm the red state**
 
@@ -631,8 +641,8 @@ Create `docs/ucli-client-model-protocol-upgrade.md` with these mandatory section
 - Capture sanitized HTTP diagnostics before asserting stream success.
 
 ## 测试矩阵
-- Contract fixtures for all protocols and missing/unknown values.
-- Provider selection for Responses, Chat, Anthropic, and Gemini.
+- Contract fixtures for all three public protocols, the internal `GEMINI` projection, and missing/unknown values.
+- Provider selection for Responses, Chat, and Anthropic; Gemini upstream mappings are selected through public Chat capability.
 - Empty-compatible-model behavior.
 - Three stable 503 failures and retryable semantics.
 - Live model stream and cleanup.
@@ -673,7 +683,7 @@ Replace the English shorthand in the final document with clear Chinese explanati
 Add this operator statement to `README.md`:
 
 ```markdown
-服务端模型目录通过 `protocols` 声明每个模型可调用的 Gateway 协议。UCLI 必须按 `openai_responses`、`openai_chat`、`anthropic_messages` 或 `gemini` 能力选择模型和端点，不能假设列表首个模型支持 Responses。
+服务端模型目录通过 `protocols` 声明每个模型可调用的 Gateway 协议。UCLI 必须按 `openai_responses`、`openai_chat` 或 `anthropic_messages` 能力选择模型和端点，不能假设列表首个模型支持 Responses；`GEMINI` 是内部上游/转换协议，仅贡献公开 `openai_chat`。
 ```
 
 Add this deployment rule under `DEPLOY.md` configuration guidance:

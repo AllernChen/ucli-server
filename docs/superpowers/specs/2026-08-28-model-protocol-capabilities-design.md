@@ -8,6 +8,8 @@
 
 **客户端交付物：** `docs/ucli-client-model-protocol-upgrade.md`
 
+**实施更正（2026-08-28）：** 获批草案曾误将原生 `gemini` 列为公开目录协议。最终实现和本次发布只公开 `openai_responses`、`openai_chat`、`anthropic_messages`；`GEMINI` 上游映射只投影为公开 `openai_chat`。内部原生 `gemini` 路由仍保留，但在设计并实现客户端入口前不得通过 Bootstrap 或 Gateway 模型目录宣告。下文已按该更正更新，并取代草案中相反的描述。
+
 ## 背景
 
 UCLI 0.12.0 已通过授权预览、兑换、幂等兑换、刷新、Bootstrap 和模型列表联调，但在使用 `bootstrap.models[0]` 调用 `POST /gateway/v1/responses` 时失败。服务端日志确认该请求返回 503；同一时间窗口内 Responses 可用候选、配额拒绝和上游调用次数均为 0。
@@ -52,7 +54,6 @@ UCLI 0.12.0 已通过授权预览、兑换、幂等兑换、刷新、Bootstrap �
 openai_responses
 openai_chat
 anthropic_messages
-gemini
 ```
 
 数组按上述顺序稳定输出并去重。该枚举描述 UCLI 可以调用的 Gateway 协议，不直接等同于数据库中的上游协议。
@@ -120,9 +121,9 @@ Bootstrap 继续只返回当前账号可访问、已启用、未删除且 `conte
 | `OPENAI_RESPONSES` | `openai_responses` |
 | `OPENAI_CHAT` | `openai_chat` |
 | `ANTHROPIC_MESSAGES` | `anthropic_messages` |
-| `GEMINI` | `gemini`、`openai_chat` |
+| `GEMINI` | `openai_chat` |
 
-`GEMINI` 同时提供 `openai_chat` 是因为当前 Gateway 已实现 Chat 到 Gemini 的转换。不存在的转换不得通过能力目录宣告。
+`GEMINI` 提供 `openai_chat` 是因为当前 Gateway 已实现 Chat 到 Gemini 的转换。内部原生 `gemini` 路由继续存在，但当前没有客户端可调用的原生 Gemini Controller 端点，因此不得通过公开能力目录宣告；不存在的客户端入口或转换也不得宣告。
 
 协议聚合和稳定排序放入共享的 Gateway Core 纯函数；API 与 Gateway 各自查询目录数据，但必须调用同一纯函数，避免两处维护不同映射表。
 
@@ -181,7 +182,7 @@ Gateway 内部日志可以保存组织、账号和设备 UUID 以供授权范围
 
 - Bootstrap 类型增加必填 `protocols`，拒绝未知协议值和缺失字段。
 - 创建 Responses 配置或发起 Responses smoke 时，只从包含 `openai_responses` 的模型中选择。
-- 创建 OpenAI Chat、Anthropic 或 Gemini 配置时，分别按对应协议筛选。
+- 创建 OpenAI Chat 或 Anthropic 配置时，分别按对应公开协议筛选；Gemini 上游模型只能通过其投影的 `openai_chat` 能力选择。
 - 不再回退到 `models[0]`，也不根据模型名称或厂商猜测协议。
 - 没有兼容模型时显示“服务端未配置该协议模型”，不清除连接凭证，不影响本地能力和其他可用服务端协议。
 - 模型流请求在断言前记录 HTTP 状态、Content-Type、Cache-Control、稳定错误码、请求 ID、`retryable` 和是否收到非空流数据；不得记录响应正文中的敏感内容。
@@ -205,7 +206,7 @@ Gateway 内部日志可以保存组织、账号和设备 UUID 以供授权范围
 
 ### 服务端自动化测试
 
-- 纯函数测试覆盖四种上游协议到客户端协议的映射、去重和稳定顺序。
+- 纯函数测试覆盖四种上游映射协议到三种公开客户端协议的映射、去重和稳定顺序，并单独证明 `GEMINI` 只投影为 `openai_chat`。
 - Bootstrap 测试覆盖启用/删除状态、有效 context size、访问策略、映射、通道和密钥过滤。
 - 测试证明 `UNHEALTHY`、隔离和熔断不会移除静态 `protocols`，禁用密钥会移除对应能力。
 - Gateway 模型列表与 Bootstrap 对相同输入返回一致的模型 ID 和协议集合。

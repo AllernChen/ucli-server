@@ -17,6 +17,12 @@ describe('model protocol capabilities', () => {
     ])).toEqual(['openai_responses', 'openai_chat', 'anthropic_messages'])
   })
 
+  it('projects an eligible Gemini-only mapping as public OpenAI Chat', () => {
+    const protocols = configuredClientProtocols([mapping('GEMINI')])
+    expect(protocols).toEqual(['openai_chat'])
+    expect(protocols).not.toContain('gemini')
+  })
+
   it.each([
     ['disabled mapping', { enabled: false }],
     ['archived mapping', { deletedAt: new Date() }],
