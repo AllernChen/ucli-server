@@ -65,7 +65,11 @@ Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/v1/auth/setup `
 
 API 文档位于 `/docs`，桌面端接入说明见 [docs/ucli-client-protocol.md](docs/ucli-client-protocol.md)，供应商接入示例见 [docs/providers.md](docs/providers.md)。
 
-## 私有化部署
+## 环境要求
+
+生产部署目标为 Linux x86_64，要求 Docker Engine 24+ 与 Docker Compose v2，并可访问既有 PostgreSQL、Redis、MinIO 外部网络。完整端口、网络、备份和回滚要求见 `DEPLOY.md`。
+
+## 快速开始（私有化部署）
 
 生成随机配置并启动：
 
