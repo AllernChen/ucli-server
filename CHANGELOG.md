@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 0.3.1 - 2026-08-30
+
+- 修复 Skills catalog 将 Prisma `BigInt` 序列化为字符串的问题，`sizeBytes` 现在稳定返回 JSON number，满足 UCLI 客户端目录合同。
 - 模型目录新增稳定的 Gateway 协议能力列表；Bootstrap 与 Gateway 模型列表保持一致，并用 `model_protocol_unavailable`、`model_channel_unavailable`、`upstream_unavailable` 区分路由失败。
 - 新增独立 UCLI 模型协议能力升级交接文档；客户端不再假设模型列表首项支持 Responses。
 - 修复 Bootstrap 下发 `contextSize: null` 导致 UCLI 注册后无法加载服务端能力：公共模型发布时要求正整数上下文长度，并隔离历史无效目录项。
