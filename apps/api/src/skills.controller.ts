@@ -19,7 +19,7 @@ export class SkillsController {
       OR: [{ visibility: 'GLOBAL' }, { organizations: { some: { organizationId: request.principal.organizationId } } }]
     }, include: { skill: true }, orderBy: { createdAt: 'asc' }, take: 100 })
     return versions.map(version => ({
-      id: version.id, version: version.version, sha256: version.sha256, sizeBytes: version.sizeBytes,
+      id: version.id, version: version.version, sha256: version.sha256, sizeBytes: Number(version.sizeBytes),
       publishedAt: version.publishedAt, createdAt: version.createdAt,
       skill: { slug: version.skill.slug, name: version.skill.name, description: version.skill.description },
       downloadUrl: `${process.env.PUBLIC_URL || 'http://localhost:3000'}/api/v1/skills/${version.id}/download`
