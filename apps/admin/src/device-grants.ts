@@ -85,6 +85,13 @@ export function grantStatusLabel(status: DeviceGrantStatus): string {
   return grantStatusLabels[status]
 }
 
+export function editableManagedUserRoles(actorRole: ManagedUserRole, targetRole: ManagedUserRole, isSelf = false): ManagedUserRole[] {
+  if (isSelf) return []
+  if (actorRole === 'PLATFORM_ADMIN') return ['MEMBER', 'ORG_ADMIN', 'PLATFORM_ADMIN']
+  if (actorRole === 'ORG_ADMIN' && targetRole !== 'PLATFORM_ADMIN') return ['MEMBER', 'ORG_ADMIN']
+  return []
+}
+
 export function grantActions(grant: Pick<DeviceGrantSummary, 'status'>): GrantAction[] {
   if (grant.status === 'DELETED') return []
   if (grant.status === 'DISABLED') return ['enable', 'edit-expiry', 'delete']

@@ -4,12 +4,12 @@ import { describe, expect, it } from 'vitest'
 import { plainToInstance } from 'class-transformer'
 import { validate } from 'class-validator'
 import { UsersService } from '../../apps/api/src/users.service.js'
-import { CreateManagedUserDto } from '../../apps/api/src/device-grants.dto.js'
+import { CreateManagedUserDto, UpdateManagedUserRoleDto } from '../../apps/api/src/device-grants.dto.js'
 
 const schema = readFileSync('prisma/schema.prisma', 'utf8')
 const migration = readFileSync('prisma/migrations/202608260001_device_grants/migration.sql', 'utf8')
 
-function makeUsersHarness(options: { role?: string; secondOrganization?: boolean; sharedAccount?: boolean; otherRole?: string; promoteBeforeLifecycleUpdate?: boolean } = {}) {
+function makeUsersHarness(options: { role?: string; secondOrganization?: boolean; sharedAccount?: boolean; otherRole?: string; promoteBeforeLifecycleUpdate?: boolean; demoteActorBeforeRoleUpdate?: boolean; roleUpdateConflicts?: number } = {}) {
   const state: any = {
     accounts: [{
       id: 'account-1', email: 'existing@example.com', displayName: 'Existing user', passwordHash: null,
@@ -17,9 +17,15 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
     }],
     memberships: [{ organizationId: 'org-1', accountId: 'account-1', role: options.role || 'MEMBER', status: 'ACTIVE' }],
     devices: [{ id: 'device-1', organizationId: 'org-1', accountId: 'account-1' }],
-    grants: [{ id: 'grant-1', organizationId: 'org-1', accountId: 'account-1', tokenHash: 'secret-hash' }]
+    grants: [{ id: 'grant-1', organizationId: 'org-1', accountId: 'account-1', tokenHash: 'secret-hash', deletedAt: null }]
   }
+  state.actorMemberships = [
+    { organizationId: 'org-1', accountId: 'platform-1', role: 'PLATFORM_ADMIN', status: 'ACTIVE' },
+    { organizationId: 'org-1', accountId: 'admin-1', role: 'ORG_ADMIN', status: 'ACTIVE' },
+    { organizationId: 'org-1', accountId: 'member-2', role: 'MEMBER', status: 'ACTIVE' }
+  ]
   state.lifecycleUpdateWheres = []
+  state.transactionAttempts = 0
   if (options.secondOrganization) {
     state.accounts.push({
       id: 'account-2', email: 'other@example.com', displayName: 'Other user', passwordHash: null,
@@ -40,15 +46,19 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
   const matchesMembership = (membership: any, where: any) =>
     (!where.organizationId || membership.organizationId === where.organizationId) &&
     (!where.accountId || membership.accountId === where.accountId) &&
-    (!where.role || membership.role === where.role) && matchesAccount(accountFor(membership.accountId), where.account)
-  const membershipWithAccount = (membership: any) => ({
+    (!where.role || (typeof where.role === 'string' ? membership.role === where.role : where.role.in.includes(membership.role))) &&
+    matchesAccount(accountFor(membership.accountId), where.account)
+  const matchesGrant = (grant: any, where: any) => !where ||
+    (where.deletedAt === undefined || grant.deletedAt === where.deletedAt)
+  const membershipWithAccount = (membership: any, select: any) => ({
     ...membership,
     account: {
       ...accountFor(membership.accountId),
       _count: {
         select: undefined,
         devices: state.devices.filter((device: any) => device.accountId === membership.accountId && device.organizationId === membership.organizationId).length,
-        deviceGrants: state.grants.filter((grant: any) => grant.accountId === membership.accountId && grant.organizationId === membership.organizationId).length
+        deviceGrants: state.grants.filter((grant: any) => grant.accountId === membership.accountId && grant.organizationId === membership.organizationId &&
+          matchesGrant(grant, select.account.select._count.select.deviceGrants.where)).length
       },
       devices: state.devices.filter((device: any) => device.accountId === membership.accountId && device.organizationId === membership.organizationId)
         .map((device: any) => ({ lastSeenAt: device.lastSeenAt || null }))
@@ -81,25 +91,35 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
         return membership
       },
       count: async ({ where }: any) => state.memberships.filter((membership: any) => matchesMembership(membership, where)).length,
-      findMany: async ({ where, skip, take }: any) => {
+      findMany: async ({ where, skip, take, select }: any) => {
         const items = state.memberships.filter((membership: any) => matchesMembership(membership, where))
-        return items.slice(skip || 0, take === undefined ? undefined : (skip || 0) + take).map(membershipWithAccount)
+        return items.slice(skip || 0, take === undefined ? undefined : (skip || 0) + take).map((membership: any) => membershipWithAccount(membership, select))
       },
-      findUnique: async ({ where }: any) => {
+      findUnique: async ({ where, select }: any) => {
         const key = where.organizationId_accountId
-        const membership = state.memberships.find((item: any) => item.organizationId === key.organizationId && item.accountId === key.accountId)
+        const membership = [...state.memberships, ...state.actorMemberships]
+          .find((item: any) => item.organizationId === key.organizationId && item.accountId === key.accountId)
         if (!membership) return null
+        if (!select?.account) return { ...membership }
         const account = accountFor(membership.accountId)
         return {
           ...membership,
           account: {
             id: account.id, email: account.email, displayName: account.displayName, status: account.status, createdAt: account.createdAt,
             devices: state.devices.filter((device: any) => device.accountId === account.id && device.organizationId === membership.organizationId)
-              .map((device: any) => ({
-                id: device.id, name: 'Existing device', installationId: null, platform: null, clientVersion: null,
-                revokedAt: null, lastSeenAt: null, createdAt: account.createdAt, grant: null
-              })),
-            deviceGrants: state.grants.filter((grant: any) => grant.accountId === account.id && grant.organizationId === membership.organizationId)
+              .map((device: any) => {
+                const grant = state.grants.find((item: any) => item.deviceId === device.id)
+                return {
+                  id: device.id, name: 'Existing device', installationId: null, platform: null, clientVersion: null,
+                  revokedAt: device.revokedAt || null, lastSeenAt: null, createdAt: account.createdAt,
+                  grant: grant ? {
+                    id: grant.id, tokenHint: '••••secret', expiresAt: grant.expiresAt || null, disabledAt: grant.disabledAt || null,
+                    deletedAt: grant.deletedAt || null, boundAt: grant.boundAt || null, deviceId: grant.deviceId || null
+                  } : null
+                }
+              }),
+            deviceGrants: state.grants.filter((grant: any) => grant.accountId === account.id && grant.organizationId === membership.organizationId &&
+              matchesGrant(grant, select?.account?.select?.deviceGrants?.where))
               .map((grant: any) => ({
                 id: grant.id, tokenHint: '••••secret', expiresAt: grant.expiresAt || null, disabledAt: grant.disabledAt || null, deletedAt: grant.deletedAt || null,
                 boundAt: grant.boundAt || null, deviceId: grant.deviceId || null, createdAt: account.createdAt, updatedAt: account.createdAt
@@ -116,12 +136,22 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
       updateMany: async ({ where, data }: any) => {
         state.lifecycleUpdateWheres.push(structuredClone(where))
         if (options.promoteBeforeLifecycleUpdate) state.memberships[0].role = 'PLATFORM_ADMIN'
-        const memberships = state.memberships.filter((membership: any) => matchesMembership(membership, where))
+        if (options.demoteActorBeforeRoleUpdate && where.accountId === 'admin-1') state.actorMemberships[1].role = 'MEMBER'
+        const memberships = [...state.memberships, ...state.actorMemberships]
+          .filter((membership: any) => matchesMembership(membership, where))
         memberships.forEach((membership: any) => Object.assign(membership, data))
         return { count: memberships.length }
       }
     },
-    $transaction: async (operation: any) => operation(prisma)
+    $transaction: async (operation: any) => {
+      state.transactionAttempts++
+      if (state.transactionAttempts <= (options.roleUpdateConflicts || 0)) {
+        const error: any = new Error('Transaction write conflict')
+        error.code = 'P2034'
+        throw error
+      }
+      return operation(prisma)
+    }
   }
   return { service: new UsersService(prisma), state }
 }
@@ -205,6 +235,95 @@ describe('managed users', () => {
       .resolves.toMatchObject({ status: 'DISABLED' })
   })
 
+  it('excludes soft-deleted grants from current authorization counts and user detail', async () => {
+    const { service, state } = makeUsersHarness()
+    state.grants[0].deletedAt = new Date('2026-08-27T00:00:00Z')
+    state.grants[0].deviceId = 'device-1'
+    state.devices[0].revokedAt = new Date('2026-08-27T00:00:00Z')
+
+    await expect(service.list('org-1', { limit: 50, offset: 0, q: undefined }))
+      .resolves.toMatchObject({ items: [expect.objectContaining({ deviceGrantCount: 0 })] })
+    await expect(service.detail('org-1', 'account-1')).resolves.toMatchObject({
+      deviceCount: 1,
+      deviceGrantCount: 0,
+      deviceGrants: [],
+      devices: [expect.objectContaining({ id: 'device-1', revokedAt: state.devices[0].revokedAt, grant: null })]
+    })
+  })
+
+  it('lets platform administrators change a role only in their current organization', async () => {
+    const { service, state } = makeUsersHarness({ sharedAccount: true })
+
+    await expect(service.updateRole(
+      { sub: 'platform-1', organizationId: 'org-1', role: 'PLATFORM_ADMIN' },
+      'account-1', 'ORG_ADMIN'
+    )).resolves.toEqual({ role: 'ORG_ADMIN' })
+
+    expect(state.memberships).toEqual(expect.arrayContaining([
+      expect.objectContaining({ organizationId: 'org-1', accountId: 'account-1', role: 'ORG_ADMIN' }),
+      expect.objectContaining({ organizationId: 'org-2', accountId: 'account-1', role: 'MEMBER' })
+    ]))
+  })
+
+  it('prevents organization administrators from granting or editing platform administrator access', async () => {
+    const orgAdmin = { sub: 'admin-1', organizationId: 'org-1', role: 'ORG_ADMIN' as const }
+    const member = makeUsersHarness()
+    await expect(member.service.updateRole(orgAdmin, 'account-1', 'PLATFORM_ADMIN'))
+      .rejects.toMatchObject({ status: 403 })
+    expect(member.state.memberships[0].role).toBe('MEMBER')
+
+    const platformAdmin = makeUsersHarness({ role: 'PLATFORM_ADMIN' })
+    await expect(platformAdmin.service.updateRole(orgAdmin, 'account-1', 'MEMBER'))
+      .rejects.toMatchObject({ status: 403 })
+    expect(platformAdmin.state.memberships[0].role).toBe('PLATFORM_ADMIN')
+  })
+
+  it('rejects role edits when the caller is not an administrator', async () => {
+    const { service, state } = makeUsersHarness()
+    await expect(service.updateRole(
+      { sub: 'member-2', organizationId: 'org-1', role: 'MEMBER' },
+      'account-1', 'ORG_ADMIN'
+    )).rejects.toMatchObject({ status: 403 })
+    expect(state.memberships[0].role).toBe('MEMBER')
+  })
+
+  it('prevents administrators from editing their own role', async () => {
+    const { service, state } = makeUsersHarness({ role: 'PLATFORM_ADMIN' })
+    await expect(service.updateRole(
+      { sub: 'account-1', organizationId: 'org-1', role: 'PLATFORM_ADMIN' },
+      'account-1', 'MEMBER'
+    )).rejects.toMatchObject({ status: 403 })
+    expect(state.memberships[0].role).toBe('PLATFORM_ADMIN')
+  })
+
+  it('rechecks the caller role inside the role update transaction', async () => {
+    const { service, state } = makeUsersHarness({ demoteActorBeforeRoleUpdate: true })
+    await expect(service.updateRole(
+      { sub: 'admin-1', organizationId: 'org-1', role: 'ORG_ADMIN' },
+      'account-1', 'ORG_ADMIN'
+    )).rejects.toMatchObject({ status: 403 })
+    expect(state.memberships[0].role).toBe('MEMBER')
+  })
+
+  it('retries a transient role-update deadlock without applying a partial change', async () => {
+    const { service, state } = makeUsersHarness({ roleUpdateConflicts: 1 })
+    await expect(service.updateRole(
+      { sub: 'platform-1', organizationId: 'org-1', role: 'PLATFORM_ADMIN' },
+      'account-1', 'ORG_ADMIN'
+    )).resolves.toEqual({ role: 'ORG_ADMIN' })
+    expect(state.memberships[0].role).toBe('ORG_ADMIN')
+    expect(state.transactionAttempts).toBe(2)
+  })
+
+  it('allows organization administrators to promote members to organization administrators', async () => {
+    const { service, state } = makeUsersHarness()
+    await expect(service.updateRole(
+      { sub: 'admin-1', organizationId: 'org-1', role: 'ORG_ADMIN' },
+      'account-1', 'ORG_ADMIN'
+    )).resolves.toEqual({ role: 'ORG_ADMIN' })
+    expect(state.memberships[0].role).toBe('ORG_ADMIN')
+  })
+
   it('returns user detail without password or grant token fields', async () => {
     const { service } = makeUsersHarness()
     const result = await service.detail('org-1', 'account-1')
@@ -227,6 +346,14 @@ describe('managed users', () => {
     expect(await validate(valid)).toEqual([])
 
     const invalid = plainToInstance(CreateManagedUserDto, { email: 'member@example.com', displayName: ' ' })
+    expect(await validate(invalid)).not.toEqual([])
+  })
+
+  it('accepts only persisted membership roles when editing authorization', async () => {
+    const valid = plainToInstance(UpdateManagedUserRoleDto, { role: 'ORG_ADMIN' })
+    expect(await validate(valid)).toEqual([])
+
+    const invalid = plainToInstance(UpdateManagedUserRoleDto, { role: 'OWNER' })
     expect(await validate(invalid)).not.toEqual([])
   })
 })

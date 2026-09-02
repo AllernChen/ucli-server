@@ -9,6 +9,8 @@ describe('device grant admin views', () => {
   it('creates users and links each row to its detail page', () => {
     expect(usersView).toContain("api('/api/v1/admin/users'")
     expect(usersView).toContain('`/users/${user.id}`')
+    expect(usersView).toContain('`/api/v1/admin/users/${user.id}/role`')
+    expect(usersView).toContain('编辑角色')
   })
 
   it('loads user grants and devices and creates nested grants', () => {

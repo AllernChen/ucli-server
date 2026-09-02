@@ -1,5 +1,6 @@
 import { Transform, Type } from 'class-transformer'
 import { Allow, IsDateString, IsEmail, IsEnum, IsOptional, IsString, Length, ValidateIf } from 'class-validator'
+import { Role } from '@prisma/client'
 import { PageQueryDto } from './catalog.dto.js'
 
 export class CreateManagedUserDto {
@@ -12,6 +13,10 @@ export class CreateManagedUserDto {
 
 export class ManagedUserPageQueryDto extends PageQueryDto {
   @IsOptional() @Transform(({ value }) => typeof value === 'string' ? value.trim() : value) @IsString() @Length(1, 200) q?: string
+}
+
+export class UpdateManagedUserRoleDto {
+  @IsEnum(Role) role!: Role
 }
 
 export class CreateDeviceGrantDto {
