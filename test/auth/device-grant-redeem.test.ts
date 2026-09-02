@@ -130,10 +130,15 @@ function makeRedeemHarness(options: HarnessOptions = {}) {
 function errorCode(error: unknown) { return (error as any).getResponse().code }
 let initialJwtSecret: string | undefined
 beforeEach(() => { initialJwtSecret = process.env.JWT_SECRET; process.env.JWT_SECRET = 'test-secret' })
-afterEach(() => { if (initialJwtSecret === undefined) delete process.env.JWT_SECRET; else process.env.JWT_SECRET = initialJwtSecret })
+afterEach(() => {
+  vi.useRealTimers()
+  if (initialJwtSecret === undefined) delete process.env.JWT_SECRET; else process.env.JWT_SECRET = initialJwtSecret
+})
 
 describe('link-based device grant redemption', () => {
   it('previews independent link and authorization lifecycle with server time', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-27T00:00:00.000Z'))
     const { service, state } = makeRedeemHarness({ grantExpiresAt: new Date('2026-12-31T00:00:00.000Z'), linkExpiresAt: new Date('2026-09-01T00:00:00.000Z') })
     const preview = await service.preview(link)
     expect(preview).toMatchObject({ account: { id: 'account-1', displayName: '张三' }, organization: { id: 'org-1', name: '示例组织' }, link: { status: 'AVAILABLE', expiresAt: new Date('2026-09-01T00:00:00.000Z') }, authorization: { status: 'AVAILABLE', expiresAt: new Date('2026-12-31T00:00:00.000Z'), serverTime: expect.any(String) } })

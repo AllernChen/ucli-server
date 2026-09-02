@@ -4,6 +4,7 @@ import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import { deriveDeviceGrantStatus, type DeviceGrantStatus } from '../../../packages/security/src/device-grants.js'
 import { deriveDeviceGrantLinkStatus, type DeviceGrantLinkStatus } from '../../../packages/security/src/device-grant-links.js'
 import type { CreateManagedUserDto, ManagedUserPageQueryDto } from './device-grants.dto.js'
+import type { AuthPrincipal } from '../../../packages/security/src/auth.js'
 
 export interface ManagedUser {
   id: string
@@ -93,6 +94,10 @@ function isUniqueConstraint(error: unknown): error is { code: string } {
   return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'P2002'
 }
 
+function isTransactionConflict(error: unknown): error is { code: string } {
+  return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'P2034'
+}
+
 @Injectable()
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
@@ -132,7 +137,7 @@ export class UsersService {
           organizationId: true, role: true, status: true,
           account: { select: {
             id: true, email: true, displayName: true, createdAt: true,
-            _count: { select: { devices: { where: { organizationId } }, deviceGrants: { where: { organizationId } } } },
+            _count: { select: { devices: { where: { organizationId } }, deviceGrants: { where: { organizationId, deletedAt: null } } } },
             devices: { where: { organizationId }, orderBy: { lastSeenAt: { sort: 'desc', nulls: 'last' } }, take: 1, select: { lastSeenAt: true } }
           } }
         }
@@ -168,7 +173,7 @@ export class UsersService {
               } }
             } }
           } },
-          deviceGrants: { where: { organizationId }, select: {
+          deviceGrants: { where: { organizationId, deletedAt: null }, select: {
             id: true, expiresAt: true, disabledAt: true, deletedAt: true,
             boundAt: true, deviceId: true, createdAt: true, updatedAt: true,
             links: { orderBy: { issuanceOrder: 'desc' }, take: 1, select: {
@@ -185,7 +190,7 @@ export class UsersService {
       status: membership.status, role: membership.role, createdAt: account.createdAt, lastSeenAt: account.devices.reduce<Date | null>((latest, device) => !latest || (device.lastSeenAt && device.lastSeenAt > latest) ? device.lastSeenAt : latest, null),
       deviceCount: account.devices.length, deviceGrantCount: account.deviceGrants.length,
       devices: account.devices.map(device => {
-        if (!device.grant) return { ...device, grant: null }
+        if (!device.grant || device.grant.deletedAt) return { ...device, grant: null }
         const { links, ...grant } = device.grant
         return { ...device, grant: { ...grant, status: deriveDeviceGrantStatus(device.grant, now), currentLink: serializeCurrentLink(device.grant, now) } }
       }),
@@ -204,6 +209,48 @@ export class UsersService {
   async enable(organizationId: string, accountId: string): Promise<{ status: 'ACTIVE' }> {
     await this.updateStatus(organizationId, accountId, 'ACTIVE')
     return { status: 'ACTIVE' }
+  }
+
+  async updateRole(
+    actor: Pick<AuthPrincipal, 'sub' | 'organizationId' | 'role'>,
+    accountId: string,
+    role: Role
+  ): Promise<{ role: Role }> {
+    if (actor.role !== Role.PLATFORM_ADMIN && actor.role !== Role.ORG_ADMIN) {
+      throw new ForbiddenException('Administrator role required')
+    }
+    if (actor.sub === accountId) throw new ForbiddenException('Administrators cannot edit their own role')
+    const orgAdminRoles = [Role.MEMBER, Role.ORG_ADMIN]
+    if (actor.role === Role.ORG_ADMIN && role === Role.PLATFORM_ADMIN) {
+      throw new ForbiddenException('Organization administrator cannot grant platform administrator access')
+    }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await this.prisma.$transaction(async transaction => {
+          const authorized = await transaction.membership.updateMany({
+            where: {
+              organizationId: actor.organizationId, accountId: actor.sub,
+              role: actor.role, status: AccountStatus.ACTIVE
+            },
+            data: { role: actor.role }
+          })
+          if (authorized.count !== 1) throw new ForbiddenException('Administrator role is no longer active')
+          const editableRoles = actor.role === Role.PLATFORM_ADMIN ? Object.values(Role) : orgAdminRoles
+          const updated = await transaction.membership.updateMany({
+            where: { organizationId: actor.organizationId, accountId, role: { in: editableRoles } }, data: { role }
+          })
+          if (updated.count === 1) return { role }
+          const membership = await transaction.membership.findUnique({
+            where: { organizationId_accountId: { organizationId: actor.organizationId, accountId } }, select: { role: true }
+          })
+          if (!membership) throw new NotFoundException('Managed user not found')
+          throw new ForbiddenException('Managed user role cannot be updated')
+        })
+      } catch (error) {
+        if (!isTransactionConflict(error) || attempt === 2) throw error
+      }
+    }
+    throw new Error('Role update transaction retry exhausted')
   }
 
   private async updateStatus(organizationId: string, accountId: string, status: 'ACTIVE' | 'DISABLED') {

@@ -5,7 +5,7 @@ import { RequestMethod } from '@nestjs/common'
 import { UsersController } from '../../apps/api/src/users.controller.js'
 
 const accountId = '10000000-0000-4000-8000-000000000001'
-const request = { principal: { organizationId: '20000000-0000-4000-8000-000000000001' } }
+const request = { principal: { sub: '30000000-0000-4000-8000-000000000001', organizationId: '20000000-0000-4000-8000-000000000001', role: 'PLATFORM_ADMIN' } }
 const input = { email: 'member@example.com', displayName: 'Member' }
 const query = { limit: 50, offset: 0, q: 'member' }
 
@@ -13,7 +13,7 @@ function makeController() {
   const users = {
     create: vi.fn(async () => ({ id: accountId })), list: vi.fn(async () => ({ items: [] })),
     detail: vi.fn(async () => ({ id: accountId })), disable: vi.fn(async () => ({ status: 'DISABLED' })),
-    enable: vi.fn(async () => ({ status: 'ACTIVE' }))
+    enable: vi.fn(async () => ({ status: 'ACTIVE' })), updateRole: vi.fn(async () => ({ role: 'ORG_ADMIN' }))
   }
   return { controller: new UsersController(users as any), users }
 }
@@ -45,5 +45,14 @@ describe('managed users controller', () => {
     expect(Reflect.getMetadata(METHOD_METADATA, controller.disable)).toBe(RequestMethod.POST)
     expect(Reflect.getMetadata(PATH_METADATA, controller.enable)).toBe(':id/enable')
     expect(Reflect.getMetadata(METHOD_METADATA, controller.enable)).toBe(RequestMethod.POST)
+  })
+
+  it('delegates role authorization changes with the authenticated principal', async () => {
+    const { controller, users } = makeController()
+    await expect(controller.updateRole(request, accountId, { role: 'ORG_ADMIN' } as any))
+      .resolves.toEqual({ role: 'ORG_ADMIN' })
+    expect(users.updateRole).toHaveBeenCalledWith(request.principal, accountId, 'ORG_ADMIN')
+    expect(Reflect.getMetadata(PATH_METADATA, controller.updateRole)).toBe(':id/role')
+    expect(Reflect.getMetadata(METHOD_METADATA, controller.updateRole)).toBe(RequestMethod.PATCH)
   })
 })

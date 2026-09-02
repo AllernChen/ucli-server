@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createExclusiveAsyncRequestGate, createRequestLifecycle, deviceGrantErrorMessage, deviceGrantQuery, grantActions, grantExpiryPayload, grantStatusLabel, linkExpiryPayload, linkStatusLabel, type DeviceGrantSummary, type DeviceGrantLinkStatus, type ManagedUser } from '../../apps/admin/src/device-grants.js'
+import { createExclusiveAsyncRequestGate, createRequestLifecycle, deviceGrantErrorMessage, deviceGrantQuery, editableManagedUserRoles, grantActions, grantExpiryPayload, grantStatusLabel, linkExpiryPayload, linkStatusLabel, type DeviceGrantSummary, type DeviceGrantLinkStatus, type ManagedUser } from '../../apps/admin/src/device-grants.js'
 
 type Expect<T extends true> = T
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
@@ -62,6 +62,13 @@ describe('device grant administration helpers', () => {
   it('builds encoded grouped-list filters', () => {
     expect(deviceGrantQuery({ status: 'EXPIRED', q: '张 三', limit: 50, offset: 0 }))
       .toBe('status=EXPIRED&q=%E5%BC%A0+%E4%B8%89&limit=50&offset=0')
+  })
+
+  it('limits editable role authorizations to the signed-in administrator hierarchy', () => {
+    expect(editableManagedUserRoles('PLATFORM_ADMIN', 'PLATFORM_ADMIN')).toEqual(['MEMBER', 'ORG_ADMIN', 'PLATFORM_ADMIN'])
+    expect(editableManagedUserRoles('ORG_ADMIN', 'MEMBER')).toEqual(['MEMBER', 'ORG_ADMIN'])
+    expect(editableManagedUserRoles('ORG_ADMIN', 'PLATFORM_ADMIN')).toEqual([])
+    expect(editableManagedUserRoles('PLATFORM_ADMIN', 'PLATFORM_ADMIN', true)).toEqual([])
   })
 
   it('labels and exposes only valid actions for every derived grant status', () => {
