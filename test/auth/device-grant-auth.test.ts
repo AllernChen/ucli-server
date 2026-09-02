@@ -156,6 +156,12 @@ describe('live device grant authorization', () => {
     expect(prisma.device.update).toHaveBeenCalledOnce()
   })
 
+  it.each(['PLATFORM_ADMIN', 'ORG_ADMIN', 'MEMBER'])('accepts a live device access token for an active %s grant owner', async membershipRole => {
+    const { guard } = makeGuard({ membershipRole })
+    const token = signAccessToken({ sub: 'account-1', organizationId: 'org-1', deviceId: 'device-1', role: membershipRole as any, tokenVersion: 1 })
+    await expect(guard.canActivate(makeRequest(token).context)).resolves.toBe(true)
+  })
+
   it('rejects a disabled membership for a device using the stable account-inactive error', async () => {
     const { guard } = makeGuard({ membershipStatus: 'DISABLED' })
     const token = signAccessToken({ sub: 'account-1', organizationId: 'org-1', deviceId: 'device-1', role: 'MEMBER', tokenVersion: 1 })

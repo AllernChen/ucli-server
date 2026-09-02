@@ -17,7 +17,8 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
     }],
     memberships: [{ organizationId: 'org-1', accountId: 'account-1', role: options.role || 'MEMBER', status: 'ACTIVE' }],
     devices: [{ id: 'device-1', organizationId: 'org-1', accountId: 'account-1' }],
-    grants: [{ id: 'grant-1', organizationId: 'org-1', accountId: 'account-1', tokenHash: 'secret-hash', deletedAt: null }]
+    grants: [{ id: 'grant-1', organizationId: 'org-1', accountId: 'account-1', deletedAt: null }],
+    links: [{ id: 'link-1', deviceGrantId: 'grant-1', issuanceOrder: 1n, secretHash: 'secret-hash', secretEncrypted: { ciphertext: 'encrypted-secret' }, secretHint: '••••secret', expiresAt: null, revokedAt: null, consumedAt: null, createdAt: new Date('2026-08-26T00:00:00Z') }]
   }
   state.actorMemberships = [
     { organizationId: 'org-1', accountId: 'platform-1', role: 'PLATFORM_ADMIN', status: 'ACTIVE' },
@@ -102,6 +103,10 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
         if (!membership) return null
         if (!select?.account) return { ...membership }
         const account = accountFor(membership.accountId)
+        const linkOrderBy = select?.account?.select?.deviceGrants?.select?.links?.orderBy || { createdAt: 'desc' }
+        const linkOrderField = Object.keys(linkOrderBy)[0]
+        const latestLink = (grantId: string) => state.links.filter((link: any) => link.deviceGrantId === grantId)
+          .sort((a: any, b: any) => a[linkOrderField] === b[linkOrderField] ? 0 : a[linkOrderField] > b[linkOrderField] ? -1 : 1).slice(0, 1)
         return {
           ...membership,
           account: {
@@ -113,16 +118,18 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
                   id: device.id, name: 'Existing device', installationId: null, platform: null, clientVersion: null,
                   revokedAt: device.revokedAt || null, lastSeenAt: null, createdAt: account.createdAt,
                   grant: grant ? {
-                    id: grant.id, tokenHint: '••••secret', expiresAt: grant.expiresAt || null, disabledAt: grant.disabledAt || null,
-                    deletedAt: grant.deletedAt || null, boundAt: grant.boundAt || null, deviceId: grant.deviceId || null
+                    id: grant.id, expiresAt: grant.expiresAt || null, disabledAt: grant.disabledAt || null,
+                    deletedAt: grant.deletedAt || null, boundAt: grant.boundAt || null, deviceId: grant.deviceId || null,
+                    links: latestLink(grant.id)
                   } : null
                 }
               }),
             deviceGrants: state.grants.filter((grant: any) => grant.accountId === account.id && grant.organizationId === membership.organizationId &&
               matchesGrant(grant, select?.account?.select?.deviceGrants?.where))
               .map((grant: any) => ({
-                id: grant.id, tokenHint: '••••secret', expiresAt: grant.expiresAt || null, disabledAt: grant.disabledAt || null, deletedAt: grant.deletedAt || null,
-                boundAt: grant.boundAt || null, deviceId: grant.deviceId || null, createdAt: account.createdAt, updatedAt: account.createdAt
+                id: grant.id, expiresAt: grant.expiresAt || null, disabledAt: grant.disabledAt || null, deletedAt: grant.deletedAt || null,
+                boundAt: grant.boundAt || null, deviceId: grant.deviceId || null, createdAt: account.createdAt, updatedAt: account.createdAt,
+                links: latestLink(grant.id)
               }))
           }
         }
@@ -324,12 +331,18 @@ describe('managed users', () => {
     expect(state.memberships[0].role).toBe('ORG_ADMIN')
   })
 
-  it('returns user detail without password or grant token fields', async () => {
-    const { service } = makeUsersHarness()
+  it('returns user detail with a latest link summary and no password or grant credential fields', async () => {
+    const { service, state } = makeUsersHarness()
+    const linkExpiry = new Date('2026-08-25T00:00:00.000Z')
+    state.links.push({ id: 'link-2', deviceGrantId: 'grant-1', issuanceOrder: 2n, secretHash: 'latest-secret-hash', secretEncrypted: { ciphertext: 'latest-encrypted-secret' }, secretHint: '••••abcd', expiresAt: linkExpiry, revokedAt: null, consumedAt: null, createdAt: new Date('2026-08-25T00:00:00Z') })
     const result = await service.detail('org-1', 'account-1')
     expect(result).toMatchObject({ id: 'account-1', organizationId: 'org-1', role: 'MEMBER' })
+    expect(result.deviceGrants[0]).toMatchObject({ id: 'grant-1', currentLink: { id: 'link-2', secretHint: '••••abcd', status: 'EXPIRED', expiresAt: linkExpiry } })
+    expect(result.deviceGrants[0]).not.toHaveProperty('tokenHash')
+    expect(result.deviceGrants[0]).not.toHaveProperty('tokenHint')
     expect(JSON.stringify(result)).not.toContain('passwordHash')
     expect(JSON.stringify(result)).not.toContain('secret-hash')
+    expect(JSON.stringify(result)).not.toContain('latest-encrypted-secret')
   })
 
   it('derives user-detail grant statuses from one captured lifecycle time', async () => {
@@ -338,6 +351,11 @@ describe('managed users', () => {
     const result = await service.detail('org-1', 'account-1')
     expect(result.deviceGrants).toEqual([expect.objectContaining({ id: 'grant-1', status: 'DISABLED' })])
     expect(JSON.stringify(result)).not.toContain('secret-hash')
+  })
+
+  it.each(['MEMBER', 'ORG_ADMIN', 'PLATFORM_ADMIN'])('returns user detail for the %s role', async role => {
+    const { service } = makeUsersHarness({ role })
+    await expect(service.detail('org-1', 'account-1')).resolves.toMatchObject({ role })
   })
 
   it('normalizes valid creation input and rejects a blank display name', async () => {

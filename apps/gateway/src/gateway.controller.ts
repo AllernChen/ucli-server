@@ -11,7 +11,10 @@ export class GatewayController {
     if (!request.principal.deviceId) throw new UnauthorizedException('A UCLI device token is required')
     const models = await this.gateway.models({ organizationId: request.principal.organizationId,
       accountId: request.principal.sub, role: request.principal.role })
-    return { object: 'list', data: models.map(model => ({ id: model.id, object: 'model', owned_by: 'ucli' })) }
+    return { object: 'list', data: models.map(model => ({
+      id: model.id, object: 'model', owned_by: 'ucli',
+      display_name: model.displayName, context_size: model.contextSize, protocols: model.protocols
+    })) }
   }
   @Post('v1/responses') responses(@Body() body: any, @Req() request: any, @Res() response: Response) {
     if (!request.principal.deviceId) throw new UnauthorizedException('A UCLI device token is required')

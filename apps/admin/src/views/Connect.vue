@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { publicApi } from '../api'
-import { buildUcliConnectUrl, connectionStateForGrantStatus, createExclusiveGrantActionGate, createGrantActionLifecycle, readGrantToken, revalidateGrantAction } from '../device-grant-connect'
+import { buildUcliConnectUrl, connectionStateForGrantPreview, connectionStateForGrantStatus, connectionStateForPreviewFailure, createExclusiveGrantActionGate, createGrantActionLifecycle, isTerminalAuthorizationFailureState, isTerminalLinkFailureState, readGrantLink, revalidateGrantAction } from '../device-grant-connect'
 
 type GrantPreview = {
   account: { displayName: string }
   organization: { name: string }
-  status: string
-  authorization: { expiresAt: string | null }
+  link: { status: string; expiresAt: string | null }
+  authorization: { status: string; expiresAt: string | null; serverTime: string }
 }
 
 const loading = ref(true)
@@ -17,23 +17,43 @@ const preview = ref<GrantPreview | null>(null)
 const serverOrigin = ref('')
 const connectionState = ref(connectionStateForGrantStatus(''))
 const actionPending = ref(false)
+const retryable = ref(false)
 const actionGate = createExclusiveGrantActionGate()
 const lifecycle = createGrantActionLifecycle()
-let grantToken = ''
+let grantLink = ''
 
 function connectionUrl() {
-  return buildUcliConnectUrl(serverOrigin.value, grantToken)
+  return buildUcliConnectUrl(serverOrigin.value, grantLink)
 }
 
-function previewGrant(token: string) {
+function previewGrant(link: string) {
   return publicApi<GrantPreview>('/api/v1/auth/device-grants/preview', {
-    method: 'POST', body: JSON.stringify({ token })
+    method: 'POST', body: JSON.stringify({ link })
   })
 }
 
 function updatePreview(latest: GrantPreview) {
   preview.value = latest
-  connectionState.value = connectionStateForGrantStatus(latest.status)
+  connectionState.value = connectionStateForGrantPreview(latest)
+  retryable.value = false
+}
+
+function clearTerminalFailure() {
+  grantLink = ''
+  notice.value = ''
+  retryable.value = false
+  preview.value = null
+  error.value = connectionState.value.message
+}
+
+function applyRevalidationResult(latest: Awaited<ReturnType<typeof revalidateGrantAction<GrantPreview>>>) {
+  connectionState.value = latest.state
+  if (latest.preview) preview.value = latest.preview
+  if (isTerminalLinkFailureState(latest.state) || isTerminalAuthorizationFailureState(latest.state)) {
+    clearTerminalFailure()
+    return
+  }
+  retryable.value = !latest.state.canConnect
 }
 
 function setActionPending(value: boolean) {
@@ -41,17 +61,16 @@ function setActionPending(value: boolean) {
 }
 
 async function revalidateAction() {
-  if (!grantToken || lifecycle.disposed) return false
-  const latest = await revalidateGrantAction(grantToken, previewGrant)
+  if (!grantLink || lifecycle.disposed) return false
+  const latest = await revalidateGrantAction(grantLink, previewGrant)
   if (lifecycle.disposed) return false
-  connectionState.value = latest.state
-  if (latest.preview) preview.value = latest.preview
+  applyRevalidationResult(latest)
   return latest.state.canConnect
 }
 
 async function runAction(action: () => Promise<boolean>) {
   return actionGate.run(async () => {
-    if (!grantToken || lifecycle.disposed) return false
+    if (!grantLink || lifecycle.disposed) return false
     setActionPending(true)
     try {
       return await action()
@@ -64,9 +83,15 @@ async function runAction(action: () => Promise<boolean>) {
 async function connect() {
   await runAction(async () => {
     if (!(await revalidateAction()) || lifecycle.disposed) return false
-    window.location.href = connectionUrl()
+    const target = connectionUrl()
+    window.location.href = target
+    grantLink = ''
     return true
   })
+}
+
+async function retryValidation() {
+  await runAction(revalidateAction)
 }
 
 async function copyConnectionLink() {
@@ -90,29 +115,35 @@ function expiryLabel(expiresAt: string | null) {
 }
 
 onMounted(async () => {
-  grantToken = readGrantToken(window.location.hash)
+  grantLink = readGrantLink(window.location.hash)
   const address = new URL(window.location.href)
   address.hash = ''
   window.history.replaceState(window.history.state, '', `${address.pathname}${address.search}`)
   serverOrigin.value = window.location.origin
-  if (!grantToken) {
+  if (!grantLink) {
     loading.value = false
     error.value = '授权链接无效或已过期。'
     return
   }
   try {
-    const initialPreview = await previewGrant(grantToken)
+    const initialPreview = await previewGrant(grantLink)
     if (lifecycle.disposed) return
     updatePreview(initialPreview)
-  } catch {
+  } catch (caught) {
     if (lifecycle.disposed) return
-    error.value = '无法加载授权预览，请检查链接是否有效。'
+    const code = caught instanceof Error ? caught.message : ''
+    connectionState.value = connectionStateForPreviewFailure(code)
+    if (isTerminalLinkFailureState(connectionState.value) || isTerminalAuthorizationFailureState(connectionState.value)) {
+      clearTerminalFailure()
+    } else {
+      retryable.value = true
+    }
   } finally {
     lifecycle.apply(() => { loading.value = false })
   }
 })
 
-onUnmounted(() => { lifecycle.dispose() })
+onUnmounted(() => { lifecycle.dispose(); grantLink = '' })
 </script>
 
 <template>
@@ -128,8 +159,11 @@ onUnmounted(() => { lifecycle.dispose() })
           <div><dt>服务端</dt><dd>{{ serverOrigin }}</dd></div>
           <div><dt>组织</dt><dd>{{ preview.organization.name }}</dd></div>
           <div><dt>用户</dt><dd>{{ preview.account.displayName }}</dd></div>
-          <div><dt>授权状态</dt><dd>{{ connectionState.label }}</dd></div>
-          <div><dt>有效期</dt><dd>{{ expiryLabel(preview.authorization.expiresAt) }}</dd></div>
+          <div><dt>URL 状态</dt><dd>{{ preview.link.status }}</dd></div>
+          <div><dt>URL 有效期</dt><dd>{{ expiryLabel(preview.link.expiresAt) }}</dd></div>
+          <div><dt>授权状态</dt><dd>{{ connectionStateForGrantStatus(preview.authorization.status).label }}</dd></div>
+          <div><dt>授权有效期</dt><dd>{{ expiryLabel(preview.authorization.expiresAt) }}</dd></div>
+          <div><dt>服务器时间</dt><dd>{{ expiryLabel(preview.authorization.serverTime) }}</dd></div>
         </dl>
         <p class="state">{{ connectionState.message }}</p>
         <template v-if="connectionState.canConnect">
@@ -137,7 +171,9 @@ onUnmounted(() => { lifecycle.dispose() })
           <p v-if="notice" class="state">{{ notice }}</p>
           <details><summary>未安装 UCLI？</summary><p>安装 UCLI 后重新打开此页面，或复制连接链接后在 UCLI 中打开。</p><button :disabled="actionPending" @click="copyConnectionLink">复制连接链接</button></details>
         </template>
+        <button v-else-if="retryable" :disabled="actionPending" @click="retryValidation">重新验证</button>
       </template>
+      <template v-else-if="retryable"><h1>暂时无法验证授权</h1><p class="state">{{ connectionState.message }}</p><button :disabled="actionPending" @click="retryValidation">重新验证</button></template>
     </section>
   </main>
 </template>

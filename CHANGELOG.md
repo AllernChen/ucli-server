@@ -1,5 +1,18 @@
 # 变更记录
 
+## Unreleased
+
+## 0.3.1 - 2026-08-30
+
+- 修复 Skills catalog 将 Prisma `BigInt` 序列化为字符串的问题，`sizeBytes` 现在稳定返回 JSON number，满足 UCLI 客户端目录合同。
+- 模型目录新增稳定的 Gateway 协议能力列表；Bootstrap 与 Gateway 模型列表保持一致，并用 `model_protocol_unavailable`、`model_channel_unavailable`、`upstream_unavailable` 区分路由失败。
+- 新增独立 UCLI 模型协议能力升级交接文档；客户端不再假设模型列表首项支持 Responses。
+- 修复 Bootstrap 下发 `contextSize: null` 导致 UCLI 注册后无法加载服务端能力：公共模型发布时要求正整数上下文长度，并隔离历史无效目录项。
+- 修复设备 Refresh 成功与错误响应缺少 `Cache-Control: no-store` 的协议违约，保持 UCLI 客户端敏感响应校验 fail closed。
+- 设备授权改为独立的一次性连接 URL：URL 默认有效 7 天，授权默认永久有效；两者有效期独立管理，重新生成 URL 会立即撤销旧 URL。
+- 管理端支持查看、重新生成和追踪 URL 历史；授权绑定设备后不再生成或兑换 URL。
+- 升级新增设备授权链接历史与签发顺序迁移（`202608270001`、`202608270002`、`202608270003`）；升级及恢复必须保持 `MASTER_KEY` 连续，并按数据库备份与上一版镜像成对回滚。
+
 ## 0.3.0 - 2026-08-27
 
 - 支持平台预创建无密码普通成员，并按成员创建一设备一授权令牌；同一成员可获得多个授权以注册多个设备。

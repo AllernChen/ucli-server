@@ -20,8 +20,8 @@ describe('device grant admin views', () => {
     expect(detailView).toContain('当前组织成员状态')
   })
 
-  it('protects one-time creation secrets and removes them on close', () => {
-    expect(detailView).toContain('关闭后无法再次查看完整令牌')
+  it('protects creation secrets while retaining durable current-link recovery actions', () => {
+    expect(detailView).toContain('以后仍可在授权列表中查看当前 URL')
     expect(detailView).toContain('navigator.clipboard.writeText(connectionUrl)')
     expect(detailView).toContain("createdSecret.value = null")
     expect(detailView).toContain('copyError.value')
@@ -30,6 +30,9 @@ describe('device grant admin views', () => {
     expect(detailView).toContain('loadLifecycle.isCurrent')
     expect(detailView).toContain('if (grantPending.value) return')
     expect(detailView).toContain('UserDetailGrant')
+    expect(detailView).toContain('LinkExpiryFields')
+    expect(detailView).toContain('DeviceGrantLinkActions')
+    expect(detailView).toContain('linkExpiresAt')
   })
 
   it('guards user creation against duplicate submissions and closes only after its active request', () => {
@@ -56,12 +59,20 @@ describe('device grant admin views', () => {
     expect(confirm).toContain('aria-describedby')
     expect(detailView).toContain('<Drawer :open="grantOpen"')
     expect(detailView).toContain('<Drawer :open="Boolean(createdSecret)"')
-    expect(detailView).toContain('description="创建后会显示一次完整连接链接')
-    expect(detailView).toContain('description="关闭后无法再次查看完整令牌"')
+    expect(detailView).toContain('description="创建后会显示完整连接链接')
+    expect(detailView).toContain('关闭只会清除当前页面中的副本')
+    expect(detailView).not.toContain('显示一次完整连接链接')
+    expect(detailView).toContain('以后仍可在授权列表中查看当前 URL')
   })
 
   it('manages grouped grants through lifecycle endpoints', () => {
     expect(grantsView).toContain("api<Page<DeviceGrantUserGroup>>(`/api/v1/admin/device-grants?${deviceGrantQuery(filters)}`)")
+    expect(grantsView).toContain('<th>URL 提示</th>')
+    expect(grantsView).toContain('<th>URL 状态</th>')
+    expect(grantsView).toContain('<th>URL 有效期</th>')
+    expect(grantsView).toContain("grant.currentLink?.secretHint || '未生成'")
+    expect(grantsView).toContain('<DeviceGrantLinkActions :grant="grant" @changed="load" />')
+    expect(grantsView).toContain('<div class="actions" @click.stop>')
     expect(grantsView).toContain('/disable')
     expect(grantsView).toContain('/enable')
     expect(grantsView).toContain("method: 'PATCH'")

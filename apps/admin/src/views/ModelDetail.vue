@@ -31,6 +31,7 @@ const priceForm = reactive({
   currency: PLATFORM_CURRENCY, validFrom: '', validUntil: ''
 })
 const blockers: Record<string, string> = {
+  MODEL_CONTEXT_SIZE_REQUIRED: '未配置有效的上下文长度',
   NO_HEALTHY_CHANNEL_MODEL: '没有健康的渠道模型',
   NO_CURRENT_COST: '没有当前有效的采购成本',
   LATEST_TEST_FAILED: '最近一次模型测试失败'

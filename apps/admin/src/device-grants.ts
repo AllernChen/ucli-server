@@ -1,6 +1,82 @@
 export type ManagedUserStatus = 'ACTIVE' | 'DISABLED'
 export type ManagedUserRole = 'MEMBER' | 'ORG_ADMIN' | 'PLATFORM_ADMIN'
 export type DeviceGrantStatus = 'AVAILABLE' | 'BOUND' | 'DISABLED' | 'EXPIRED' | 'DELETED'
+export type DeviceGrantLinkStatus = 'AVAILABLE' | 'EXPIRED' | 'REVOKED' | 'CONSUMED'
+export type LinkExpiryMode = '1d' | '7d' | '30d' | 'permanent' | 'custom'
+
+export interface LinkExpiryForm {
+  mode: LinkExpiryMode
+  customExpiresAt: string
+}
+
+export interface DeviceGrantLinkSummary {
+  id: string
+  secretHint: string
+  status: DeviceGrantLinkStatus
+  expiresAt: string | null
+  createdAt: string
+}
+
+const linkExpiryDurations: Partial<Record<Exclude<LinkExpiryMode, 'permanent' | 'custom'>, number>> = {
+  '1d': 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000
+}
+
+const linkStatusLabels: Record<DeviceGrantLinkStatus, string> = {
+  AVAILABLE: '可用', EXPIRED: '已过期', REVOKED: '已撤销', CONSUMED: '已使用'
+}
+
+const deviceGrantErrorMessages: Record<string, string> = {
+  invalid_link: 'URL 无效；请重新生成 URL。',
+  link_expired: 'URL 已过期；请重新生成 URL。',
+  link_revoked: 'URL 已被撤销；请重新生成 URL。',
+  link_consumed: 'URL 已被使用；请重新生成 URL。',
+  grant_disabled: '授权已禁用；请先重新启用授权。',
+  grant_expired: '授权已过期；请先更新授权有效期。',
+  grant_deleted: '授权已删除，无法继续操作。',
+  grant_bound: '授权已绑定设备，不能重新生成 URL。',
+  invalid_grant: '授权无效或已不存在。',
+  account_inactive: '账号或当前组织成员关系不可用。',
+  organization_inactive: '组织不可用。',
+  invalid_device: '设备信息无效。'
+}
+
+export function deviceGrantErrorMessage(value: unknown, fallback: string): string {
+  const message = value instanceof Error && value.message ? value.message : ''
+  return deviceGrantErrorMessages[message] ?? (message || fallback)
+}
+
+export function linkStatusLabel(status: DeviceGrantLinkStatus): string {
+  return linkStatusLabels[status]
+}
+
+function customExpiryDate(value: string): Date {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/.exec(value)
+  const date = new Date(value)
+  if (!match || Number.isNaN(date.getTime())) throw new Error('请选择有效的 URL 有效期')
+
+  const [, year, month, day, hour, minute, seconds = '0'] = match
+  if (date.getFullYear() !== Number(year) || date.getMonth() !== Number(month) - 1 || date.getDate() !== Number(day) ||
+    date.getHours() !== Number(hour) || date.getMinutes() !== Number(minute) || date.getSeconds() !== Number(seconds)) {
+    throw new Error('请选择有效的 URL 有效期')
+  }
+  return date
+}
+
+export function linkExpiryPayload(form: LinkExpiryForm, now = new Date()): { expiresAt: string | null } {
+  if (form.mode === 'permanent') return { expiresAt: null }
+  if (form.mode === 'custom') {
+    if (!form.customExpiresAt) throw new Error('请选择 URL 有效期')
+    const custom = customExpiryDate(form.customExpiresAt)
+    if (custom.getTime() <= now.getTime()) throw new Error('URL 有效期必须晚于当前时间')
+    return { expiresAt: custom.toISOString() }
+  }
+
+  const duration = linkExpiryDurations[form.mode]
+  if (!duration) throw new Error('请选择 URL 有效期')
+  return { expiresAt: new Date(now.getTime() + duration).toISOString() }
+}
 
 export interface ManagedDevice {
   id: string
@@ -17,7 +93,7 @@ export interface ManagedDevice {
 export interface DeviceGrantSummary {
   id: string
   accountId: string
-  tokenHint: string
+  currentLink: DeviceGrantLinkSummary | null
   expiresAt: string | null
   disabledAt: string | null
   deletedAt: string | null
@@ -32,7 +108,7 @@ export interface DeviceGrantSummary {
 
 export interface UserDetailGrant {
   id: string
-  tokenHint: string
+  currentLink: DeviceGrantLinkSummary | null
   expiresAt: string | null
   disabledAt: string | null
   deletedAt: string | null
@@ -90,6 +166,15 @@ export function editableManagedUserRoles(actorRole: ManagedUserRole, targetRole:
   if (actorRole === 'PLATFORM_ADMIN') return ['MEMBER', 'ORG_ADMIN', 'PLATFORM_ADMIN']
   if (actorRole === 'ORG_ADMIN' && targetRole !== 'PLATFORM_ADMIN') return ['MEMBER', 'ORG_ADMIN']
   return []
+}
+
+export function canViewGrantLink(grant: DeviceGrantSummary) {
+  return grant.status === 'AVAILABLE' && grant.deviceId === null &&
+    ['AVAILABLE', 'EXPIRED'].includes(grant.currentLink?.status || '')
+}
+
+export function canRegenerateGrantLink(grant: DeviceGrantSummary) {
+  return grant.status === 'AVAILABLE' && grant.deviceId === null
 }
 
 export function grantActions(grant: Pick<DeviceGrantSummary, 'status'>): GrantAction[] {

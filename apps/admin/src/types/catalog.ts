@@ -193,7 +193,7 @@ export interface PublishCheck {
   ready: boolean
   healthyChannelModels: number
   hasCurrentCost: boolean
-  blockers: Array<'NO_HEALTHY_CHANNEL_MODEL' | 'NO_CURRENT_COST' | 'LATEST_TEST_FAILED'>
+  blockers: Array<'MODEL_CONTEXT_SIZE_REQUIRED' | 'NO_HEALTHY_CHANNEL_MODEL' | 'NO_CURRENT_COST' | 'LATEST_TEST_FAILED'>
 }
 
 export interface ModelProbe {

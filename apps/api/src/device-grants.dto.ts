@@ -22,6 +22,14 @@ export class UpdateManagedUserRoleDto {
 export class CreateDeviceGrantDto {
   @IsOptional() @ValidateIf((_, value) => value !== null)
   @IsDateString({ strict: true }) expiresAt?: string | null
+
+  @IsOptional() @ValidateIf((_, value) => value !== null)
+  @IsDateString({ strict: true }) linkExpiresAt?: string | null
+}
+
+export class CreateDeviceGrantLinkDto {
+  @IsOptional() @ValidateIf((_, value) => value !== null)
+  @IsDateString({ strict: true }) expiresAt?: string | null
 }
 
 export class UpdateDeviceGrantDto {
@@ -38,7 +46,7 @@ export class DeviceRegistrationDto {
 }
 
 export class PreviewDeviceGrantDto {
-  @Allow() token!: unknown
+  @Allow() link!: unknown
 }
 
 export class RedeemDeviceGrantDto extends PreviewDeviceGrantDto {
