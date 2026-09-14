@@ -14,7 +14,8 @@ import { loadMasterKey } from '../../../packages/security/src/master-key.js'
 import { RedisQuotaService } from '../../../packages/quota/src/redis-quota.js'
 import { recordQuotaRejection, recordQuotaSettlement } from '../../../packages/monitoring/src/quota-metrics.js'
 import { StreamUsageCollector } from '../../../packages/gateway-core/src/stream-usage.js'
-import { canAccessModel, type ModelAccessPrincipal } from '../../../packages/gateway-core/src/access-policy.js'
+import { type ModelAccessPrincipal } from '../../../packages/gateway-core/src/access-policy.js'
+import { ModelCatalogService, modelCapabilitiesSelect } from '../../../packages/gateway-core/src/model-catalog.service.js'
 import { configuredClientProtocols, upstreamProtocolsForClient } from '../../../packages/gateway-core/src/model-capabilities.js'
 import { highestReservationCost, resolveChannelCost, type ResolvedCost, type ScheduledCost } from '../../../packages/gateway-core/src/cost-schedule.js'
 import { gatewayUnavailable, logGatewayFailure, type GatewayUnavailableCode } from './gateway-errors.js'
@@ -29,27 +30,11 @@ const PRISMA_TO_PROTOCOL: Record<PrismaProtocol, GatewayProtocol> = {
 
 @Injectable()
 export class GatewayService {
-  constructor(private readonly prisma: PrismaService, private readonly quota: RedisQuotaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly quota: RedisQuotaService,
+    private readonly catalog: ModelCatalogService = new ModelCatalogService(prisma)) {}
 
   async models(principal: ModelAccessPrincipal) {
-    const models = await this.prisma.publicModel.findMany({
-      where: { enabled: true, deletedAt: null, contextSize: { gt: 0 } },
-      include: {
-        policies: true,
-        channelModels: { select: {
-          protocol: true, enabled: true, deletedAt: true,
-          channel: { select: {
-            enabled: true, deletedAt: true,
-            keys: { select: { enabled: true, deletedAt: true } }
-          } }
-        } }
-      }
-    })
-    return models.filter(model => canAccessModel(model.policies, principal))
-      .map(({ id, displayName, contextSize, channelModels }) => ({
-        id, displayName, contextSize, protocols: configuredClientProtocols(channelModels)
-      }))
-      .filter(model => model.protocols.length > 0)
+    return this.catalog.list(principal)
   }
 
   private async candidates(publicModelId: string, protocol: GatewayProtocol, at: Date, fallbackPrice?: any): Promise<RelayCandidate[]> {
@@ -110,7 +95,7 @@ export class GatewayService {
     protocol: GatewayProtocol
     body: Record<string, any>
     headers: Record<string, string | string[] | undefined>
-    principal: { sub: string; organizationId: string; deviceId: string; role: 'PLATFORM_ADMIN' | 'ORG_ADMIN' | 'MEMBER' }
+    principal: { sub: string; organizationId: string; deviceId: string; groupId?: string | null; role: 'PLATFORM_ADMIN' | 'ORG_ADMIN' | 'MEMBER' }
     response: ExpressResponse
   }): Promise<void> {
     const publicModelId = String(body?.model || '')
@@ -118,18 +103,12 @@ export class GatewayService {
     const startedAt = new Date()
     const model = await this.prisma.publicModel.findFirst({ where: { id: publicModelId, enabled: true, deletedAt: null }, include: {
       policies: true,
-      channelModels: { select: {
-        protocol: true, enabled: true, deletedAt: true,
-        channel: { select: {
-          enabled: true, deletedAt: true,
-          keys: { select: { enabled: true, deletedAt: true } }
-        } }
-      } },
+      channelModels: { select: modelCapabilitiesSelect },
       prices: { where: { deletedAt: null, enabled: true, validFrom: { lte: startedAt }, OR: [{ validUntil: null }, { validUntil: { gt: startedAt } }] }, orderBy: { validFrom: 'desc' }, take: 1 }
     } })
-    if (!model || !canAccessModel(model.policies, { organizationId: principal.organizationId, accountId: principal.sub, role: principal.role })) {
-      throw new NotFoundException('Model is unavailable')
-    }
+    if (!model) throw new NotFoundException('Model is unavailable')
+    await this.catalog.assertAllowed({ organizationId: principal.organizationId, accountId: principal.sub,
+      role: principal.role, groupId: principal.groupId }, model)
     const requestId = randomUUID()
     response.setHeader('x-ucli-request-id', requestId)
     response.setHeader('cache-control', 'no-store')
@@ -215,7 +194,7 @@ export class GatewayService {
       const fallback = candidates[0]!
       await this.prisma.usageLog.create({ data: {
         requestId, organizationId: principal.organizationId,
-        accountId: principal.sub, deviceId: principal.deviceId, sessionId: context.sessionId,
+        accountId: principal.sub, deviceId: principal.deviceId, groupId: principal.groupId, sessionId: context.sessionId,
         projectId: context.projectId, cliType: context.cliType, clientVersion: context.clientVersion,
         timezone: context.timezone, protocol: PRISMA_PROTOCOL[protocol], publicModelId,
         upstreamModel: fallback.upstreamModel, channelId: fallback.channelId, channelModelId: fallback.channelModelId,
@@ -273,7 +252,7 @@ export class GatewayService {
       const finishedAt = new Date()
       await this.prisma.usageLog.create({ data: {
         requestId: result.requestId, organizationId: principal.organizationId, accountId: principal.sub,
-        deviceId: principal.deviceId, sessionId: context.sessionId, projectId: context.projectId,
+        deviceId: principal.deviceId, groupId: principal.groupId, sessionId: context.sessionId, projectId: context.projectId,
         cliType: context.cliType, clientVersion: context.clientVersion, timezone: context.timezone,
         protocol: PRISMA_PROTOCOL[protocol], publicModelId, upstreamModel: result.candidate.upstreamModel,
         channelId: result.candidate.channelId, channelModelId: result.candidate.channelModelId,

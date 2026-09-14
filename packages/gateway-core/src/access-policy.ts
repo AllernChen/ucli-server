@@ -1,7 +1,12 @@
 export interface ModelAccessPrincipal {
+  groupId?: string | null
   organizationId: string
   accountId: string
   role: 'PLATFORM_ADMIN' | 'ORG_ADMIN' | 'MEMBER'
+}
+
+export function canAccessGroupModel(modelId: string, allowed: readonly string[] | null): boolean {
+  return allowed === null || allowed.includes(modelId)
 }
 
 export interface ModelAccessPolicy {

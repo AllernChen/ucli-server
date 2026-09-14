@@ -55,6 +55,8 @@ describe('catalog runtime isolation', () => {
         })
       })
     }))
+    prisma.groupMember = { findFirst: vi.fn().mockResolvedValue({ group: { models: [] } }) }
+    expect((await controller.bootstrap({ principal: { sub: 'account-1', organizationId: 'org-1', role: 'MEMBER', groupId: 'group-1' } })).models).toEqual([])
   })
 
   it('health monitoring excludes archived channels and keys', async () => {

@@ -32,9 +32,12 @@ import { UsersService } from './users.service.js'
 import { DeviceGrantsController } from './device-grants.controller.js'
 import { DeviceGrantsService } from './device-grants.service.js'
 import { DeviceGrantLinksService } from './device-grant-links.service.js'
+import { UsageGroupsController } from './usage-groups.controller.js'
+import { UsageGroupsService } from './usage-groups.service.js'
+import { ModelCatalogService } from '../../../packages/gateway-core/src/model-catalog.service.js'
 
 @Module({
-  controllers: [AuthController, ChannelsController, ChannelModelsController, ProcurementCostsController, ModelTestingController, AnalyticsController, ClientController, ModelsController, UsageController, SkillsController, ReportsController, GovernanceController, MonitoringController, MetricsController, OrganizationsController, UsersController, DeviceGrantsController],
-  providers: [PrismaService, AuthService, ChannelsService, ChannelModelsService, ProcurementCostsService, ModelBindingService, ModelsService, ModelTestingService, AnalyticsService, UsersService, DeviceGrantLinksService, DeviceGrantsService, AuthGuard, ObjectStorageService, AuditInterceptor]
+  controllers: [AuthController, ChannelsController, ChannelModelsController, ProcurementCostsController, ModelTestingController, AnalyticsController, ClientController, ModelsController, UsageController, SkillsController, ReportsController, GovernanceController, MonitoringController, MetricsController, OrganizationsController, UsersController, DeviceGrantsController, UsageGroupsController],
+  providers: [PrismaService, AuthService, ChannelsService, ChannelModelsService, ProcurementCostsService, ModelBindingService, ModelsService, ModelTestingService, AnalyticsService, UsersService, DeviceGrantLinksService, DeviceGrantsService, AuthGuard, ObjectStorageService, AuditInterceptor, UsageGroupsService, ModelCatalogService]
 })
 export class AppModule {}

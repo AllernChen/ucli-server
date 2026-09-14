@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Req, Res, UnauthorizedException, UseGuards } from '@nestjs/common'
+import { Body, Controller, Get, Header, Post, Req, Res, UnauthorizedException, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import type { Response } from 'express'
 import { AuthGuard } from '../../../packages/security/src/auth.js'
@@ -7,10 +7,10 @@ import { GatewayService } from './gateway.service.js'
 @ApiTags('model-gateway') @ApiBearerAuth() @UseGuards(AuthGuard) @Controller()
 export class GatewayController {
   constructor(private readonly gateway: GatewayService) {}
-  @Get('v1/models') async models(@Req() request: any) {
+  @Get('v1/models') @Header('Cache-Control', 'no-store') async models(@Req() request: any) {
     if (!request.principal.deviceId) throw new UnauthorizedException('A UCLI device token is required')
     const models = await this.gateway.models({ organizationId: request.principal.organizationId,
-      accountId: request.principal.sub, role: request.principal.role })
+      accountId: request.principal.sub, role: request.principal.role, groupId: request.principal.groupId })
     return { object: 'list', data: models.map(model => ({
       id: model.id, object: 'model', owned_by: 'ucli',
       display_name: model.displayName, context_size: model.contextSize, protocols: model.protocols

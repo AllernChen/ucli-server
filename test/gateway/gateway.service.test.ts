@@ -77,6 +77,17 @@ function makeResponse() {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('gateway service orchestration', () => {
+  it('denies manually requested models outside the group before routing upstream', async () => {
+    const { service, prisma } = makeHarness({ prisma: {
+      groupMember: { findFirst: vi.fn().mockResolvedValue({ group: { models: [] } }) }
+    } })
+    const grouped = { ...principal, groupId: 'group-1' }
+    await expect(service.models({ ...grouped, accountId: principal.sub })).resolves.toEqual([])
+    await expect(service.relay({ protocol: 'openai_chat', body: { model: 'gpt-4o', messages: [] }, headers: {},
+      principal: grouped, response: makeResponse() as any })).rejects.toMatchObject({ status: 403 })
+    expect(prisma.channelModel.findMany).not.toHaveBeenCalled()
+  })
+
   it('publishes accessible active models with their configured client protocols', async () => {
     const { service, prisma } = makeHarness()
 

@@ -18,6 +18,41 @@ enum AccountStatus {
   DISABLED
 }
 
+enum UsageGroupType {
+  DEPARTMENT
+  PROJECT
+}
+
+enum GroupBudgetMode {
+  TOTAL
+  MONTHLY
+}
+
+enum CredentialType {
+  DEVICE
+  API_KEY
+}
+
+enum BudgetEntryKind {
+  REQUEST
+  LIMIT_ADJUSTMENT
+  COST_ADJUSTMENT
+}
+
+enum BudgetEntryStatus {
+  RESERVED
+  SETTLED
+  RELEASED
+  RECONCILIATION_REQUIRED
+}
+
+enum BillingState {
+  CONFIRMED
+  ESTIMATED
+  UNKNOWN
+  NO_CHARGE
+}
+
 enum ChannelProtocol {
   OPENAI
   ANTHROPIC
@@ -85,6 +120,8 @@ enum ReportScope {
 }
 
 model Organization {
+  requireDeviceGroup Boolean @default(false) @map("require_device_group")
+  usageGroups UsageGroup[]
   id           String              @id @default(uuid()) @db.Uuid
   slug         String              @unique
   name         String
@@ -102,6 +139,8 @@ model Organization {
 }
 
 model Account {
+  createdEmployeeKeys EmployeeApiKey[] @relation("EmployeeKeyCreator")
+  budgetAdjustments GroupBudgetEntry[] @relation("BudgetActor")
   id                  String                @id @default(uuid()) @db.Uuid
   email               String                @unique
   displayName         String                @map("display_name")
@@ -122,6 +161,9 @@ model Account {
 }
 
 model Membership {
+  groupMemberships GroupMember[]
+  employeeKeys EmployeeApiKey[]
+  budgetEntries GroupBudgetEntry[]
   organizationId String       @map("organization_id") @db.Uuid
   accountId      String       @map("account_id") @db.Uuid
   role           Role
@@ -155,6 +197,8 @@ model Device {
 }
 
 model DeviceGrant {
+  groupId String? @map("group_id") @db.Uuid
+  group UsageGroup? @relation(fields: [groupId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
   id               String       @id @default(uuid()) @db.Uuid
   organizationId   String       @map("organization_id") @db.Uuid
   accountId        String       @map("account_id") @db.Uuid
@@ -256,6 +300,7 @@ model ChannelKey {
 }
 
 model PublicModel {
+  groupAccess GroupModelAccess[]
   id              String              @id
   displayName     String              @map("display_name")
   manufacturer    String              @default("未分类")
@@ -401,11 +446,17 @@ model QuotaPolicy {
 }
 
 model UsageLog {
+  groupId String? @map("group_id") @db.Uuid
+  apiKeyId String? @map("api_key_id") @db.Uuid
+  credentialType CredentialType @default(DEVICE) @map("credential_type")
+  actorSnapshot Json? @map("actor_snapshot")
+  group UsageGroup? @relation(fields: [groupId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  apiKey EmployeeApiKey? @relation(fields: [apiKeyId, organizationId, accountId, groupId], references: [id, organizationId, accountId, groupId], onDelete: Restrict, onUpdate: Restrict)
   id                String                @id @default(uuid()) @db.Uuid
   requestId         String                @unique @map("request_id")
   organizationId    String                @map("organization_id") @db.Uuid
   accountId         String                @map("account_id") @db.Uuid
-  deviceId          String                @map("device_id") @db.Uuid
+  deviceId          String?               @map("device_id") @db.Uuid
   sessionId         String?               @map("session_id") @db.Uuid
   projectId         String?               @map("project_id") @db.Uuid
   cliType           String?               @map("cli_type")
@@ -439,7 +490,7 @@ model UsageLog {
   streamInterrupted Boolean               @default(false) @map("stream_interrupted")
   organization      Organization          @relation(fields: [organizationId], references: [id])
   account           Account               @relation(fields: [accountId], references: [id])
-  device            Device                @relation(fields: [deviceId], references: [id])
+  device            Device?               @relation(fields: [deviceId], references: [id], onDelete: Restrict)
   channel           Channel               @relation(fields: [channelId], references: [id])
   channelModel      ChannelModel?         @relation(fields: [channelModelId], references: [id], onDelete: SetNull)
   publicModel       PublicModel           @relation(fields: [publicModelId], references: [id])
@@ -456,10 +507,15 @@ model UsageLog {
   @@index([organizationId, startedAt, accountId])
   @@index([organizationId, startedAt, channelModelId])
   @@index([sessionId, startedAt])
+  @@index([organizationId, groupId, startedAt])
+  @@index([apiKeyId, startedAt])
   @@map("usage_logs")
 }
 
 model RouteAttempt {
+  costCny Decimal? @map("cost_cny") @db.Decimal(20, 8)
+  usageSnapshot Json? @map("usage_snapshot")
+  billingState BillingState? @map("billing_state")
   id           String      @id @default(uuid()) @db.Uuid
   usageLogId   String      @map("usage_log_id") @db.Uuid
   channelId    String      @map("channel_id") @db.Uuid
@@ -573,4 +629,124 @@ model AuditLog {
 
   @@index([organizationId, occurredAt])
   @@map("audit_logs")
+}
+
+model UsageGroup {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  name String
+  type UsageGroupType
+  description String @default("")
+  enabled Boolean @default(true)
+  archivedAt DateTime? @map("archived_at")
+  budgetMode GroupBudgetMode @default(TOTAL) @map("budget_mode")
+  budgetTimezone String @default("Asia/Shanghai") @map("budget_timezone")
+  unlimited Boolean @default(false)
+  defaultLimitCny Decimal @default(0) @map("default_limit_cny") @db.Decimal(20, 8)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  members GroupMember[]
+  models GroupModelAccess[]
+  keys EmployeeApiKey[]
+  grants DeviceGrant[]
+  logs UsageLog[]
+  periods GroupBudgetPeriod[]
+  @@unique([id, organizationId])
+  @@index([organizationId, archivedAt, enabled])
+  @@map("usage_groups")
+}
+
+model GroupMember {
+  organizationId String @map("organization_id") @db.Uuid
+  groupId String @map("group_id") @db.Uuid
+  accountId String @map("account_id") @db.Uuid
+  joinedAt DateTime @default(now()) @map("joined_at")
+  removedAt DateTime? @map("removed_at")
+  group UsageGroup @relation(fields: [groupId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  membership Membership @relation(fields: [organizationId, accountId], references: [organizationId, accountId], onDelete: Restrict, onUpdate: Restrict)
+  @@id([groupId, accountId])
+  @@index([organizationId, accountId, removedAt])
+  @@map("group_members")
+}
+
+model GroupModelAccess {
+  organizationId String @map("organization_id") @db.Uuid
+  groupId String @map("group_id") @db.Uuid
+  publicModelId String @map("public_model_id")
+  group UsageGroup @relation(fields: [groupId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  publicModel PublicModel @relation(fields: [publicModelId], references: [id], onDelete: Restrict)
+  @@id([groupId, publicModelId])
+  @@map("group_model_access")
+}
+
+model EmployeeApiKey {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  groupId String @map("group_id") @db.Uuid
+  accountId String @map("account_id") @db.Uuid
+  name String
+  secretHash String @unique @map("secret_hash")
+  secretHint String @map("secret_hint")
+  createdById String @map("created_by_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+  expiresAt DateTime? @map("expires_at")
+  disabledAt DateTime? @map("disabled_at")
+  revokedAt DateTime? @map("revoked_at")
+  deletedAt DateTime? @map("deleted_at")
+  lastUsedAt DateTime? @map("last_used_at")
+  group UsageGroup @relation(fields: [groupId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  membership Membership @relation(fields: [organizationId, accountId], references: [organizationId, accountId], onDelete: Restrict, onUpdate: Restrict)
+  createdBy Account @relation("EmployeeKeyCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  logs UsageLog[]
+  @@unique([id, organizationId, accountId, groupId])
+  @@index([organizationId, groupId, accountId])
+  @@map("employee_api_keys")
+}
+
+model GroupBudgetPeriod {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  groupId String @map("group_id") @db.Uuid
+  periodKey String @map("period_key")
+  timezone String
+  unlimited Boolean @default(false)
+  limitCny Decimal @default(0) @map("limit_cny") @db.Decimal(20, 8)
+  spentCny Decimal @default(0) @map("spent_cny") @db.Decimal(20, 8)
+  reservedCny Decimal @default(0) @map("reserved_cny") @db.Decimal(20, 8)
+  alertedThreshold Int @default(0) @map("alerted_threshold")
+  group UsageGroup @relation(fields: [groupId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  entries GroupBudgetEntry[]
+  @@unique([groupId, periodKey])
+  @@unique([id, organizationId, groupId])
+  @@map("group_budget_periods")
+}
+
+model GroupBudgetEntry {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  groupId String @map("group_id") @db.Uuid
+  periodId String @map("period_id") @db.Uuid
+  requestId String? @map("request_id")
+  operationId String @unique @map("operation_id")
+  kind BudgetEntryKind
+  status BudgetEntryStatus
+  accountId String? @map("account_id") @db.Uuid
+  credentialType CredentialType? @map("credential_type")
+  credentialId String? @map("credential_id") @db.Uuid
+  reservedCny Decimal @default(0) @map("reserved_cny") @db.Decimal(20, 8)
+  settledCny Decimal @default(0) @map("settled_cny") @db.Decimal(20, 8)
+  startedAt DateTime @default(now()) @map("started_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  dispatchedAt DateTime? @map("dispatched_at")
+  leaseUntil DateTime? @map("lease_until")
+  snapshot Json
+  reason String?
+  actorAccountId String? @map("actor_account_id") @db.Uuid
+  period GroupBudgetPeriod @relation(fields: [periodId, organizationId, groupId], references: [id, organizationId, groupId], onDelete: Restrict, onUpdate: Restrict)
+  membership Membership? @relation(fields: [organizationId, accountId], references: [organizationId, accountId], onDelete: Restrict, onUpdate: Restrict)
+  actor Account? @relation("BudgetActor", fields: [actorAccountId], references: [id], onDelete: Restrict)
+  @@index([status, leaseUntil])
+  @@index([organizationId, groupId, startedAt])
+  @@map("group_budget_entries")
 }

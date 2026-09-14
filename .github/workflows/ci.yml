@@ -6,6 +6,35 @@ on:
   pull_request:
 
 jobs:
+  group-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ucli_test
+          POSTGRES_PASSWORD: ucli_test_local
+          POSTGRES_DB: ucli_test_group_access
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ucli_test -d ucli_test_group_access"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://ucli_test:ucli_test_local@127.0.0.1:5432/ucli_test_group_access
+      TEST_DATABASE_URL: postgresql://ucli_test:ucli_test_local@127.0.0.1:5432/ucli_test_group_access
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run db:generate
+      - run: npm run db:migrate
+      - run: npm test -- test/integration
+      - run: npm run build
+      - run: node --import tsx test/integration/group-http.mjs
+
   verify:
     runs-on: ubuntu-latest
     steps:

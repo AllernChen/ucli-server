@@ -35,6 +35,21 @@
 | 三 | 6–7 | 人民币预算原子预占、幂等结算、故障恢复与路由计费 |
 | 四 | 8–10 | 管理端与个人页、使用统计、设备迁移及端到端验收 |
 
+### 执行记录（2026-09-14）
+
+- 阶段一（Tasks 1–3）已实现于 `codex/group-access`，工作目录 `.worktrees/group-access`；未合并、未部署、未连接公司数据库。
+- 增加组/成员/模型管理 API、永久撤销、组内模型权限交集、共享 bootstrap/网关目录，以及后续 Key/预算所需数据约束。管理员仍使用现有组织身份，设备 groupId 每次从数据库读取，不采信 JWT 附带组字段。
+- 金额字段只是存储基础：本阶段不签发员工 API Key、不执行组预算扣费、不开放设备分组迁移 UI。下一步 Tasks 4–5；预算完成前不得开放新的生产 Key 入口。
+- 最小实现调整：`ModelCatalogService.assertAllowed` 接收网关已读取的模型，避免重复查询价格与协议数据；组成员校验返回带模型白名单的组记录。管理端没有既有“组权限预览”入口，本阶段不增加新页面。
+- 批量成员撤销沿用已有 link → grant 锁序；发现并发创建新链接或数据库死锁时回滚重试，最终凭据撤销和审计在同一事务。分组凭据签发尚未开放，后续签发必须先取得 `lockUsageGroup` 再校验成员。
+- 真实数据库用例位于 `test/integration`；编译后的 HTTP 验证：`npm run build` 后执行 `node --import tsx test/integration/group-http.mjs`。两者均要求显式、仅本地 `ucli_test*` 的 `TEST_DATABASE_URL`；CI 已增加专用 PostgreSQL job。
+- 基线问题：设备授权测试含已过期的固定日期，已固定该用例时钟。Docker 的 nginx 健康测试仍因无法拉取 `node:24-alpine` 被阻断，不记为通过；Compose 配置测试单独复测通过。
+- 验证命令：`npm run typecheck`、`npm run build`、`npm run admin:build`、`npm run licenses:check`；带测试库运行 `npx vitest run --coverage --exclude test/deploy/nginx-health-route.test.ts --maxWorkers=4`。精确结果以本阶段最终交付消息为准。
+- 最终本地结果：91 个测试文件、600 项测试通过，覆盖范围内行覆盖率 94.60%；编译产物 HTTP 验证通过。先用旧客户端写入设备用量日志、再应用新迁移，确认日志、设备归属和人民币 8 位精度保留。
+- Prisma 全库比对仍提示原有渠道表两条外键和采购规则一条索引的命名差异（早期表重命名/名称截断），本次未修改这些对象；新增组结构已在真实数据库验证。部署 nginx 用例单独复测仍受 Docker Hub 鉴权连接超时阻断。
+
+下方保留原始任务细分与目标提交方式；本轮以完整阶段一交付记录为准，后续从 Task 4 继续。
+
 新服务沿用 `apps/api/src/*.{service,controller,dto}.ts`，不引入一层通用 Repository。只有 API、网关、Worker 共同使用的领域代码放入 packages。
 
 | 文件 | 职责 |

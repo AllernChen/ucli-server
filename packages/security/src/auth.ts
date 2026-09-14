@@ -1,13 +1,15 @@
-import { CanActivate, ExecutionContext, Injectable, SetMetadata, UnauthorizedException } from '@nestjs/common'
+import { CanActivate, ExecutionContext, ForbiddenException, Injectable, SetMetadata, UnauthorizedException } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
 import jwt from 'jsonwebtoken'
 import { PrismaService } from '../../database/src/prisma.service.js'
 import { deviceGrantFailure } from './device-grants.js'
+import { assertActiveGroupMember } from './group-access.js'
 
 export interface AuthPrincipal {
   sub: string
   organizationId: string
   deviceId?: string
+  groupId?: string | null
   role: 'PLATFORM_ADMIN' | 'ORG_ADMIN' | 'MEMBER'
   tokenVersion: number
 }
@@ -55,6 +57,8 @@ export class AuthGuard implements CanActivate {
       }) as AuthPrincipal
     } catch { throw new UnauthorizedException('Invalid access token') }
     const principal = request.principal as AuthPrincipal
+    // Group ownership is live server state, never a JWT or client-context claim.
+    principal.groupId = null
     if (principal.deviceId) {
       const device = await this.prisma.device.findFirst({ where: {
         id: principal.deviceId, accountId: principal.sub, organizationId: principal.organizationId
@@ -64,7 +68,13 @@ export class AuthGuard implements CanActivate {
       const failure = deviceGrantFailure(device.grant)
       if (failure) throw authorizationFailure(failure)
       if (device.revokedAt) throw authorizationFailure('invalid_device')
-      await this.assertActiveMembership(principal, principal.role)
+      const organization = await this.assertActiveMembership(principal, principal.role)
+      principal.groupId = device.grant.groupId ?? null
+      if (principal.groupId) {
+        await assertActiveGroupMember(this.prisma, { organizationId: principal.organizationId, accountId: principal.sub, groupId: principal.groupId })
+      } else if (organization.requireDeviceGroup) {
+        throw new ForbiddenException({ code: 'group_required', message: 'Device must be assigned to a usage group' })
+      }
       await this.prisma.device.update({ where: { id: device.id }, data: { lastSeenAt: new Date() } })
     } else {
       await this.assertActiveMembership(principal, principal.role)
@@ -89,5 +99,6 @@ export class AuthGuard implements CanActivate {
       throw authorizationFailure('account_inactive')
     }
     if (!membership.organization.enabled) throw authorizationFailure('organization_inactive')
+    return membership.organization
   }
 }

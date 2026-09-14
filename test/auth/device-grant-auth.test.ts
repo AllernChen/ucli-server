@@ -20,6 +20,7 @@ type HarnessOptions = {
   membershipStatus?: string
   membershipRole?: string
   revokedAt?: Date | null
+  requireDeviceGroup?: boolean
 }
 
 function makeAuthHarness(options: HarnessOptions = {}) {
@@ -75,7 +76,9 @@ function makeGuard(options: HarnessOptions = {}) {
   const prisma: any = {
     account: {
       findFirst: vi.fn(async () => account),
-      findUnique: vi.fn(async () => ({ ...account, memberships: [{ ...membership, organization: { enabled: options.organizationEnabled ?? true } }] }))
+      findUnique: vi.fn(async () => ({ ...account, memberships: [{ ...membership, organization: {
+        enabled: options.organizationEnabled ?? true, requireDeviceGroup: options.requireDeviceGroup ?? false
+      } }] }))
     },
     device: {
       findFirst: vi.fn(async () => device),
@@ -102,6 +105,36 @@ afterEach(() => {
 })
 
 describe('live device grant authorization', () => {
+  it('enforces opt-in group migration only for device credentials', async () => {
+    const { guard } = makeGuard({ requireDeviceGroup: true, membershipRole: 'ORG_ADMIN' })
+    const actor = { sub: 'account-1', organizationId: 'org-1', role: 'ORG_ADMIN' as const, tokenVersion: 1 }
+    await expect(guard.canActivate(makeRequest(signAccessToken({ ...actor, deviceId: 'device-1' })).context))
+      .rejects.toSatisfy(error => errorCode(error) === 'group_required')
+    await expect(guard.canActivate(makeRequest(signAccessToken(actor)).context)).resolves.toBe(true)
+  })
+
+  it('derives group identity from the database and rejects removed members', async () => {
+    const { guard, prisma } = makeGuard({ grant: grant({ groupId: 'real-group' }) })
+    prisma.groupMember = { findFirst: vi.fn().mockResolvedValue({ group: { models: [] } }) }
+    const token = signAccessToken({ sub: 'account-1', organizationId: 'org-1', deviceId: 'device-1', role: 'MEMBER', tokenVersion: 1,
+      ...{ groupId: 'forged-group' } })
+    const { request, context } = makeRequest(token)
+    await guard.canActivate(context)
+    expect(request.principal.groupId).toBe('real-group')
+    expect(prisma.groupMember.findFirst.mock.calls[0][0].where.groupId).toBe('real-group')
+    prisma.groupMember.findFirst.mockResolvedValue(null)
+    await expect(guard.canActivate(context)).rejects.toMatchObject({ status: 403 })
+  })
+
+  it('discards group claims on legacy device tokens', async () => {
+    const { guard } = makeGuard()
+    const token = signAccessToken({ sub: 'account-1', organizationId: 'org-1', deviceId: 'device-1', role: 'MEMBER', tokenVersion: 1,
+      ...{ groupId: 'forged-group' } })
+    const { request, context } = makeRequest(token)
+    await guard.canActivate(context)
+    expect(request.principal.groupId).toBeNull()
+  })
+
   it('rejects password login for a passwordless member without calling argon2.verify', async () => {
     const { service, verify } = makeAuthHarness({ passwordHash: null })
     await expect(service.login({ email: 'member@example.com', password: 'ignored' })).rejects.toMatchObject({ status: 401 })
