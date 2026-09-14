@@ -266,6 +266,8 @@ describe('device grants', () => {
   })
 
   it('keeps authorization and link expiry independent', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-01T00:00:00.000Z'))
     const { service } = makeGrantHarness()
     const previousPublicUrl = process.env.PUBLIC_URL
     process.env.PUBLIC_URL = 'http://10.0.0.8:3000'
@@ -276,6 +278,7 @@ describe('device grants', () => {
       expect(result.expiresAt).toEqual(new Date('2026-09-10T00:00:00.000Z'))
       expect(result.currentLink.expiresAt).toEqual(new Date('2026-09-03T00:00:00.000Z'))
     } finally {
+      vi.useRealTimers()
       if (previousPublicUrl === undefined) delete process.env.PUBLIC_URL
       else process.env.PUBLIC_URL = previousPublicUrl
     }
