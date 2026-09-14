@@ -4,6 +4,30 @@ import { relayRequest } from '../../packages/gateway-core/src/relay.js'
 describe('upstream relay', () => {
   const cost = { id: 'cost', source: 'CHANNEL_COST_RULE' as const, currency: 'CNY' as const, timezone: 'UTC',
     resolvedAt: '2026-01-01T00:00:00.000Z', inputPerMillion: '1', outputPerMillion: '1', cachedPerMillion: '0', reasoningPerMillion: '0' }
+  it('does not send a retry until its budget is reserved and retains billable failed attempts', async () => {
+    let calls = 0
+    const candidate = { channelId: 'c', channelModelId: 'cm', keyId: 'k', baseUrl: 'https://example.invalid', upstreamModel: 'm',
+      apiKey: 'secret', protocol: 'openai_chat' as const, maxRetries: 1, timeoutMs: 1000, cost }
+    const error = await relayRequest({ candidates: [candidate], body: { messages: [] },
+      beforeAttempt: async (_candidate, index, attempts) => {
+        if (index === 1) {
+          expect(attempts[0]).toMatchObject({ billingState: 'CONFIRMED', costCny: '0.00000300' })
+          throw new Error('Insufficient retry budget')
+        }
+      }, fetcher: async () => { calls++; return new Response('{"usage":{"prompt_tokens":2,"completion_tokens":1}}', { status: 503 }) }
+    }).catch(error => error)
+    expect(error.message).toBe('Insufficient retry budget'); expect(calls).toBe(1)
+    expect(error.attempts).toHaveLength(1)
+  })
+
+  it('never retries after caller cancellation', async () => {
+    const controller = new AbortController(); let calls = 0
+    await expect(relayRequest({ signal: controller.signal, candidates: [{ channelId: 'c', channelModelId: 'cm', keyId: 'k',
+      baseUrl: 'https://example.invalid', upstreamModel: 'm', apiKey: 'secret', protocol: 'openai_chat', maxRetries: 3, timeoutMs: 1000, cost }],
+      body: {}, fetcher: async () => { calls++; controller.abort(); throw new Error('aborted') }
+    })).rejects.toThrow()
+    expect(calls).toBe(1)
+  })
   it('forwards Anthropic feature headers but not the employee credential', async () => {
     let captured: Record<string, string> = {}
     await relayRequest({ candidates: [{ channelId: 'c', channelModelId: 'cm', keyId: 'k',

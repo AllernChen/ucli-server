@@ -19,6 +19,10 @@ describe('gateway protocol handling', () => {
       .toMatchObject({ inputTokens: 10, outputTokens: 4, cachedTokens: 2, source: 'upstream' })
     expect(normalizeUsage({ input_tokens: 8, output_tokens: 3, cache_read_input_tokens: 5 }))
       .toMatchObject({ inputTokens: 13, outputTokens: 3, cachedTokens: 5, source: 'upstream' })
+    expect(normalizeUsage({ input_tokens: 10, output_tokens: 4, input_tokens_details: { cached_tokens: 2 }, output_tokens_details: { reasoning_tokens: 3 } }))
+      .toMatchObject({ inputTokens: 10, outputTokens: 4, cachedTokens: 2, reasoningTokens: 3 })
+    expect(normalizeUsage({})).toMatchObject({ source: 'estimated' })
+    expect(normalizeUsage({ input_tokens: 3, cache_creation_input_tokens: 5, output_tokens: 1 })).toMatchObject({ unpricedTokens: 5 })
   })
 
   it('retries transient failures only before response output starts', () => {

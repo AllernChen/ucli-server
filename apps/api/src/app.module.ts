@@ -37,9 +37,10 @@ import { UsageGroupsService } from './usage-groups.service.js'
 import { EmployeeKeysController } from './employee-keys.controller.js'
 import { EmployeeKeysService } from './employee-keys.service.js'
 import { ModelCatalogService } from '../../../packages/gateway-core/src/model-catalog.service.js'
+import { GroupBudgetService } from '../../../packages/quota/src/group-budget.service.js'
 
 @Module({
   controllers: [AuthController, ChannelsController, ChannelModelsController, ProcurementCostsController, ModelTestingController, AnalyticsController, ClientController, ModelsController, UsageController, SkillsController, ReportsController, GovernanceController, MonitoringController, MetricsController, OrganizationsController, UsersController, DeviceGrantsController, UsageGroupsController, EmployeeKeysController],
-  providers: [PrismaService, AuthService, ChannelsService, ChannelModelsService, ProcurementCostsService, ModelBindingService, ModelsService, ModelTestingService, AnalyticsService, UsersService, DeviceGrantLinksService, DeviceGrantsService, AuthGuard, ObjectStorageService, AuditInterceptor, UsageGroupsService, ModelCatalogService, EmployeeKeysService]
+  providers: [PrismaService, AuthService, ChannelsService, ChannelModelsService, ProcurementCostsService, ModelBindingService, ModelsService, ModelTestingService, AnalyticsService, UsersService, DeviceGrantLinksService, DeviceGrantsService, AuthGuard, ObjectStorageService, AuditInterceptor, UsageGroupsService, ModelCatalogService, EmployeeKeysService, GroupBudgetService]
 })
 export class AppModule {}

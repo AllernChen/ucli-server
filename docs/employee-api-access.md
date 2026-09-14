@@ -1,6 +1,6 @@
 # 员工 API Key 接入
 
-当前为第二阶段源码能力，尚未部署。`EMPLOYEE_API_KEYS_ENABLED` 默认 `false`：只有隔离测试环境可以显式设置 `true`。组预算预占、扣费和恢复将在下一阶段接入；现在不能据此承诺金额限制已经生效。
+当前已接入组预算的第三阶段源码能力，尚未部署。`EMPLOYEE_API_KEYS_ENABLED` 默认 `false`：只有隔离测试环境可以显式设置 `true`。管理页面、设备迁移与最终发布验收仍在下一阶段，不能将本地源码验证视为公司服务器已启用。
 
 ## 凭据与权限
 
@@ -97,4 +97,30 @@ OpenCode 自定义 provider 的模型列表需要配置，不能假定只填地�
 - `403 group_access_denied/model_access_denied`：组、成员等不可用，或组未授权该模型。既有模型策略也可能返回 404。
 - `503 model_protocol_unavailable/model_channel_unavailable`：协议或健康渠道不可用，不是 Key 认证失败。
 
-当前自动验证覆盖本地 PostgreSQL、双目录、权限、模拟上游三种普通请求/Chat 流式响应、凭据不外泄和日志归属；未连接付费上游、未验证组预算、未替代真实 CLI 验收。
+当前自动验证覆盖本地 PostgreSQL/Redis、双目录、权限、模拟上游三种普通请求/Chat 流式响应、凭据不外泄、预算竞争、跨月结算、待核对费用及 Worker 恢复；未连接付费上游，未替代真实 CLI 验收。
+
+## 组预算与成本对账（管理 API）
+
+下列接口位于 `/api/v1/admin/usage-groups/:id`，使用管理员网页登录 JWT，不能用员工 Key 调用。金额为 CNY 十进制字符串，最多八位小数；零额度禁止调用，不限额必须显式设置 `unlimited: true`。
+
+| 方法与子路径 | 用途 |
+| --- | --- |
+| `GET /budget` | 当前周期额度、已用、预占、待核对及可用金额；不限额的 availableCny 为 null |
+| `PATCH /budget-config` | budgetMode（TOTAL/MONTHLY）、budgetTimezone、operationId、reason |
+| `POST /budget-adjustments` | scope（CURRENT/DEFAULT）、limitCny、unlimited、operationId、reason；可带 periodId 指定要调整的已有周期 |
+| `GET /budget-entries` | offset/limit 分页查看请求、额度和成本调整记录 |
+| `POST /budget-entries/:entryId/reconcile` | action（SETTLE/RELEASE）、actualCny、operationId、reason；多路由需 routes 数组，逐项填写 id/costCny 且合计一致 |
+
+CURRENT 修改指定周期（默认当前周期）的**总额度**，不清除已用成本，不能降低到“已用＋预占”以下。DEFAULT 仅修改以后新建周期的默认额度，不改变已创建周期；总额项目应使用 CURRENT。operationId 用客户端生成的 UUID，同一操作重试必须保持相同参数。
+
+月周期按组时区和请求开始时间确定，跨月完成仍结算原周期。有请求的当前周期或其他未完成请求会阻止更改模式/时区。配置修改不会删除历史周期。
+
+组请求当前支持文本及调用方提供的函数工具。图片、音频、外部托管工具、隐式历史上下文及显式缓存写入等无法用现有采购价格可靠估算的输入返回 `unsupported_budget_estimation`；不限额只取消金额限制，不额外开放这些计费类型。Chat/Responses/Messages 会实际带上服务端确定的输出上限，默认不超过 4096，并受模型上下文大小约束。
+
+已确认费用入账，未知路由费用保留预占并标记 RECONCILIATION_REQUIRED，不因超时、流中断、缺少结束事件或进程退出自动清零。普通完整响应缺 usage 时沿用显式估算；发现未配置费率的缓存写入 token 则转待核对。账单确认后可人工结算，或以 RELEASE 和零成本有依据地释放。人工终态不会被迟到的自动结果覆盖。
+
+账本和使用日志在同一个 PostgreSQL 事务中提交；Redis 仅为旧速率/token/成本配额的兼容计数，微单位向上取整，不是组金额依据。Worker 每分钟处理过期记录与待同步配额；尚未发送的预占可释放，已发送的转待核对。未知费用保留时释放并发槽位，避免把已结束请求当作仍在运行。80/100 阈值在周期内去重写入审计。
+
+数据提交失败会重试一次，仍失败则保留预占、记录 `group_settlement_pending` 并等待恢复/人工账单核对；不承诺异常情况下实际费用绝不超过额度。Redis 恢复使用有界 SCAN，标记量很大时应改为索引队列。管理 UI 和跨维度成本分析仍需第四阶段完成。
+
+开发验证需要显式配置本地 `TEST_DATABASE_URL`（数据库名以 `ucli_test` 开头）和 `TEST_REDIS_URL`（使用独立测试 Redis/数据库编号），并先将现有迁移应用到该测试库。`npm run verify` 的覆盖率包含真实账本逻辑；省略测试库会跳过集成用例，不能作为完整验证。禁止为测试连接公司中间件，CI 的 verify 和 group-integration 任务均使用专用服务。

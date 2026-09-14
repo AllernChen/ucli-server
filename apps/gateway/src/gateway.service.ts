@@ -20,6 +20,8 @@ import { ModelCatalogService, modelCapabilitiesSelect } from '../../../packages/
 import { configuredClientProtocols, upstreamProtocolsForClient } from '../../../packages/gateway-core/src/model-capabilities.js'
 import { highestReservationCost, resolveChannelCost, type ResolvedCost, type ScheduledCost } from '../../../packages/gateway-core/src/cost-schedule.js'
 import { gatewayUnavailable, logGatewayFailure, type GatewayUnavailableCode } from './gateway-errors.js'
+import { GroupBudgetService } from '../../../packages/quota/src/group-budget.service.js'
+import { relayGroupRequest } from './group-request.js'
 
 const PRISMA_PROTOCOL: Record<GatewayProtocol, PrismaProtocol> = {
   openai_responses: 'OPENAI_RESPONSES', openai_chat: 'OPENAI_CHAT', anthropic_messages: 'ANTHROPIC_MESSAGES', gemini: 'GEMINI'
@@ -32,7 +34,8 @@ const PRISMA_TO_PROTOCOL: Record<PrismaProtocol, GatewayProtocol> = {
 @Injectable()
 export class GatewayService {
   constructor(private readonly prisma: PrismaService, private readonly quota: RedisQuotaService,
-    private readonly catalog: ModelCatalogService = new ModelCatalogService(prisma)) {}
+    private readonly catalog: ModelCatalogService = new ModelCatalogService(prisma),
+    private readonly budget: GroupBudgetService = new GroupBudgetService(prisma)) {}
 
   async models(principal: ModelAccessPrincipal, protocol?: GatewayProtocol) {
     return this.catalog.list(principal, protocol)
@@ -140,6 +143,9 @@ export class GatewayService {
         { organizationId: principal.organizationId, accountId: principal.sub, publicModelId }
       ]
     } })
+    if (principal.groupId) return relayGroupRequest({ prisma: this.prisma, quota: this.quota, budget: this.budget,
+      protocol, body, headers, principal: { ...principal, groupId: principal.groupId }, response, candidates, policies,
+      requestId, startedAt, contextSize: model.contextSize ?? 0 })
     // UTF-8 bytes are a conservative tokenizer-independent upper bound for text requests.
     const estimatedInputTokens = Math.max(1, Buffer.byteLength(JSON.stringify(body), 'utf8'))
     const estimatedOutputTokens = Math.max(1, Number(body.max_output_tokens ?? body.max_tokens ?? 4096))

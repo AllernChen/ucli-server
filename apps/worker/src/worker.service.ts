@@ -8,11 +8,25 @@ import Decimal from 'decimal.js'
 import { estimateActiveMinutes } from '../../../packages/usage/src/analytics.js'
 import { ModelTestingService } from '../../api/src/model-testing.service.js'
 import { validateModelDiscoveryUrl } from '../../../packages/gateway-core/src/model-discovery-url.js'
+import { GroupBudgetService } from '../../../packages/quota/src/group-budget.service.js'
+import { RedisQuotaService } from '../../../packages/quota/src/redis-quota.js'
 
 @Injectable()
 export class WorkerService {
   private readonly logger = new Logger(WorkerService.name)
-  constructor(private readonly prisma: PrismaService, private readonly modelTesting: ModelTestingService) {}
+  constructor(private readonly prisma: PrismaService, private readonly modelTesting: ModelTestingService,
+    private readonly budget: GroupBudgetService = new GroupBudgetService(prisma), private readonly quota?: RedisQuotaService) {}
+
+  @Cron('15 * * * * *')
+  async recoverGroupBudgets() {
+    const now = new Date()
+    const recovered = await this.budget.recoverExpired(now)
+    if (recovered.released || recovered.uncertain) this.logger.warn({ event: 'group-budget-recovery', ...recovered })
+    if (this.quota) {
+      const synchronization = await this.budget.recoverQuota(this.quota, now)
+      if (synchronization.failed) this.logger.error({ event: 'group-quota-recovery-pending', failed: synchronization.failed })
+    }
+  }
 
   @Cron('0 * * * * *')
   async probeChannelModels() {

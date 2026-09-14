@@ -9,6 +9,12 @@ jobs:
   group-integration:
     runs-on: ubuntu-latest
     services:
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
       postgres:
         image: postgres:16
         env:
@@ -22,6 +28,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://ucli_test:ucli_test_local@127.0.0.1:5432/ucli_test_group_access
       TEST_DATABASE_URL: postgresql://ucli_test:ucli_test_local@127.0.0.1:5432/ucli_test_group_access
+      TEST_REDIS_URL: redis://127.0.0.1:6379/15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -38,6 +45,27 @@ jobs:
 
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ucli_test
+          POSTGRES_PASSWORD: ucli_test_local
+          POSTGRES_DB: ucli_test_verify
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ucli_test -d ucli_test_verify"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://ucli_test:ucli_test_local@127.0.0.1:5432/ucli_test_verify
+      TEST_DATABASE_URL: postgresql://ucli_test:ucli_test_local@127.0.0.1:5432/ucli_test_verify
+      TEST_REDIS_URL: redis://127.0.0.1:6379/15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,8 +78,8 @@ jobs:
         run: npm ci
       - name: Generate Prisma client
         run: npm run db:generate
-        env:
-          DATABASE_URL: postgresql://ucli:ucli@localhost:5432/ucli
+      - name: Migrate isolated test database
+        run: npm run db:migrate
       - name: Verify
         run: npm run verify
 

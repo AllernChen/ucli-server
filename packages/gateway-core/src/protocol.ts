@@ -23,6 +23,7 @@ export interface NormalizedUsage {
   cachedTokens: number
   reasoningTokens: number
   source: 'upstream' | 'estimated'
+  unpricedTokens?: number
 }
 
 function count(value: unknown): number {
@@ -30,8 +31,8 @@ function count(value: unknown): number {
 }
 
 export function normalizeUsage(usage: Record<string, any> | null | undefined): NormalizedUsage {
-  if (!usage) return { inputTokens: 0, outputTokens: 0, cachedTokens: 0, reasoningTokens: 0, source: 'estimated' }
-  const cachedTokens = count(usage.prompt_tokens_details?.cached_tokens ?? usage.cache_read_input_tokens)
+  if (!usage || !['prompt_tokens', 'input_tokens', 'completion_tokens', 'output_tokens'].some(key => Number.isSafeInteger(usage[key]) && usage[key] >= 0)) return { inputTokens: 0, outputTokens: 0, cachedTokens: 0, reasoningTokens: 0, source: 'estimated' }
+  const cachedTokens = count(usage.prompt_tokens_details?.cached_tokens ?? usage.input_tokens_details?.cached_tokens ?? usage.cache_read_input_tokens)
   const providerInput = count(usage.prompt_tokens ?? usage.input_tokens)
   // OpenAI prompt_tokens already includes cached tokens; Anthropic input_tokens does not.
   const inputTokens = usage.cache_read_input_tokens === undefined ? providerInput : providerInput + cachedTokens
@@ -39,7 +40,8 @@ export function normalizeUsage(usage: Record<string, any> | null | undefined): N
     inputTokens,
     outputTokens: count(usage.completion_tokens ?? usage.output_tokens),
     cachedTokens,
-    reasoningTokens: count(usage.completion_tokens_details?.reasoning_tokens),
+    reasoningTokens: count(usage.completion_tokens_details?.reasoning_tokens ?? usage.output_tokens_details?.reasoning_tokens),
+    ...(count(usage.cache_creation_input_tokens) > 0 ? { unpricedTokens: count(usage.cache_creation_input_tokens) } : {}),
     source: 'upstream'
   }
 }

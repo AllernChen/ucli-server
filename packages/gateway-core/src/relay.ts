@@ -4,6 +4,7 @@ import { geminiResponseToOpenAI, geminiUrl, GeminiStreamTranslator, toGeminiRequ
 import type { GatewayProtocol, NormalizedUsage } from './protocol.js'
 import { normalizeUsage, retryableBeforeResponse, upstreamUrl } from './protocol.js'
 import type { ResolvedCost } from './cost-schedule.js'
+import { calculateCost } from './cost.js'
 
 export interface RelayCandidate {
   channelId: string
@@ -29,27 +30,37 @@ export interface RelayResult {
     status: number
     durationMs: number
     errorCode?: 'UPSTREAM_TIMEOUT' | 'UPSTREAM_NETWORK_ERROR'
+    billingState?: 'CONFIRMED' | 'ESTIMATED' | 'UNKNOWN' | 'NO_CHARGE'
+    costCny?: string
+    usage?: NormalizedUsage
+    costSnapshot?: ResolvedCost
   }>
 }
 
-export async function relayRequest({ candidates, body, incomingHeaders, fetcher = fetch, signal, requestId }: {
+export async function relayRequest({ candidates, body, incomingHeaders, fetcher = fetch, signal, requestId, beforeAttempt }: {
   candidates: RelayCandidate[]
   body: Record<string, unknown>
   incomingHeaders?: Record<string, string | undefined>
   fetcher?: typeof fetch
   signal?: AbortSignal
   requestId?: string
+  beforeAttempt?: (candidate: RelayCandidate, attemptIndex: number, previous: RelayResult['attempts']) => Promise<void>
 }): Promise<RelayResult> {
   const resolvedRequestId = requestId ?? randomUUID()
   const attempts: RelayResult['attempts'] = []
   for (const candidate of candidates) {
     for (let retry = 0; retry <= Math.max(0, candidate.maxRetries); retry += 1) {
+      try {
+        signal?.throwIfAborted()
+        await beforeAttempt?.(candidate, attempts.length, attempts)
+        signal?.throwIfAborted()
+      } catch (error) { throw Object.assign(error as Error, { attempts, requestId: resolvedRequestId }) }
       const started = Date.now()
       const controller = new AbortController()
       let timedOut = false
-      const cancel = () => controller.abort()
-      if (signal?.aborted) controller.abort()
-      else signal?.addEventListener('abort', cancel, { once: true })
+      const fetchSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
+      const attempt: RelayResult['attempts'][number] = { channelId: candidate.channelId, keyId: candidate.keyId, status: 0, durationMs: 0,
+        ...(beforeAttempt ? { billingState: 'UNKNOWN', costSnapshot: candidate.cost } : {}) }
       const timeout = setTimeout(() => {
         timedOut = true
         controller.abort()
@@ -75,9 +86,19 @@ export async function relayRequest({ candidates, body, incomingHeaders, fetcher 
         }
       }
       const response = await fetcher(url, {
-        method: 'POST', headers, body: JSON.stringify(outgoingBody), signal: controller.signal
+        method: 'POST', headers, body: JSON.stringify(outgoingBody), signal: fetchSignal
       })
-      attempts.push({ channelId: candidate.channelId, keyId: candidate.keyId, status: response.status, durationMs: Date.now() - started })
+      attempt.status = response.status; attempt.durationMs = Date.now() - started
+      attempts.push(attempt)
+      if (beforeAttempt && !response.ok) {
+        const raw = await response.clone().json().catch(() => null)
+        if (raw?.usage && Object.keys(raw.usage).length) {
+          attempt.usage = normalizeUsage(raw.usage); attempt.costCny = calculateCost(attempt.usage, candidate.cost)
+          attempt.billingState = attempt.usage.unpricedTokens || attempt.usage.source !== 'upstream' ? 'UNKNOWN' : 'CONFIRMED'
+        } else if ([400, 401, 403, 404, 422, 429].includes(response.status)) {
+          attempt.billingState = 'NO_CHARGE'; attempt.costCny = '0.00000000'
+        }
+      }
       if (!response.ok && retryableBeforeResponse(response.status, false)) {
         await response.body?.cancel().catch(() => undefined)
         continue
@@ -108,16 +129,17 @@ export async function relayRequest({ candidates, body, incomingHeaders, fetcher 
           }
         }
       }
+      if (beforeAttempt && !body.stream && response.ok) {
+        attempt.usage = usage; attempt.costCny = calculateCost(usage, candidate.cost); attempt.billingState = usage.source === 'upstream' ? 'CONFIRMED' : 'ESTIMATED'
+      }
       return { requestId: resolvedRequestId, response, usage, candidate, attempts }
       } catch (error) {
         const errorCode = timedOut || (error as { name?: string })?.name === 'AbortError'
           ? 'UPSTREAM_TIMEOUT'
           : 'UPSTREAM_NETWORK_ERROR'
-        attempts.push({
-          channelId: candidate.channelId, keyId: candidate.keyId, status: 0,
-          durationMs: Date.now() - started, errorCode
-        })
-      } finally { clearTimeout(timeout); signal?.removeEventListener('abort', cancel) }
+        attempt.status = 0; attempt.durationMs = Date.now() - started; attempt.errorCode = errorCode
+        if (!attempts.includes(attempt)) attempts.push(attempt)
+      } finally { clearTimeout(timeout) }
     }
   }
   throw Object.assign(new Error('No upstream channel succeeded'), { code: 'UPSTREAM_UNAVAILABLE', requestId: resolvedRequestId, attempts })

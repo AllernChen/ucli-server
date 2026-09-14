@@ -3,15 +3,16 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { AuthGuard, Roles, type AuthPrincipal } from '../../../packages/security/src/auth.js'
 import { UuidPipe } from '../../../packages/http/src/uuid.pipe.js'
 import { PageQueryDto } from './catalog.dto.js'
-import { AddGroupMemberDto, CreateUsageGroupDto, ReplaceGroupModelsDto, UpdateUsageGroupDto, UsageGroupPageQueryDto } from './usage-groups.dto.js'
+import { AddGroupMemberDto, BudgetAdjustmentDto, BudgetConfigDto, BudgetReconcileDto, CreateUsageGroupDto, ReplaceGroupModelsDto, UpdateUsageGroupDto, UsageGroupPageQueryDto } from './usage-groups.dto.js'
 import { UsageGroupsService } from './usage-groups.service.js'
+import { GroupBudgetService } from '../../../packages/quota/src/group-budget.service.js'
 
 type AdminRequest = { principal: AuthPrincipal }
 
 @ApiTags('admin/usage-groups') @ApiBearerAuth() @UseGuards(AuthGuard)
 @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Controller('api/v1/admin/usage-groups')
 export class UsageGroupsController {
-  constructor(private readonly groups: UsageGroupsService) {}
+  constructor(private readonly groups: UsageGroupsService, private readonly budget: GroupBudgetService) {}
   @Get() list(@Req() req: AdminRequest, @Query() query: UsageGroupPageQueryDto) { return this.groups.list(req.principal.organizationId, query) }
   @Post() create(@Req() req: AdminRequest, @Body() body: CreateUsageGroupDto) { return this.groups.create(req.principal, body) }
   @Get(':id') detail(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string) { return this.groups.detail(req.principal.organizationId, id) }
@@ -24,4 +25,9 @@ export class UsageGroupsController {
   @Delete(':id/members/:accountId') removeMember(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Param('accountId', UuidPipe) accountId: string) { return this.groups.removeMember(req.principal, id, accountId) }
   @Get(':id/models') models(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string) { return this.groups.models(req.principal.organizationId, id) }
   @Put(':id/models') replaceModels(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Body() body: ReplaceGroupModelsDto) { return this.groups.replaceModels(req.principal, id, body.publicModelIds) }
+  @Get(':id/budget') budgetSummary(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string) { return this.budget.summary(req.principal, id) }
+  @Patch(':id/budget-config') budgetConfig(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Body() body: BudgetConfigDto) { return this.budget.configure(req.principal, id, body) }
+  @Post(':id/budget-adjustments') budgetAdjust(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Body() body: BudgetAdjustmentDto) { return this.budget.adjust(req.principal, id, body) }
+  @Get(':id/budget-entries') budgetEntries(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Query() query: PageQueryDto) { return this.budget.entries(req.principal, id, query) }
+  @Post(':id/budget-entries/:entryId/reconcile') budgetReconcile(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Param('entryId', UuidPipe) entryId: string, @Body() body: BudgetReconcileDto) { return this.budget.reconcile(req.principal, id, entryId, body) }
 }

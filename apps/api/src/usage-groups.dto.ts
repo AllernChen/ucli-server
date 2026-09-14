@@ -1,5 +1,5 @@
-import { Transform } from 'class-transformer'
-import { ArrayMaxSize, ArrayUnique, IsArray, IsEnum, IsIn, IsOptional, IsString, IsUUID, Length, ValidateIf } from 'class-validator'
+import { Transform, Type } from 'class-transformer'
+import { ArrayMaxSize, ArrayUnique, IsArray, IsBoolean, IsEnum, IsIn, IsOptional, IsString, IsUUID, Length, Matches, ValidateIf, ValidateNested } from 'class-validator'
 import { UsageGroupType } from '@prisma/client'
 import { PageQueryDto } from './catalog.dto.js'
 
@@ -30,4 +30,34 @@ export class AddGroupMemberDto {
 export class ReplaceGroupModelsDto {
   @IsArray() @ArrayUnique() @ArrayMaxSize(1000)
   @IsString({ each: true }) @Length(1, 200, { each: true }) publicModelIds!: string[]
+}
+
+class BudgetOperationDto {
+  @IsUUID() operationId!: string
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @Length(1, 2000) reason!: string
+}
+
+export class BudgetConfigDto extends BudgetOperationDto {
+  @IsIn(['TOTAL', 'MONTHLY']) budgetMode!: 'TOTAL' | 'MONTHLY'
+  @IsString() @Length(1, 100) budgetTimezone!: string
+}
+
+export class BudgetAdjustmentDto extends BudgetOperationDto {
+  @IsIn(['CURRENT', 'DEFAULT']) scope!: 'CURRENT' | 'DEFAULT'
+  @ValidateIf((_, value) => value !== undefined) @IsUUID() periodId?: string
+  @IsString() @Matches(/^(0|[1-9]\d{0,11})(\.\d{1,8})?$/) limitCny!: string
+  @IsBoolean() unlimited!: boolean
+}
+
+class RouteCostDto {
+  @IsUUID() id!: string
+  @IsString() @Matches(/^(0|[1-9]\d{0,11})(\.\d{1,8})?$/) costCny!: string
+}
+
+export class BudgetReconcileDto extends BudgetOperationDto {
+  @IsIn(['SETTLE', 'RELEASE']) action!: 'SETTLE' | 'RELEASE'
+  @IsString() @Matches(/^(0|[1-9]\d{0,11})(\.\d{1,8})?$/) actualCny!: string
+  @ValidateIf((_, value) => value !== undefined) @IsArray() @ArrayMaxSize(1000)
+  @ValidateNested({ each: true }) @Type(() => RouteCostDto) routes?: RouteCostDto[]
 }

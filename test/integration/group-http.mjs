@@ -10,6 +10,7 @@ import { AuthGuard, signAccessToken } from '../../dist/packages/security/src/aut
 import { GatewayAuthGuard } from '../../dist/packages/security/src/gateway-auth.js'
 import { ModelCatalogService } from '../../dist/packages/gateway-core/src/model-catalog.service.js'
 import { RedisQuotaService } from '../../dist/packages/quota/src/redis-quota.js'
+import { GroupBudgetService } from '../../dist/packages/quota/src/group-budget.service.js'
 import { JsonSafeInterceptor } from '../../dist/packages/http/src/json.interceptor.js'
 import { UsageGroupsController } from '../../dist/apps/api/src/usage-groups.controller.js'
 import { UsageGroupsService } from '../../dist/apps/api/src/usage-groups.service.js'
@@ -22,7 +23,7 @@ process.env.JWT_SECRET = randomUUID()
 class GroupTestModule {}
 Module({
   controllers: [UsageGroupsController, GatewayController, ClientController],
-  providers: [AuthGuard, GatewayAuthGuard, UsageGroupsService, ModelCatalogService, GatewayService,
+  providers: [AuthGuard, GatewayAuthGuard, UsageGroupsService, ModelCatalogService, GatewayService, GroupBudgetService,
     { provide: PrismaService, useValue: db },
     { provide: RedisQuotaService, useValue: { reserve() { throw new Error('Denied requests must not reserve quota') } } }]
 })(GroupTestModule)
@@ -49,6 +50,19 @@ try {
   const created = await request(prefix, 'POST', { name: 'HTTP test', type: 'PROJECT' })
   assert.equal(created.status, 201)
   const id = created.body.id
+  const budgetPath = `${prefix}/${id}/budget`
+  assert.equal((await request(budgetPath)).status, 200)
+  assert.equal((await request(budgetPath)).body.availableCny, '0.00000000')
+  assert.equal((await request(budgetPath, 'GET', undefined, otherToken)).status, 404)
+  const adjustment = { operationId: randomUUID(), scope: 'CURRENT', limitCny: '1', unlimited: false, reason: 'HTTP allocation' }
+  for (const invalid of [{ ...adjustment, limitCny: 1 }, { ...adjustment, limitCny: '-1' }, { ...adjustment, reason: ' ' }, { ...adjustment, unlimited: null }]) {
+    assert.equal((await request(`${prefix}/${id}/budget-adjustments`, 'POST', invalid)).status, 400)
+  }
+  assert.equal((await request(`${prefix}/${id}/budget-adjustments`, 'POST', adjustment)).status, 201)
+  assert.equal((await request(`${prefix}/${id}/budget-adjustments`, 'POST', adjustment)).status, 201)
+  assert.equal((await request(budgetPath)).body.limitCny, '1.00000000')
+  assert.equal((await request(`${prefix}/${id}/budget-entries`)).body.total, 1)
+  assert.equal((await request(`${prefix}/${id}/budget-config`, 'PATCH', { operationId: randomUUID(), budgetMode: 'MONTHLY', budgetTimezone: 'invalid', reason: 'Test' })).status, 400)
   assert.equal((await request(`${prefix}/${id}`, 'GET', undefined, otherToken)).status, 404)
   await db.membership.update({ where: { organizationId_accountId: { organizationId: b.organization.id, accountId: b.account.id } }, data: { role: 'MEMBER' } })
   assert.equal((await request(prefix, 'GET', undefined, signAccessToken({ ...b.actor, role: 'MEMBER' }))).status, 401)

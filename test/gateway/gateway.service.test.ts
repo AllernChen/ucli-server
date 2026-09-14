@@ -47,7 +47,7 @@ function makeHarness(overrides: { prisma?: Record<string, any>; quota?: Record<s
         }]
       }]),
       findFirst: vi.fn().mockResolvedValue({
-        id: 'gpt-4o', enabled: true, policies: [],
+        id: 'gpt-4o', enabled: true, contextSize: 8192, policies: [],
         channelModels: [makeProtocolMapping()],
         prices: [{ id: 'p1', inputPerMillion: '1', outputPerMillion: '2', cachedPerMillion: '0', reasoningPerMillion: '0', currency: 'CNY' }]
       })
@@ -58,6 +58,8 @@ function makeHarness(overrides: { prisma?: Record<string, any>; quota?: Record<s
     auditLog: { create: vi.fn().mockResolvedValue({}) },
     channelKey: { updateMany: vi.fn().mockResolvedValue({}) },
     channel: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+    account: { findUniqueOrThrow: vi.fn().mockResolvedValue({ displayName: 'Employee' }) },
+    usageGroup: { findUniqueOrThrow: vi.fn().mockResolvedValue({ name: 'Group' }) },
     ...overrides.prisma
   }
   const quota = {
@@ -66,8 +68,10 @@ function makeHarness(overrides: { prisma?: Record<string, any>; quota?: Record<s
     release: vi.fn().mockResolvedValue({}),
     ...overrides.quota
   }
-  const service = new GatewayService(prisma as any, quota as any)
-  return { service, prisma, quota }
+  const budget = { reserve: vi.fn().mockResolvedValue({ id: 'entry' }), markDispatched: vi.fn(), extend: vi.fn(),
+    settle: vi.fn().mockResolvedValue({ exceeded: false }), hold: vi.fn(), syncQuota: vi.fn().mockResolvedValue(undefined), release: vi.fn() }
+  const service = new GatewayService(prisma as any, quota as any, undefined, budget as any)
+  return { service, prisma, quota, budget }
 }
 
 function makeResponse() {
@@ -78,16 +82,16 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers(
 
 describe('gateway service orchestration', () => {
   it.each([true, false])('attributes employee key usage without inventing a device (upstream success=%s)', async success => {
-    const { service, prisma } = makeHarness({ prisma: { groupMember: { findFirst: vi.fn().mockResolvedValue({ group: { models: [{ publicModelId: 'gpt-4o' }] } }) } } })
+    const { service, budget } = makeHarness({ prisma: { groupMember: { findFirst: vi.fn().mockResolvedValue({ group: { models: [{ publicModelId: 'gpt-4o' }] } }) } } })
     vi.stubGlobal('fetch', async () => {
       if (!success) throw new Error('network failure')
       return new Response(JSON.stringify({ usage: { prompt_tokens: 7, completion_tokens: 2 } }), { status: 200 })
     })
     const identity = { sub: 'acct1', organizationId: 'org1', role: 'MEMBER' as const, credentialType: 'API_KEY' as const, apiKeyId: 'employee-key', groupId: 'group-1' }
-    const call = service.relay({ protocol: 'openai_chat', body: { model: 'gpt-4o', messages: [] }, headers: {}, principal: identity, response: makeResponse() as any })
+    const call = service.relay({ protocol: 'openai_chat', body: { model: 'gpt-4o', messages: [{ role: 'user', content: 'Hi' }] }, headers: {}, principal: identity, response: makeResponse() as any })
     if (success) await call
     else await expect(call).rejects.toMatchObject({ status: 503 })
-    const data = prisma.usageLog.create.mock.calls[0][0].data
+    const data = (success ? budget.settle : budget.hold).mock.calls[0][1].usage
     expect(data).toMatchObject({ credentialType: 'API_KEY', apiKeyId: 'employee-key', groupId: 'group-1', deviceId: null, accountId: 'acct1' })
   })
 

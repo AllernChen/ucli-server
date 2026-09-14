@@ -13,6 +13,7 @@ import { GatewayAuthGuard } from '../../dist/packages/security/src/gateway-auth.
 import { encryptSecret } from '../../dist/packages/security/src/envelope-crypto.js'
 import { ModelCatalogService } from '../../dist/packages/gateway-core/src/model-catalog.service.js'
 import { RedisQuotaService } from '../../dist/packages/quota/src/redis-quota.js'
+import { GroupBudgetService } from '../../dist/packages/quota/src/group-budget.service.js'
 import { JsonSafeInterceptor } from '../../dist/packages/http/src/json.interceptor.js'
 import { EmployeeKeysController } from '../../dist/apps/api/src/employee-keys.controller.js'
 import { EmployeeKeysService } from '../../dist/apps/api/src/employee-keys.service.js'
@@ -45,7 +46,7 @@ const upstream = createServer(async (req, res) => {
 })
 class KeyTestModule {}
 Module({ controllers: [EmployeeKeysController, GatewayController], providers: [AuthGuard, GatewayAuthGuard,
-  EmployeeKeysService, UsageGroupsService, ModelCatalogService, GatewayService, { provide: PrismaService, useValue: db },
+  EmployeeKeysService, UsageGroupsService, ModelCatalogService, GatewayService, GroupBudgetService, { provide: PrismaService, useValue: db },
   { provide: RedisQuotaService, useValue: { reserve() { throw new Error('This fixture has no Redis quota policies') } } }] })(KeyTestModule)
 const app = await NestFactory.create(KeyTestModule, { logger: false })
 app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
@@ -122,6 +123,10 @@ try {
   assert.deepEqual((await request('/v1/models', 'GET', undefined, otherKey.secret)).body.data, [])
   assert.equal((await request('/v1/chat/completions', 'POST', { model: models[0].id, messages: [] }, otherKey.secret)).status, 403)
   assert.equal(received.length, 0)
+  const validChat = { model: models[0].id, messages: [{ role: 'user', content: 'Hi' }], max_tokens: 16 }
+  assert.equal((await request('/v1/chat/completions', 'POST', validChat, key.secret)).status, 429)
+  assert.equal(received.length, 0)
+  await app.get(GroupBudgetService).adjust(a.actor, group.id, { operationId: randomUUID(), scope: 'CURRENT', limitCny: '1', unlimited: false, reason: 'Local HTTP test budget' })
   for (const [index, path, stream] of [[0, '/v1/chat/completions', false], [1, '/v1/responses', false],
     [2, '/anthropic/v1/messages', false], [0, '/v1/chat/completions', true]]) {
     const body = { model: models[index].id, stream, ...(index === 1 ? { input: 'Hi', max_output_tokens: 16 }
