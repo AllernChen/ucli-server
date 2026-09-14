@@ -7,7 +7,7 @@ import { encryptSecret } from '../../packages/security/src/envelope-crypto.js'
 const MASTER_KEY = Buffer.alloc(32)
 process.env.MASTER_KEY = MASTER_KEY.toString('base64')
 
-const principal = { sub: 'acct1', organizationId: 'org1', deviceId: 'dev1', role: 'MEMBER' as const }
+const principal = { sub: 'acct1', organizationId: 'org1', deviceId: 'dev1', role: 'MEMBER' as const, credentialType: 'DEVICE' as const, groupId: null }
 
 function makeKey() {
   const encrypted = encryptSecret('upstream-secret', MASTER_KEY)
@@ -77,6 +77,20 @@ function makeResponse() {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('gateway service orchestration', () => {
+  it.each([true, false])('attributes employee key usage without inventing a device (upstream success=%s)', async success => {
+    const { service, prisma } = makeHarness({ prisma: { groupMember: { findFirst: vi.fn().mockResolvedValue({ group: { models: [{ publicModelId: 'gpt-4o' }] } }) } } })
+    vi.stubGlobal('fetch', async () => {
+      if (!success) throw new Error('network failure')
+      return new Response(JSON.stringify({ usage: { prompt_tokens: 7, completion_tokens: 2 } }), { status: 200 })
+    })
+    const identity = { sub: 'acct1', organizationId: 'org1', role: 'MEMBER' as const, credentialType: 'API_KEY' as const, apiKeyId: 'employee-key', groupId: 'group-1' }
+    const call = service.relay({ protocol: 'openai_chat', body: { model: 'gpt-4o', messages: [] }, headers: {}, principal: identity, response: makeResponse() as any })
+    if (success) await call
+    else await expect(call).rejects.toMatchObject({ status: 503 })
+    const data = prisma.usageLog.create.mock.calls[0][0].data
+    expect(data).toMatchObject({ credentialType: 'API_KEY', apiKeyId: 'employee-key', groupId: 'group-1', deviceId: null, accountId: 'acct1' })
+  })
+
   it('denies manually requested models outside the group before routing upstream', async () => {
     const { service, prisma } = makeHarness({ prisma: {
       groupMember: { findFirst: vi.fn().mockResolvedValue({ group: { models: [] } }) }

@@ -66,6 +66,7 @@ export async function relayRequest({ candidates, body, incomingHeaders, fetcher 
         if (candidate.protocol === 'anthropic_messages') {
           headers['x-api-key'] = candidate.apiKey
           headers['anthropic-version'] = incomingHeaders?.['anthropic-version'] || '2023-06-01'
+          if (incomingHeaders?.['anthropic-beta']) headers['anthropic-beta'] = incomingHeaders['anthropic-beta']
         } else headers.authorization = `Bearer ${candidate.apiKey}`
         url = upstreamUrl(candidate.baseUrl, candidate.protocol)
         outgoingBody = { ...body, model: candidate.upstreamModel }

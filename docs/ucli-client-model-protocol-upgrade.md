@@ -8,6 +8,12 @@
 
 ## 服务端合同
 
+### 员工 Key 和第二模型目录（未部署）
+
+第二阶段源码新增 `/gateway/anthropic/v1/models?limit=1000`，按当前凭据权限与 `anthropic_messages` 过滤，并设置 `Cache-Control: no-store`。OpenAI 目录维持原有字段。两个网关目录支持有效设备 JWT；员工 Key 仅在专用开关启用后可用。bootstrap 仍使用现有控制面认证，不接受员工 Key。
+
+新增 Anthropic beta 请求头透传，不新增协议转换器。CLI 接入限制及未实测事项见 [员工 API Key 接入](employee-api-access.md)。
+
 ### Bootstrap 模型目录
 
 `GET /api/v1/client/bootstrap` 的每个 `models` 项必须包含 `id`、`displayName`、正整数 `contextSize` 和非空 `protocols`：

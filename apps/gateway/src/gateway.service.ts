@@ -11,6 +11,7 @@ import { selectChannel, selectKey, selectKeyRoundRobin } from '../../../packages
 import { parseUcliContext } from '../../../packages/gateway-core/src/ucli-context.js'
 import { decryptSecret } from '../../../packages/security/src/envelope-crypto.js'
 import { loadMasterKey } from '../../../packages/security/src/master-key.js'
+import type { GatewayIdentity } from '../../../packages/security/src/gateway-auth.js'
 import { RedisQuotaService } from '../../../packages/quota/src/redis-quota.js'
 import { recordQuotaRejection, recordQuotaSettlement } from '../../../packages/monitoring/src/quota-metrics.js'
 import { StreamUsageCollector } from '../../../packages/gateway-core/src/stream-usage.js'
@@ -33,8 +34,8 @@ export class GatewayService {
   constructor(private readonly prisma: PrismaService, private readonly quota: RedisQuotaService,
     private readonly catalog: ModelCatalogService = new ModelCatalogService(prisma)) {}
 
-  async models(principal: ModelAccessPrincipal) {
-    return this.catalog.list(principal)
+  async models(principal: ModelAccessPrincipal, protocol?: GatewayProtocol) {
+    return this.catalog.list(principal, protocol)
   }
 
   private async candidates(publicModelId: string, protocol: GatewayProtocol, at: Date, fallbackPrice?: any): Promise<RelayCandidate[]> {
@@ -95,12 +96,14 @@ export class GatewayService {
     protocol: GatewayProtocol
     body: Record<string, any>
     headers: Record<string, string | string[] | undefined>
-    principal: { sub: string; organizationId: string; deviceId: string; groupId?: string | null; role: 'PLATFORM_ADMIN' | 'ORG_ADMIN' | 'MEMBER' }
+    principal: GatewayIdentity
     response: ExpressResponse
   }): Promise<void> {
     const publicModelId = String(body?.model || '')
     if (!publicModelId) throw new NotFoundException('Model is required')
     const startedAt = new Date()
+    const attribution = { credentialType: principal.credentialType, groupId: principal.groupId,
+      deviceId: principal.deviceId ?? null, apiKeyId: principal.apiKeyId ?? null }
     const model = await this.prisma.publicModel.findFirst({ where: { id: publicModelId, enabled: true, deletedAt: null }, include: {
       policies: true,
       channelModels: { select: modelCapabilitiesSelect },
@@ -114,6 +117,7 @@ export class GatewayService {
     response.setHeader('cache-control', 'no-store')
     const logFailure = (code: GatewayUnavailableCode, routeAttempts: number) => logGatewayFailure({
       requestId, organizationId: principal.organizationId, accountId: principal.sub, deviceId: principal.deviceId,
+      ...(principal.apiKeyId ? { apiKeyId: principal.apiKeyId } : {}), ...(principal.groupId ? { groupId: principal.groupId } : {}),
       publicModelId, protocol, code, routeAttempts
     })
     const configuredProtocols = configuredClientProtocols(model.channelModels)
@@ -182,10 +186,12 @@ export class GatewayService {
       throw error
     }
     const anthropicVersion = headers['anthropic-version']
+    const anthropicBeta = headers['anthropic-beta']
     let result
     try {
       result = await relayRequest({ requestId, candidates, body, incomingHeaders: {
-        'anthropic-version': Array.isArray(anthropicVersion) ? anthropicVersion[0] : anthropicVersion
+        'anthropic-version': Array.isArray(anthropicVersion) ? anthropicVersion[0] : anthropicVersion,
+        'anthropic-beta': Array.isArray(anthropicBeta) ? anthropicBeta.join(',') : anthropicBeta
       } })
     } catch (error) {
       await Promise.all(reservations.map(reservation => this.quota.release(reservation)))
@@ -194,7 +200,7 @@ export class GatewayService {
       const fallback = candidates[0]!
       await this.prisma.usageLog.create({ data: {
         requestId, organizationId: principal.organizationId,
-        accountId: principal.sub, deviceId: principal.deviceId, groupId: principal.groupId, sessionId: context.sessionId,
+        accountId: principal.sub, ...attribution, sessionId: context.sessionId,
         projectId: context.projectId, cliType: context.cliType, clientVersion: context.clientVersion,
         timezone: context.timezone, protocol: PRISMA_PROTOCOL[protocol], publicModelId,
         upstreamModel: fallback.upstreamModel, channelId: fallback.channelId, channelModelId: fallback.channelModelId,
@@ -252,7 +258,7 @@ export class GatewayService {
       const finishedAt = new Date()
       await this.prisma.usageLog.create({ data: {
         requestId: result.requestId, organizationId: principal.organizationId, accountId: principal.sub,
-        deviceId: principal.deviceId, groupId: principal.groupId, sessionId: context.sessionId, projectId: context.projectId,
+        ...attribution, sessionId: context.sessionId, projectId: context.projectId,
         cliType: context.cliType, clientVersion: context.clientVersion, timezone: context.timezone,
         protocol: PRISMA_PROTOCOL[protocol], publicModelId, upstreamModel: result.candidate.upstreamModel,
         channelId: result.candidate.channelId, channelModelId: result.candidate.channelModelId,

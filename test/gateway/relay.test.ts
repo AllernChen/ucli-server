@@ -4,6 +4,20 @@ import { relayRequest } from '../../packages/gateway-core/src/relay.js'
 describe('upstream relay', () => {
   const cost = { id: 'cost', source: 'CHANNEL_COST_RULE' as const, currency: 'CNY' as const, timezone: 'UTC',
     resolvedAt: '2026-01-01T00:00:00.000Z', inputPerMillion: '1', outputPerMillion: '1', cachedPerMillion: '0', reasoningPerMillion: '0' }
+  it('forwards Anthropic feature headers but not the employee credential', async () => {
+    let captured: Record<string, string> = {}
+    await relayRequest({ candidates: [{ channelId: 'c', channelModelId: 'cm', keyId: 'k',
+      baseUrl: 'https://up.example', upstreamModel: 'claude-test', apiKey: 'upstream-secret',
+      protocol: 'anthropic_messages', maxRetries: 0, timeoutMs: 1000, cost }],
+      body: { model: 'public', max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] },
+      incomingHeaders: { 'anthropic-beta': 'test-beta', 'anthropic-version': '2023-06-01', authorization: 'Bearer employee-secret', 'x-api-key': 'employee-secret' },
+      fetcher: async (_url, init) => {
+        captured = init?.headers as Record<string, string>
+        return new Response('{"usage":{"input_tokens":1,"output_tokens":1}}', { status: 200 })
+      } })
+    expect(captured).toMatchObject({ 'anthropic-beta': 'test-beta', 'anthropic-version': '2023-06-01', 'x-api-key': 'upstream-secret' })
+    expect(captured.authorization).toBeUndefined()
+  })
   it('maps the model, hides the first failed candidate, and returns normalized usage', async () => {
     const requests: Array<{ url: string; body: any; headers: Record<string, string> }> = []
     const fetcher = async (input: URL | RequestInfo, init?: RequestInit) => {

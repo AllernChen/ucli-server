@@ -19,7 +19,9 @@ export function logGatewayFailure(input: {
   requestId: string
   organizationId: string
   accountId: string
-  deviceId: string
+  deviceId?: string
+  apiKeyId?: string
+  groupId?: string
   publicModelId: string
   protocol: string
   code: GatewayUnavailableCode

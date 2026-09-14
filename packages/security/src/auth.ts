@@ -51,12 +51,21 @@ export class AuthGuard implements CanActivate {
     // 网关 Anthropic 协议客户端（Claude Code）用 x-api-key 而非 Bearer
     const token = bearer.startsWith('Bearer ') ? bearer.slice(7) : String(request.headers['x-api-key'] || '')
     if (!token) throw new UnauthorizedException('Bearer token required')
+    request.principal = await this.authenticateToken(token)
+    const roles = this.reflector.getAllAndOverride<AuthPrincipal['role'][]>(ROLES_KEY, [
+      context.getHandler(), context.getClass()
+    ])
+    if (roles?.length && !roles.includes(request.principal.role)) throw new UnauthorizedException('Role not permitted')
+    return true
+  }
+
+  async authenticateToken(token: string): Promise<AuthPrincipal> {
+    let principal: AuthPrincipal
     try {
-      request.principal = jwt.verify(token, process.env.JWT_SECRET!, {
+      principal = jwt.verify(token, process.env.JWT_SECRET!, {
         issuer: 'ucli-server', audience: 'ucli'
       }) as AuthPrincipal
     } catch { throw new UnauthorizedException('Invalid access token') }
-    const principal = request.principal as AuthPrincipal
     // Group ownership is live server state, never a JWT or client-context claim.
     principal.groupId = null
     if (principal.deviceId) {
@@ -79,11 +88,7 @@ export class AuthGuard implements CanActivate {
     } else {
       await this.assertActiveMembership(principal, principal.role)
     }
-    const roles = this.reflector.getAllAndOverride<AuthPrincipal['role'][]>(ROLES_KEY, [
-      context.getHandler(), context.getClass()
-    ])
-    if (roles?.length && !roles.includes(request.principal.role)) throw new UnauthorizedException('Role not permitted')
-    return true
+    return principal
   }
 
   private async assertActiveMembership(principal: AuthPrincipal, role: AuthPrincipal['role']) {

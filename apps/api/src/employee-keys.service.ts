@@ -1,0 +1,121 @@
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import { Prisma, type EmployeeApiKey } from '@prisma/client'
+import { PrismaService } from '../../../packages/database/src/prisma.service.js'
+import type { AuthPrincipal } from '../../../packages/security/src/auth.js'
+import { assertActiveGroupMember, lockUsageGroup } from '../../../packages/security/src/group-access.js'
+import { createOpaqueToken, hashOpaqueToken, opaqueTokenHint } from '../../../packages/security/src/tokens.js'
+import { PageQueryDto } from './catalog.dto.js'
+import type { CreateEmployeeKeyDto, UpdateEmployeeKeyDto } from './employee-keys.dto.js'
+
+const keySummary = Prisma.validator<Prisma.EmployeeApiKeySelect>()({
+  id: true, organizationId: true, accountId: true, groupId: true, name: true, secretHint: true,
+  createdAt: true, createdById: true, expiresAt: true, disabledAt: true, revokedAt: true, deletedAt: true, lastUsedAt: true
+})
+
+function expiry(value: string | null | undefined): Date | null | undefined {
+  if (value === null || value === undefined) return value
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime()) || date <= new Date()) throw new BadRequestException('expiresAt must be in the future')
+  return date
+}
+
+@Injectable()
+export class EmployeeKeysService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  private assertAdmin(actor: AuthPrincipal) {
+    if (!['PLATFORM_ADMIN', 'ORG_ADMIN'].includes(actor.role)) throw new ForbiddenException('Administrator required')
+  }
+
+  private assertWebSession(actor: AuthPrincipal) {
+    if (actor.deviceId) throw new ForbiddenException('Web login required')
+  }
+
+  private audit(db: Prisma.TransactionClient, actor: AuthPrincipal, key: { id: string; accountId: string; groupId: string }, action: string) {
+    return db.auditLog.create({ data: { actorAccountId: actor.sub, organizationId: actor.organizationId,
+      action: `employee_api_key.${action}`, resourceType: 'employee_api_key', resourceId: key.id,
+      metadata: { accountId: key.accountId, groupId: key.groupId } } })
+  }
+
+  async create(actor: AuthPrincipal, accountId: string, input: CreateEmployeeKeyDto) {
+    this.assertAdmin(actor)
+    const expiresAt = expiry(input.expiresAt)
+    const secret = `ucli_sk_${createOpaqueToken()}`
+    const key = await this.prisma.$transaction(async db => {
+      await lockUsageGroup(db, actor.organizationId, input.groupId)
+      await assertActiveGroupMember(db, { organizationId: actor.organizationId, accountId, groupId: input.groupId })
+      const created = await db.employeeApiKey.create({ data: { organizationId: actor.organizationId, accountId,
+        groupId: input.groupId, name: input.name, createdById: actor.sub, expiresAt,
+        secretHash: hashOpaqueToken(secret), secretHint: opaqueTokenHint(secret) }, select: keySummary })
+      await this.audit(db, actor, created, 'create')
+      return created
+    })
+    return { ...key, secret }
+  }
+
+  async list(actor: AuthPrincipal, accountId: string, query = new PageQueryDto()) {
+    this.assertAdmin(actor)
+    const member = await this.prisma.membership.findUnique({ where: { organizationId_accountId: { organizationId: actor.organizationId, accountId } } })
+    if (!member) throw new NotFoundException('User not found')
+    return this.listFor(actor.organizationId, accountId, query)
+  }
+
+  listMine(actor: AuthPrincipal, query = new PageQueryDto()) {
+    this.assertWebSession(actor)
+    return this.listFor(actor.organizationId, actor.sub, query)
+  }
+
+  private async listFor(organizationId: string, accountId: string, query: PageQueryDto) {
+    const where = { organizationId, accountId, deletedAt: null }
+    const [items, total] = await Promise.all([
+      this.prisma.employeeApiKey.findMany({ where, select: keySummary, skip: query.offset, take: query.limit, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }] }),
+      this.prisma.employeeApiKey.count({ where })
+    ])
+    return { items, total, offset: query.offset, limit: query.limit }
+  }
+
+  private async mutate(actor: AuthPrincipal, id: string, action: string,
+    change: (key: EmployeeApiKey, db: Prisma.TransactionClient) => Promise<Prisma.EmployeeApiKeyUpdateManyMutationInput>, ownOnly = false) {
+    if (ownOnly) this.assertWebSession(actor)
+    else this.assertAdmin(actor)
+    const where = { id, organizationId: actor.organizationId, ...(ownOnly ? { accountId: actor.sub } : {}) }
+    const initial = await this.prisma.employeeApiKey.findFirst({ where, select: { groupId: true } })
+    if (!initial) throw new NotFoundException('Employee API key not found')
+    return this.prisma.$transaction(async db => {
+      await lockUsageGroup(db, actor.organizationId, initial.groupId)
+      const key = await db.employeeApiKey.findFirstOrThrow({ where })
+      const data = await change(key, db)
+      await db.employeeApiKey.updateMany({ where, data })
+      await this.audit(db, actor, key, action)
+      return db.employeeApiKey.findFirstOrThrow({ where, select: keySummary })
+    })
+  }
+
+  private assertMutable(key: EmployeeApiKey) {
+    if (key.revokedAt || key.deletedAt) throw new ConflictException('Revoked or deleted keys cannot be restored or edited')
+  }
+
+  update(actor: AuthPrincipal, id: string, input: UpdateEmployeeKeyDto) {
+    const expiresAt = expiry(input.expiresAt)
+    return this.mutate(actor, id, 'update', async key => {
+      this.assertMutable(key)
+      return { name: input.name, expiresAt }
+    })
+  }
+
+  setEnabled(actor: AuthPrincipal, id: string, enabled: boolean) {
+    return this.mutate(actor, id, enabled ? 'enable' : 'disable', async (key, db) => {
+      this.assertMutable(key)
+      if (enabled) await assertActiveGroupMember(db, key)
+      return { disabledAt: enabled ? null : new Date() }
+    })
+  }
+
+  revoke(actor: AuthPrincipal, id: string, ownOnly = false) {
+    return this.mutate(actor, id, 'revoke', async key => ({ revokedAt: key.revokedAt ?? new Date() }), ownOnly)
+  }
+
+  delete(actor: AuthPrincipal, id: string) {
+    return this.mutate(actor, id, 'delete', async key => ({ revokedAt: key.revokedAt ?? new Date(), deletedAt: key.deletedAt ?? new Date() }))
+  }
+}

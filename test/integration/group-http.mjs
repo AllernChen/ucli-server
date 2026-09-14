@@ -7,6 +7,7 @@ import { NestFactory } from '@nestjs/core'
 import { createOrganization, testDatabaseUrl } from './database.ts'
 import { PrismaService } from '../../dist/packages/database/src/prisma.service.js'
 import { AuthGuard, signAccessToken } from '../../dist/packages/security/src/auth.js'
+import { GatewayAuthGuard } from '../../dist/packages/security/src/gateway-auth.js'
 import { ModelCatalogService } from '../../dist/packages/gateway-core/src/model-catalog.service.js'
 import { RedisQuotaService } from '../../dist/packages/quota/src/redis-quota.js'
 import { JsonSafeInterceptor } from '../../dist/packages/http/src/json.interceptor.js'
@@ -21,7 +22,7 @@ process.env.JWT_SECRET = randomUUID()
 class GroupTestModule {}
 Module({
   controllers: [UsageGroupsController, GatewayController, ClientController],
-  providers: [AuthGuard, UsageGroupsService, ModelCatalogService, GatewayService,
+  providers: [AuthGuard, GatewayAuthGuard, UsageGroupsService, ModelCatalogService, GatewayService,
     { provide: PrismaService, useValue: db },
     { provide: RedisQuotaService, useValue: { reserve() { throw new Error('Denied requests must not reserve quota') } } }]
 })(GroupTestModule)
