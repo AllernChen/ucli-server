@@ -3,6 +3,9 @@ import { randomUUID } from 'node:crypto'
 import type { PrismaClient, Prisma } from '@prisma/client'
 import { describe, expect, it } from 'vitest'
 import { AnalyticsService } from '../../apps/api/src/analytics.service.js'
+import { AnalyticsController } from '../../apps/api/src/analytics.controller.js'
+import { UsageController } from '../../apps/api/src/usage.controller.js'
+import { GroupBudgetService } from '../../packages/quota/src/group-budget.service.js'
 import { PrismaService } from '../../packages/database/src/prisma.service.js'
 import { createOrganization, withTestDatabase } from './database.js'
 
@@ -23,7 +26,7 @@ async function fixture(db: PrismaClient) {
     usageLogId, channelId: channel.id, attempt, startedAt: at, durationMs: 1, costCny: '1', billingState: 'CONFIRMED',
     usageSnapshot: { source: 'upstream', inputTokens: 10, outputTokens: 1, cachedTokens: 2, reasoningTokens: 0 }, ...data
   } })
-  return { ...owner, channel, model, log, route, service: new AnalyticsService(db as PrismaService) }
+  return { ...owner, channel, model, device, log, route, service: new AnalyticsService(db as PrismaService) }
 }
 
 const historicalPrice = (extra = {}) => ({ id: randomUUID(), source: 'CHANNEL_COST_RULE', inputPerMillion: '1', cachedPerMillion: '0.5',
@@ -31,6 +34,96 @@ const historicalPrice = (extra = {}) => ({ id: randomUUID(), source: 'CHANNEL_CO
   validFrom: '2026-01-01T00:00:00Z', internalSecret: { credential: 'must-not-leak' }, ...extra })
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('routed operational usage analytics', () => {
+  it('keeps paging, details and both exports on the same matched request costs and safe historical names', () => withTestDatabase(async db => {
+    const f = await fixture(db), usage = new UsageController(db as PrismaService), request = { principal: f.actor }
+    const log = await f.log({ costUsd: '1.5', actorSnapshot: { employeeName: '=中文', internalSecret: 'DO_NOT_EXPOSE' }, costSnapshot: { billingState: 'UNKNOWN', internalSecret: 'DO_NOT_EXPOSE' }, errorCode: 'RECONCILIATION_REQUIRED' })
+    await f.route(log.id, 1, { usageSnapshot: { source: 'upstream', inputTokens: 100, outputTokens: 10, cachedTokens: 20, reasoningTokens: 0, cost: historicalPrice() } })
+    const breakdown = await f.service.breakdown(f.actor, { ...range, dimension: 'costRule', channelId: f.channel.id })
+    const query = { ...range, ...breakdown.items[0].drillQuery, groupScope: 'UNGROUPED' as const, keyScope: 'NO_KEY' as const, billingState: 'CONFIRMED' as const }
+    const page = await usage.logsPage(request, { ...query, limit: 1 })
+    expect(page).toMatchObject({ total: 1, limit: 1, offset: 0, items: [{ id: log.id, requestState: 'SUCCESS', costCny: '1.50000000', matchedCostCny: '1.00000000', groupName: '历史未归组', keyName: '设备凭据' }] })
+    expect(await usage.logsPage(request, { ...query, offset: 10 })).toMatchObject({ items: [], total: 1 })
+    const detail = await usage.detail(request, log.id, query)
+    expect(detail).toMatchObject({ matchedCostCny: '1.00000000', unallocatedCostCny: '0.50000000', budget: null, budgetAvailability: 'NOT_APPLICABLE' })
+    expect(JSON.stringify(detail)).not.toMatch(/DO_NOT_EXPOSE|must-not-leak|refreshToken|secretHash/)
+    expect(await usage.detail(request, log.id, { ...range, channelId: randomUUID() })).toMatchObject({ id: log.id, matchedCostCny: '0.00000000' })
+    expect(await usage.logsPage(request, { ...range, channelModelScope: 'UNASSOCIATED', billingState: 'UNKNOWN' })).toMatchObject({ total: 1, items: [{ matchedCostCny: '0.50000000' }] })
+    expect(await usage.logsPage(request, { ...range, billingState: 'UNKNOWN' })).toMatchObject({ total: 1, items: [{ matchedCostCny: '1.50000000' }] })
+    expect(await usage.exportCsv(request, { ...query, offset: 50, limit: 1 })).toContain('"\'=中文"')
+    expect(await usage.exportCsv(request, query)).toContain('"1.00000000"')
+    const rows = await f.service.exportRows(f.actor, { ...query, dimension: 'channel', offset: 50, limit: 1 })
+    expect(rows).toMatchObject([{ matchedCostCny: '1.00000000', requestCostCny: '1.50000000' }])
+    const csv = await new AnalyticsController(f.service).exportCsv(request, { ...query, dimension: 'channel' })
+    expect(csv).toContain('matchedCostCny'); expect(csv).not.toContain('must-not-leak')
+    expect(await usage.summary(request, query)).toMatchObject({ requests: 1, costCny: '1.00000000', matchedCostCny: '1.00000000', requestSuccessRate: 1 })
+    const outsider = await fixture(db)
+    await expect(usage.detail({ principal: outsider.actor }, log.id, { ...range, organizationId: f.organization.id, accountId: f.account.id })).rejects.toMatchObject({ status: 404 })
+    await expect(usage.detail(request, 'not-a-uuid', {})).rejects.toMatchObject({ status: 404 })
+  }))
+
+  it('supports historical logs options without relaxing analytics limits or member scope and authorizes old detail IDs independently', () => withTestDatabase(async db => {
+    const f = await fixture(db), usage = new UsageController(db as PrismaService), request = { principal: f.actor }
+    const old = await f.log({ startedAt: new Date('2025-01-01T00:00:00Z'), actorSnapshot: { employeeName: 'Historical' } })
+    const other = await db.account.create({ data: { email: `${randomUUID()}@example.invalid`, displayName: 'Other' } })
+    const otherLog = await f.log({ accountId: other.id, startedAt: old.startedAt })
+    const historical = { start: '2025-01-01T00:00:00Z', end: '2026-09-17T00:00:00Z', optionDimension: 'account' as const }
+    expect((await usage.logs(request, {})).some(row => row.id === old.id)).toBe(true)
+    expect(await usage.logsPage(request, {})).toMatchObject({ total: 0 })
+    expect(await usage.summary(request, {})).toMatchObject({ requests: 2 })
+    expect(await usage.detail(request, old.id, {})).toMatchObject({ id: old.id, matchedCostCny: '1.00000000' })
+    expect(await usage.options(request, { ...historical, requestId: old.requestId })).toMatchObject({ page: { total: 1, items: [{ id: f.account.id, name: 'Historical' }] } })
+    expect(await usage.options(request, { ...historical, interval: 'hour', requestId: old.requestId })).toMatchObject({ page: { total: 1 } })
+    await expect(f.service.filterOptions(f.actor, { start: '2026-01-01', end: '2026-02-15', interval: 'hour', optionDimension: 'account' })).rejects.toMatchObject({ status: 400 })
+    for (const extra of [{ sessionId: randomUUID() }, { projectId: randomUUID() }, { requestId: randomUUID() }]) {
+      expect(await usage.options(request, { ...historical, ...extra })).toMatchObject({ page: { total: 0, items: [] } })
+    }
+    await expect(f.service.filterOptions(f.actor, historical)).rejects.toMatchObject({ status: 400 })
+    expect(await usage.options({ principal: { ...f.actor, role: 'MEMBER' } }, { ...historical, accountId: other.id, organizationId: randomUUID() })).toMatchObject({ page: { total: 1, items: [{ id: f.account.id }] } })
+    await expect(usage.detail({ principal: { ...f.actor, role: 'MEMBER' } }, otherLog.id, { accountId: other.id })).rejects.toMatchObject({ status: 404 })
+  }))
+
+  it('joins budget only by the authorized log identity and preserves cumulative reservation through hold then settle', () => withTestDatabase(async db => {
+    const f = await fixture(db), usage = new UsageController(db as PrismaService), request = { principal: f.actor }
+    const group = await db.usageGroup.create({ data: { organizationId: f.organization.id, name: 'Group', type: 'PROJECT', defaultLimitCny: '10' } })
+    await db.groupMember.create({ data: { organizationId: f.organization.id, groupId: group.id, accountId: f.account.id } })
+    const key = await db.employeeApiKey.create({ data: { organizationId: f.organization.id, groupId: group.id, accountId: f.account.id, createdById: f.account.id, name: 'Current key', secretHint: 'secret hint', secretHash: randomUUID() } })
+    const budget = new GroupBudgetService(db as PrismaService), at = new Date('2026-09-15T01:00:00Z')
+    const reservation = await budget.reserve({ identity: { ...f.actor, groupId: group.id, credentialType: 'API_KEY', apiKeyId: key.id }, requestId: randomUUID(), startedAt: at, estimateCny: '3', snapshot: { internalSecret: 'DO_NOT_EXPOSE' } })
+    await budget.extend(reservation, '1', { attemptId: '2' })
+    const logData = { requestId: reservation.requestId, organizationId: f.organization.id, accountId: f.account.id, groupId: group.id, credentialType: 'API_KEY' as const, apiKeyId: key.id,
+      channelId: f.channel.id, publicModelId: f.model.id, upstreamModel: 'upstream', protocol: 'OPENAI_CHAT' as const, startedAt: at, finishedAt: at,
+      durationMs: 10, statusCode: 200, errorCode: 'RECONCILIATION_REQUIRED', costUsd: '1', costSnapshot: { billingState: 'UNKNOWN' }, usageSource: 'UPSTREAM' as const, streaming: false }
+    await budget.hold(reservation, { actualCny: '1', unresolvedCny: '0.5', usage: logData, reason: 'pending' })
+    const log = await db.usageLog.findUniqueOrThrow({ where: { requestId: reservation.requestId } })
+    expect(await usage.detail(request, log.id, {})).toMatchObject({ employeeName: f.account.id, keyName: key.id, keyHint: null, groupName: group.id,
+      budgetAvailability: 'AVAILABLE', budget: { cumulativeReservedCny: '4.00000000', currentHeldCny: '0.50000000', settledCny: '1.00000000' } })
+    await budget.settle(reservation, { actualCny: '1.25', usage: { ...logData, costUsd: '1.25', errorCode: null, costSnapshot: { billingState: 'CONFIRMED' } } })
+    const result = await usage.detail(request, log.id, {})
+    expect(result.budget).toMatchObject({ status: 'SETTLED', cumulativeReservedCny: '4.00000000', currentHeldCny: '0.00000000', settledCny: '1.25000000' })
+    expect(JSON.stringify(result)).not.toMatch(/DO_NOT_EXPOSE|secret hint|Current key/)
+    const other = await createOrganization(db)
+    await db.membership.create({ data: { organizationId: f.organization.id, accountId: other.account.id, role: 'MEMBER' } })
+    const anotherGroup = await db.usageGroup.create({ data: { organizationId: f.organization.id, name: 'Other group', type: 'PROJECT' } })
+    const anotherPeriod = await db.groupBudgetPeriod.create({ data: { organizationId: f.organization.id, groupId: anotherGroup.id, periodKey: 'TOTAL', timezone: 'Asia/Shanghai', limitCny: '10' } })
+    const outsideGroup = await db.usageGroup.create({ data: { organizationId: other.organization.id, name: 'Outside', type: 'PROJECT' } })
+    const outsidePeriod = await db.groupBudgetPeriod.create({ data: { organizationId: other.organization.id, groupId: outsideGroup.id, periodKey: 'TOTAL', timezone: 'Asia/Shanghai', limitCny: '10' } })
+    const original = { organizationId: f.organization.id, groupId: group.id, periodId: reservation.periodId, requestId: reservation.requestId,
+      kind: 'REQUEST' as const, actorAccountId: null, accountId: f.account.id, credentialType: 'API_KEY' as const, credentialId: key.id }
+    for (const mismatch of [{ kind: 'COST_ADJUSTMENT' as const, requestId: null, actorAccountId: f.account.id }, { accountId: other.account.id },
+      { credentialType: 'DEVICE' as const }, { credentialId: randomUUID() }, { groupId: anotherGroup.id, periodId: anotherPeriod.id },
+      { organizationId: other.organization.id, groupId: outsideGroup.id, periodId: outsidePeriod.id, accountId: other.account.id }]) {
+      await db.groupBudgetEntry.update({ where: { id: reservation.id }, data: { ...original, ...mismatch } })
+      expect(await usage.detail(request, log.id, { accountId: other.account.id, organizationId: other.organization.id, apiKeyId: randomUUID() })).toMatchObject({ budget: null, budgetAvailability: 'NOT_FOUND' })
+    }
+    await db.groupBudgetEntry.update({ where: { id: reservation.id }, data: original })
+    expect(await usage.detail(request, log.id, { accountId: other.account.id, organizationId: other.organization.id })).toMatchObject({ budgetAvailability: 'AVAILABLE', budget: { settledCny: '1.25000000' } })
+    const deviceLog = await f.log({ groupId: group.id })
+    expect(await usage.detail(request, deviceLog.id, {})).toMatchObject({ budget: null, budgetAvailability: 'NOT_FOUND' })
+    const deviceReservation = await budget.reserve({ identity: { ...f.actor, groupId: group.id, credentialType: 'DEVICE', deviceId: f.device.id }, requestId: randomUUID(), startedAt: at, estimateCny: '0.2', snapshot: {} })
+    await budget.settle(deviceReservation, { actualCny: '0.1', usage: { ...logData, requestId: deviceReservation.requestId, credentialType: 'DEVICE', deviceId: f.device.id, apiKeyId: null, costUsd: '0.1' } })
+    const settledDevice = await db.usageLog.findUniqueOrThrow({ where: { requestId: deviceReservation.requestId } })
+    expect(await usage.detail(request, settledDevice.id, {})).toMatchObject({ budgetAvailability: 'AVAILABLE', budget: { settledCny: '0.10000000' } })
+  }))
   it('deduplicates request latency and sorts the log-authoritative token and latency totals', () => withTestDatabase(async db => {
     const f = await fixture(db)
     const first = await f.log({ inputTokens: 1000, reasoningTokens: 70, costUsd: '2' })

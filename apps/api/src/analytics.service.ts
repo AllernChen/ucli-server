@@ -3,8 +3,9 @@ import { Prisma } from '@prisma/client'
 import Decimal from 'decimal.js'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import type { AnalyticsOverview, AnalyticsPrincipal, UsageReadFilter } from '../../../packages/usage/src/analytics-types.js'
-import type { AnalyticsQueryDto } from './analytics.dto.js'
+import type { AnalyticsQueryDto, UsageQueryDto } from './analytics.dto.js'
 import { allocationMetricsSql, allocationWhere, hasAllocationFilter, requestStateSql, resolveUsageFilter, usageReadCte } from './usage-query.js'
+import { safePrice } from './usage-detail.js'
 
 const DAY = 86_400_000
 const DIMENSIONS = {
@@ -22,20 +23,6 @@ const integer = (value: unknown) => Number(value || 0)
 const nullableInteger = (value: unknown): number | null => value === null || value === undefined ? null : Math.round(Number(value))
 const money = (value: unknown) => new Decimal(value?.toString() || 0).toFixed(8)
 const numeric = (value: unknown) => String(value ?? 0)
-function safePrice(value: unknown) {
-  if (!value || typeof value !== 'object') return null
-  const snapshot = value as Record<string, unknown>
-  const rate = (key: string) => {
-    try { const amount = new Decimal(String(snapshot[key])); return amount.isFinite() ? amount.toString() : null } catch { return null }
-  }
-  const inputPerMillion = rate('inputPerMillion'); const cachedPerMillion = rate('cachedPerMillion'); const outputPerMillion = rate('outputPerMillion'); const reasoningPerMillion = rate('reasoningPerMillion')
-  if ([inputPerMillion, cachedPerMillion, outputPerMillion, reasoningPerMillion].some(value => value === null)) return null
-  return { id: typeof snapshot.id === 'string' ? snapshot.id : null, source: typeof snapshot.source === 'string' ? snapshot.source : null,
-    inputPerMillion, cachedPerMillion, outputPerMillion, reasoningPerMillion, timezone: typeof snapshot.timezone === 'string' ? snapshot.timezone : null,
-    daysOfWeek: Array.isArray(snapshot.daysOfWeek) && snapshot.daysOfWeek.every(value => Number.isInteger(value)) ? snapshot.daysOfWeek : null,
-    startMinute: Number.isInteger(snapshot.startMinute) ? snapshot.startMinute : null, endMinute: Number.isInteger(snapshot.endMinute) ? snapshot.endMinute : null,
-    validFrom: typeof snapshot.validFrom === 'string' ? snapshot.validFrom : null, validTo: typeof snapshot.validTo === 'string' ? snapshot.validTo : typeof snapshot.validUntil === 'string' ? snapshot.validUntil : null }
-}
 
 
 function metricSource(allocationScope: boolean) {
@@ -109,8 +96,8 @@ export class AnalyticsService {
     return resolveUsageFilter(principal, query, now)
   }
 
-  async overview(principal: AnalyticsPrincipal, query: AnalyticsQueryDto): Promise<AnalyticsOverview> {
-    const filter = this.resolveFilter(principal, query)
+  async overview(principal: AnalyticsPrincipal, query: UsageQueryDto, mode: 'analytics' | 'logs' = 'analytics'): Promise<AnalyticsOverview> {
+    const filter = resolveUsageFilter(principal, query, new Date(), mode)
     const source = metricSource(hasAllocationFilter(filter))
     const join = Prisma.sql`FROM scoped_usage u JOIN matched_requests m ON m.usage_log_id = u.id`
     const rows = await this.prisma.$queryRaw<any[]>(Prisma.sql`${usageReadCte(filter)} SELECT ${requestMetricsSql(source)} ${join}`)
@@ -163,15 +150,25 @@ export class AnalyticsService {
   }
 
   async breakdown(principal: AnalyticsPrincipal, query: AnalyticsQueryDto) {
+    return this.groupedRows(principal, query)
+  }
+
+  async exportRows(principal: AnalyticsPrincipal, query: AnalyticsQueryDto): Promise<Array<Record<string, unknown>>> {
+    const result = await this.groupedRows(principal, query, 'analytics', true)
+    if (result.items.length > 5000) throw new BadRequestException('CSV export exceeds 5000 rows; narrow the filter range')
+    return result.items
+  }
+
+  private async groupedRows(principal: AnalyticsPrincipal, query: UsageQueryDto, mode: 'analytics' | 'logs' = 'analytics', exporting = false) {
     const dimension = query.dimension as keyof typeof DIMENSIONS
     const sort = (query.sort || 'costUsd') as keyof typeof SORTS
     const order = String(query.order || 'desc').toLowerCase()
     if (!DIMENSIONS[dimension]) throw new BadRequestException('Unsupported analytics dimension')
     if (dimension === 'organization' && principal.role !== 'PLATFORM_ADMIN') throw new BadRequestException('Organization breakdown requires platform administrator')
     if (!SORTS[sort] || !['asc', 'desc'].includes(order)) throw new BadRequestException('Unsupported analytics sort')
-    const limit = Math.min(200, Math.max(1, Number(query.limit) || 50))
-    const offset = Math.max(0, Number(query.offset) || 0)
-    const filter = this.resolveFilter(principal, query)
+    const limit = exporting ? 5001 : Math.min(200, Math.max(1, Number(query.limit) || 50))
+    const offset = exporting ? 0 : Math.max(0, Number(query.offset) || 0)
+    const filter = resolveUsageFilter(principal, query, new Date(), mode)
     const selected = DIMENSIONS[dimension]
     const source = metricSource(hasAllocationFilter(filter) || ['channel', 'channelModel', 'costRule'].includes(dimension))
     const search = query.q
@@ -206,7 +203,7 @@ export class AnalyticsService {
       FROM dimension_requests m JOIN scoped_usage u ON u.id = m.usage_log_id
       WHERE u.error_code IS NOT NULL GROUP BY m.dimension_id, u.error_code
     )`
-    const countRows = await this.prisma.$queryRaw<any[]>(Prisma.sql`${cte} SELECT COUNT(*)::bigint AS total FROM grouped`)
+    const countRows = exporting ? [] : await this.prisma.$queryRaw<any[]>(Prisma.sql`${cte} SELECT COUNT(*)::bigint AS total FROM grouped`)
     const rows = await this.prisma.$queryRaw<any[]>(Prisma.sql`${cte}
       SELECT g.*, p.price_snapshot, p.price_key, p.allocation_kind,
         COALESCE((SELECT jsonb_agg(jsonb_build_object('errorCode', e.error_code, 'requests', e.requests) ORDER BY e.error_code)
@@ -226,7 +223,7 @@ export class AnalyticsService {
     }), limit, offset, total: integer(countRows[0]?.total) }
   }
 
-  async filterOptions(principal: AnalyticsPrincipal, query: AnalyticsQueryDto) {
+  async filterOptions(principal: AnalyticsPrincipal, query: UsageQueryDto, mode: 'analytics' | 'logs' = 'analytics') {
     if (query.optionDimension) {
       const optionQuery: any = { ...query, dimension: query.optionDimension, sort: 'name', order: 'asc' }
       if (query.optionDimension === 'organization') delete optionQuery.organizationId
@@ -237,7 +234,7 @@ export class AnalyticsService {
       if (query.optionDimension === 'costRule') { delete optionQuery.costRuleId; delete optionQuery.priceKey }
       if (query.optionDimension === 'group') { delete optionQuery.groupId; delete optionQuery.groupScope }
       if (query.optionDimension === 'apiKey') { delete optionQuery.apiKeyId; delete optionQuery.keyScope }
-      const result = await this.breakdown(principal, optionQuery)
+      const result = await this.groupedRows(principal, optionQuery, mode)
       const items = result.items.map(item => ({ id: item.id, name: item.name, drillQuery: item.drillQuery }))
       const empty: Array<{ id: string | null; name: string; drillQuery?: Record<string, string> }> = []
       const collection = { organizations: empty, channels: empty, models: empty, channelModels: empty, accounts: empty, costRules: empty, groups: empty, apiKeys: empty }
@@ -245,7 +242,7 @@ export class AnalyticsService {
       collection[key as keyof typeof collection] = items
       return { ...collection, page: { dimension: query.optionDimension, items, total: result.total, limit: result.limit, offset: result.offset } }
     }
-    const filter = this.resolveFilter(principal, query)
+    const filter = resolveUsageFilter(principal, query, new Date(), mode)
     const usage = hasAllocationFilter(filter) ? Prisma.sql`scoped_usage u JOIN matched_requests m ON m.usage_log_id = u.id` : Prisma.sql`scoped_usage u`
     const [organizations, channels, models, channelModels, accounts, costRules, groups, apiKeys] = await Promise.all([
       principal.role === 'PLATFORM_ADMIN' ? this.prisma.$queryRaw<any[]>(Prisma.sql`${usageReadCte(filter)} SELECT DISTINCT o.id::text AS id, o.name FROM ${usage} JOIN organizations o ON o.id = u.organization_id ORDER BY o.name`) : [],

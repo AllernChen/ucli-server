@@ -18,7 +18,7 @@ export function resolveUsageFilter(
   const start = query.start ? new Date(query.start) : new Date(end.getTime() - 7 * DAY)
   if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start >= end) throw new BadRequestException('Invalid usage time range')
   if (mode === 'analytics' && end.getTime() - start.getTime() > 90 * DAY) throw new BadRequestException('Analytics range cannot exceed 90 days')
-  if (query.interval === 'hour' && end.getTime() - start.getTime() > 31 * DAY) throw new BadRequestException('Hourly analytics range cannot exceed 31 days')
+  if (mode === 'analytics' && query.interval === 'hour' && end.getTime() - start.getTime() > 31 * DAY) throw new BadRequestException('Hourly analytics range cannot exceed 31 days')
   if (query.groupId && query.groupScope) throw new BadRequestException('groupId and groupScope cannot be combined')
   if (query.apiKeyId && query.keyScope) throw new BadRequestException('apiKeyId and keyScope cannot be combined')
   if (query.channelId && query.allocation) throw new BadRequestException('channelId and allocation cannot be combined')
@@ -91,7 +91,7 @@ export const allocationMetricsSql = Prisma.sql`
     AND a.allocation_kind <> 'UNALLOCATED') AS token_usage_incomplete,
   COALESCE(SUM(a.cost_cny) FILTER (WHERE a.allocation_kind = 'UNALLOCATED'), 0)::numeric AS unallocated_cost_cny`
 
-export function usageReadCte(filter: UsageReadFilter, _dimension?: AnalyticsQueryDto['dimension']): Prisma.Sql {
+export function usageReadCte(filter: UsageReadFilter, _dimension?: AnalyticsQueryDto['dimension'], authorizedLogId?: string): Prisma.Sql {
   const routePrice = Prisma.sql`r.usage_snapshot->'cost'`
   const routeChannelModel = Prisma.sql`CASE WHEN ${routePrice}->>'channelModelId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN (${routePrice}->>'channelModelId')::uuid ELSE NULL END`
   const routeRule = Prisma.sql`CASE WHEN ${routePrice}->>'source' = 'CHANNEL_COST_RULE' AND ${routePrice}->>'id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN (${routePrice}->>'id')::uuid ELSE NULL END`
@@ -110,6 +110,7 @@ export function usageReadCte(filter: UsageReadFilter, _dimension?: AnalyticsQuer
     : Prisma.empty
   return Prisma.sql`WITH scoped_usage AS (
       SELECT u.* FROM usage_logs u WHERE ${usageWhere(filter, true)} ${requestBilling}
+        ${authorizedLogId ? Prisma.sql`AND u.id = ${authorizedLogId}::uuid` : Prisma.empty}
     ), allocations AS (
       SELECT u.id AS usage_log_id, r.channel_id, ${routeChannelModel} AS channel_model_id, ${routeRule} AS cost_rule_id,
         r.cost_cny::numeric AS cost_cny, ${token('inputTokens')} AS input_tokens, ${token('cachedTokens')} AS cached_tokens,
