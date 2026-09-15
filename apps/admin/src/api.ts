@@ -3,11 +3,13 @@ export function token() { return localStorage.getItem('ucli.accessToken') || '' 
 export function snapshotModelTestMessages<T extends { role: string; content: string }>(messages: readonly T[]): T[] {
   return messages.map(message => ({ ...message }))
 }
-export async function api<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+async function request(path: string, init: RequestInit = {}) {
   const isForm = init.body instanceof FormData
-  const response = await fetch(`${BASE}${path}`, {
+  return fetch(`${BASE}${path}`, {
     ...init, headers: { authorization: `Bearer ${token()}`, ...(isForm ? {} : { 'content-type': 'application/json' }), ...init.headers }
   })
+}
+async function throwResponseError(response: Response, path: string): Promise<never> {
   if (!response.ok) {
     if (response.status === 401 && !path.startsWith('/api/v1/auth/login')) {
       localStorage.removeItem('ucli.accessToken')
@@ -16,7 +18,20 @@ export async function api<T = any>(path: string, init: RequestInit = {}): Promis
     const body = await response.json().catch(() => null)
     throw new Error(typeof body?.message === 'string' ? body.message : Array.isArray(body?.message) ? body.message.join('；') : typeof body?.code === 'string' ? body.code : `HTTP ${response.status}`)
   }
+  throw new Error('Unexpected successful response')
+}
+export async function api<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await request(path, init)
+  if (!response.ok) await throwResponseError(response, path)
   return response.json() as Promise<T>
+}
+export async function downloadCsv(path: string, filename: string): Promise<void> {
+  const response = await request(path)
+  if (!response.ok) await throwResponseError(response, path)
+  const url = URL.createObjectURL(await response.blob())
+  try {
+    const link = document.createElement('a'); link.href = url; link.download = filename; link.click()
+  } finally { URL.revokeObjectURL(url) }
 }
 export async function publicApi<T = any>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${BASE}${path}`, {

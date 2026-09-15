@@ -1,104 +1,59 @@
 <script setup lang="ts">
-import { onUnmounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
-import { api } from '../api'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { api, downloadCsv } from '../api'
 import { formatCny } from '../currency'
+import { createRequestLifecycle } from '../device-grants'
+import { defaultCompanyDateRange, usageQuery } from '../usage-filters'
+import Pagination from '../components/Pagination.vue'
+import UsageDetail from '../components/UsageDetail.vue'
+import UsageFilters from '../components/UsageFilters.vue'
 
-const loading = ref(true)
-const error = ref('')
-const rows = ref<any[]>([])
-const expanded = ref<string | null>(null)
 const props = defineProps<{ groupId?: string; embedded?: boolean }>()
-const route = useRoute()
-const filters = ref({ model: '', accountId: '', channelId: '', groupId: '', apiKeyId: '', credentialType: '', start: '', end: '', limit: '50' })
-const offset = ref(0)
-let generation = 0
-
-const pageSize = () => Math.min(200, Math.max(1, Number(filters.value.limit) || 50))
-
+const route = useRoute(); const router = useRouter(); const lifecycle = createRequestLifecycle()
+const loading = ref(true); const error = ref(''); const exporting = ref(false); const role = ref('')
+const rows = ref<any[]>([]); const page = ref({ total: 0, limit: 50, offset: 0 }); const selectedId = ref<string | null>(null)
+const draft = ref<Record<string, string>>({ limit: '50' }); const applied = ref<Record<string, string>>({ limit: '50' })
+let lastRoute = ''
+const first = (value: unknown) => Array.isArray(value) ? String(value[0] || '') : typeof value === 'string' ? value : ''
+const routeFilters = () => Object.fromEntries(Object.entries(route.query).map(([key, value]) => [key, first(value)]).filter(([, value]) => value)) as Record<string, string>
+const appliedQuery = () => usageQuery({ ...applied.value, limit: String(page.value.limit), offset: String(page.value.offset) }, props.groupId)
+const chinaTime = (value: string) => new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value))
 async function load() {
-  const current = ++generation
-  loading.value = true; error.value = ''
-  const params = new URLSearchParams()
-  if (filters.value.model) params.set('model', filters.value.model)
-  if (filters.value.accountId) params.set('accountId', filters.value.accountId)
-  if (filters.value.channelId) params.set('channelId', filters.value.channelId)
-  if (props.groupId || filters.value.groupId) params.set('groupId', props.groupId || filters.value.groupId)
-  if (filters.value.apiKeyId) params.set('apiKeyId', filters.value.apiKeyId)
-  if (filters.value.credentialType) params.set('credentialType', filters.value.credentialType)
-  if (filters.value.start) params.set('start', new Date(filters.value.start).toISOString())
-  if (filters.value.end) params.set('end', new Date(filters.value.end).toISOString())
-  params.set('limit', String(pageSize()))
-  params.set('offset', String(offset.value))
-  try { const result = await api('/api/v1/usage/logs?' + params.toString()); if (current === generation) rows.value = result }
-  catch (value: any) { if (current === generation) error.value = value.message } finally { if (current === generation) loading.value = false }
+  const current = lifecycle.next(); loading.value = true; error.value = ''
+  try {
+    const result: any = await api(`/api/v1/usage/logs-page?${appliedQuery()}`)
+    if (lifecycle.isCurrent(current)) { rows.value = result.items || []; page.value = { total: result.total || 0, limit: result.limit || page.value.limit, offset: result.offset || 0 } }
+  } catch (value: any) { if (lifecycle.isCurrent(current)) error.value = value.message } finally { if (lifecycle.isCurrent(current)) loading.value = false }
 }
-function search() { offset.value = 0; load() }
-function prev() { if (offset.value > 0) { offset.value = Math.max(0, offset.value - pageSize()); load() } }
-function next() { if (rows.value.length === pageSize()) { offset.value += pageSize(); load() } }
-function toggle(id: string) { expanded.value = expanded.value === id ? null : id }
-const fmt = (n: any) => Number(n || 0).toLocaleString()
-watch(() => [props.groupId, route.query], () => {
-  filters.value.groupId = props.groupId || String(route.query?.groupId || '')
-  filters.value.accountId = String(route.query?.accountId || ''); filters.value.apiKeyId = String(route.query?.apiKeyId || '')
-  offset.value = 0; rows.value = []; expanded.value = null; load()
-}, { immediate: true })
-onUnmounted(() => { generation++ })
+function apply(next: Record<string, string>) {
+  applied.value = { ...next, ...(props.groupId ? { groupId: props.groupId } : {}) }; draft.value = { ...applied.value }; page.value.offset = 0; selectedId.value = null
+  const query = Object.fromEntries(new URLSearchParams(usageQuery(applied.value, props.groupId)))
+  lastRoute = JSON.stringify(query); void router.replace({ query }); void load()
+}
+function replaceRoute() { const query = Object.fromEntries(new URLSearchParams(appliedQuery())); lastRoute = JSON.stringify(query); void router.replace({ query }) }
+function changePage(offset: number) { page.value.offset = offset; replaceRoute(); void load() }
+async function exportCsv() {
+  exporting.value = true; error.value = ''
+  try { await downloadCsv(`/api/v1/usage/export?${usageQuery(applied.value, props.groupId)}`, 'usage-logs.csv') }
+  catch (value: any) { error.value = value.message } finally { exporting.value = false }
+}
+watch(() => route.query, () => {
+  const next = { ...routeFilters(), ...(props.groupId ? { groupId: props.groupId } : {}) }
+  if (!next.start && !next.end) Object.assign(next, defaultCompanyDateRange())
+  const key = JSON.stringify(next)
+  if (key === lastRoute) return
+  lastRoute = key; draft.value = { ...next, limit: next.limit || '50' }; applied.value = { ...draft.value }; page.value.offset = Number(next.offset) || 0; selectedId.value = null; void load()
+}, { immediate: true, deep: true })
+watch(() => props.groupId, () => { const next = { ...applied.value, ...(props.groupId ? { groupId: props.groupId } : {}) }; apply(next) })
+onMounted(async () => { try { role.value = (await api<any>('/api/v1/auth/me')).role || '' } catch { /* Server scope remains authoritative. */ } })
+onUnmounted(() => lifecycle.dispose())
 </script>
 
 <template>
-  <header v-if="!embedded" class="page-header"><div><p>UCLI CONTROL PLANE</p><h1>使用日志</h1></div><button @click="load">刷新数据</button></header>
-  <section class="panel form-panel">
-    <div class="form-row">
-      <input v-model="filters.model" placeholder="模型 id">
-      <input v-model="filters.accountId" placeholder="账号 id">
-      <input v-model="filters.channelId" placeholder="渠道 id">
-      <input v-model="filters.groupId" :disabled="Boolean(groupId)" placeholder="用量组 id" aria-label="用量组筛选">
-      <input v-model="filters.apiKeyId" placeholder="员工 Key id" aria-label="Key 筛选">
-      <select v-model="filters.credentialType" aria-label="凭据类型"><option value="">全部凭据</option><option value="API_KEY">员工 API Key</option><option value="DEVICE">UCLI 设备</option></select>
-      <input v-model="filters.start" type="datetime-local">
-      <input v-model="filters.end" type="datetime-local">
-      <input v-model="filters.limit" type="number" min="1" max="200" placeholder="每页条数">
-      <button class="primary" @click="search">查询</button>
-    </div>
-  </section>
-  <p v-if="loading" class="state">正在加载…</p>
-  <p v-else-if="error" class="state error">{{ error }}</p>
-  <template v-else>
-    <section class="panel">
-      <table v-if="rows.length">
-        <thead><tr><th>时间</th><th>员工 / 用量组</th><th>凭据</th><th>模型</th><th>实际渠道 / 上游</th><th>输入/输出 tokens</th><th>采购成本 CNY</th><th>延迟</th><th>状态</th><th>路由</th></tr></thead>
-        <tbody>
-          <template v-for="row in rows" :key="row.requestId">
-            <tr>
-              <td>{{ new Date(row.startedAt).toLocaleString() }}</td>
-              <td><strong>{{ row.employeeName || row.account?.displayName || row.account?.email || row.accountId }}</strong><small>{{ row.groupName || '历史未归组' }}</small></td>
-              <td>{{ row.credentialType === 'API_KEY' ? row.keyName || '员工 Key' : 'UCLI 设备' }}<small class="mono">{{ row.keyHint || row.deviceId }}</small></td>
-              <td class="mono">{{ row.publicModelId }}</td>
-              <td>{{ row.channel?.name || row.channelId }}<small class="mono">{{ row.upstreamModel }}</small></td>
-              <td>{{ fmt(row.inputTokens) }} / {{ fmt(row.outputTokens) }}</td>
-              <td>{{ formatCny(row.costCny ?? row.costUsd) }}<small>{{ row.billingState === 'UNKNOWN' ? '含待核对费用，非最终成本' : row.usageSource === 'ESTIMATED' ? '估算' : '已结算' }}</small><small>{{ row.costSnapshot?.ruleName || row.costSnapshot?.source || '历史价格' }} · {{ row.costSnapshot?.timezone || '—' }}</small></td>
-              <td>{{ row.durationMs }}ms<template v-if="row.firstTokenMs"> / 首字 {{ row.firstTokenMs }}ms</template></td>
-              <td><i :class="row.statusCode < 400 ? 'ok' : 'bad'"></i>{{ row.statusCode }}<template v-if="row.errorCode"> ({{ row.errorCode }})</template></td>
-              <td><button @click="toggle(row.requestId)">{{ row.routeAttempts || 1 }} 次</button></td>
-            </tr>
-            <tr v-if="expanded === row.requestId">
-              <td colspan="10">
-                <div class="keys">
-                  <span v-for="(attempt, i) in (row.routes || [])" :key="i" class="key-chip">#{{ attempt.attempt }} {{ attempt.channel?.name || attempt.channelId }} · {{ attempt.durationMs }}ms · {{ attempt.statusCode ?? '—' }} · {{ attempt.billingState === 'UNKNOWN' ? '费用待核对' : formatCny(attempt.costCny) }}</span>
-                  <span v-if="!row.routes?.length" class="mono">无路由详情</span>
-                </div>
-                <details><summary>请求与价格快照</summary><p class="mono">{{ row.requestId }}</p><pre>{{ JSON.stringify(row.costSnapshot, null, 2) }}</pre></details>
-              </td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-      <p v-else class="empty">暂无日志</p>
-      <div v-if="rows.length" class="actions">
-        <button @click="prev">上一页</button>
-        <button @click="next">下一页</button>
-      </div>
-    </section>
-  </template>
+  <header v-if="!embedded" class="page-header"><div><p>UCLI CONTROL PLANE</p><h1>使用日志</h1><span class="subtitle">中国标准时间（Asia/Shanghai）· 默认近 7 天</span></div><div class="actions"><button @click="load">刷新数据</button><button :disabled="exporting" @click="exportCsv">{{ exporting ? '正在导出…' : '导出 CSV' }}</button></div></header>
+  <UsageFilters v-model="draft" :role="role" :pinned-group-id="groupId" mode="logs" @apply="apply" />
+  <p v-if="loading" class="state">正在加载…</p><p v-else-if="error" class="state error">{{ error }}</p>
+  <section v-else class="panel"><table v-if="rows.length"><thead><tr><th>时间</th><th>员工 / 用量组</th><th>凭据</th><th>模型 / 渠道</th><th>输入细分 / 输出</th><th>匹配记录成本</th><th>状态</th><th>详情</th></tr></thead><tbody><tr v-for="row in rows" :key="row.id"><td>{{ chinaTime(row.startedAt) }}</td><td><strong>{{ row.employeeName || '未提供' }}</strong><small>{{ row.groupName || '历史未归组' }}</small></td><td>{{ row.keyName || '设备凭据' }}<small class="mono">{{ row.keyHint || '未提供' }}</small></td><td>{{ row.publicModelId || '未提供' }}<small>{{ row.channelName || '未提供' }} · {{ row.upstreamModel || '未提供' }}</small></td><td>{{ row.inputTokens ?? '未提供' }} / {{ row.cachedTokens ?? '未提供' }} / {{ row.reasoningTokens ?? '未提供' }} / {{ row.outputTokens ?? '未提供' }}</td><td>{{ formatCny(row.matchedCostCny) }}<small>{{ row.billingState === 'UNKNOWN' ? '待核对费用，非最终成本' : row.usageSource === 'ESTIMATED' ? '估算' : '已结算' }}</small></td><td>{{ row.requestState || '未提供' }} · {{ row.statusCode ?? '未提供' }}</td><td><small class="mono">{{ row.requestId || '未提供' }}</small><button :aria-label="`查看请求 ${row.requestId} 详情`" @click="selectedId = row.id">查看</button></td></tr></tbody></table><p v-else class="empty">暂无日志</p><Pagination v-if="rows.length" :total="page.total" :limit="page.limit" :offset="page.offset" @change="changePage" /></section>
+  <UsageDetail :id="selectedId" :query="appliedQuery()" @close="selectedId = null" />
 </template>
