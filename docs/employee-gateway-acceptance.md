@@ -97,7 +97,17 @@ node --import tsx test/integration/employee-key-http.mjs
 Remove-Item Env:UCLI_TEST_REAL_CLI
 ```
 
-发现/配置合同参考：[Claude 网关协议](https://code.claude.com/docs/en/llm-gateway-protocol#model-discovery)、[Claude 环境变量](https://code.claude.com/docs/en/env-vars)、[OpenCode 配置](https://opencode.ai/docs/config/#enabled-providers)（2026-09-15 核对）。后续仍需交互 picker、真实渠道和 Docker 部署链路验收；付费调用须单独授权。接入配置见[员工接入](employee-api-access.md)。
+发现/配置合同参考：[Claude 网关协议](https://code.claude.com/docs/en/llm-gateway-protocol#model-discovery)、[Claude 环境变量](https://code.claude.com/docs/en/env-vars)、[OpenCode 配置](https://opencode.ai/docs/config/#enabled-providers)（2026-09-15 核对）。后续仍需 Claude 交互 picker、真实渠道和 Docker 部署链路验收；付费调用须单独授权。接入配置见[员工接入](employee-api-access.md)。
+
+### 交互终端与 Docker 复查（2026-09-15）
+
+- 在真实 TTY 中启动 OpenCode 1.18.23，输入 `/models` 打开 `Select model`，看到并选择 `Local mock Chat / UCLI local acceptance`，再用 `/exit` 正常退出（退出码 0）。仅验证配置模型的选择器，没有目录 HTTP 请求，不是自动发现。
+- 同轮 Claude Code 2.1.268 交互启动退出码 1。完整终端输出为 `Unable to connect to Anthropic services`、`Failed to connect to api.anthropic.com: Status 403`，没有进入 `/model` 选择器。未知合成模型目录提示只是警告；该轮网关只收到预热 HEAD 404，没有目录或推理请求，不能把外部启动检查失败归因于模型权限。
+- 可在上述真实 CLI 命令前显式设置 `$env:UCLI_TEST_INTERACTIVE = '1'`，在真实终端中人工操作选择器；结束后 `Remove-Item Env:UCLI_TEST_INTERACTIVE`。该模式可能触发客户端自身联网检查，不能宣称完全离线。任一客户端异常退出即失败；退出码正常仍不代替人工画面检查。生产默认和 CI 不启用该模式。
+- `npm test -- test/deploy/nginx-health-route.test.ts` 再次失败于拉取 `node:24-alpine` 元数据：`auth.docker.io/token` 连接 `199.16.156.38:443` 超时。主机 DNS 也返回该 IP；本机仅缓存 Redis/nginx 镜像，没有 Node 基础镜像。nginx 用例尚未运行，不记通过；未修改 Dockerfile、网络或覆盖率门槛。
+- 随后的非交互完整 HTTP + CLI 复跑退出码 0，typecheck 与脚本语法检查通过。该次实际版本为 Claude 2.1.268 / OpenCode 1.18.31，与前一次 UI 验证版本分开记录。Claude 文本请求 `e06d065a-cd0d-43bb-84c1-005a9418f3ba`、OpenCode 文本请求 `2dc6cf5e-6dac-4351-a16f-2230df892cfb`；8 条成功日志仍合计 ¥0.00005600，Key 撤销回归通过。报告文件已被这次成功的非交互复跑覆盖，以上交互记录以终端实际输出为依据。
+
+本轮仅增加可选人工验收入口和证据记录，没有修改服务端能力、公司数据或客户端日常配置。Claude 交互启动与 Docker Hub 连通性解决后须分别复验，不能宣布完整发布验证通过。
 
 ## 设备归组演练与发布顺序
 

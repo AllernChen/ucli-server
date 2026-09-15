@@ -94,6 +94,8 @@ OpenCode 自定义 provider 的模型列表需要配置，不能假定只填地�
 
 CLI 可能自行估算美元费用，或因为自定义 provider 没有价格而显示零；这些不是平台采购成本。本次 Claude 显示其默认美元估价、OpenCode 显示零，但服务端每笔均按测试采购价计 ¥0.00000700。组预算和公司统计只使用服务端人民币账本，切勿以 CLI 本地金额对账。
 
+交互补测：OpenCode 1.18.23 的 `/models` 已实际显示并选中配置模型；Claude 2.1.268 在隔离配置下启动时访问 `api.anthropic.com` 返回 403，尚未进入选择器。非交互成功不代表交互启动不依赖客户端自身联网检查，详见[验收记录](employee-gateway-acceptance.md)。
+
 ## 管理接口与故障
 
 管理员可通过 `/api/v1/admin/users/:accountId/api-keys` 查询、创建；`/api/v1/admin/employee-api-keys/:id` 修改名称/到期时间或软删除；其 `/enable`、`/disable`、`/revoke` 执行生命周期操作。不能修改员工和组归属。

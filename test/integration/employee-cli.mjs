@@ -123,6 +123,23 @@ export async function runCliAcceptance({ base, db, key, models, groupId, request
     assert.ok(logs.every(log => log.costUsd.toFixed(8) === '0.00000700' && !log.errorCode), 'CLI cost snapshots must use the configured CNY supplier price')
     const periodAfter = await db.groupBudgetPeriod.findUniqueOrThrow({ where: { id: periodBefore.id } })
     assert.equal(periodAfter.spentCny.minus(periodBefore.spentCny).toFixed(8), new Decimal('0.000007').mul(logs.length).toFixed(8))
+    if (process.env.UCLI_TEST_INTERACTIVE === '1') {
+      assert.ok(process.stdin.isTTY && process.stdout.isTTY, 'Interactive acceptance requires a real terminal')
+      mode = 'text'
+      for (const [name, executable, args, extra] of [
+        ['claude-picker', claude, ['--safe-mode', '--setting-sources', '', '--strict-mcp-config', '--tools', '', '--model', discoveredModel.id], { ...claudeEnv, DISABLE_PROMPT_CACHING: '1' }],
+        ['opencode-picker', opencode, ['--pure', '-m', config.model], openEnv]
+      ]) {
+        const before = requests.length
+        console.log(`\nInteractive acceptance: ${name}. Open /model (Claude) or /models (OpenCode), then /exit.\n`)
+        const code = await new Promise((resolveExit, rejectExit) => {
+          const child = spawn(executable, args, { cwd: project, env: { ...env, ...extra }, windowsHide: true, stdio: 'inherit' })
+          child.once('error', rejectExit); child.once('exit', resolveExit)
+        })
+        results.push({ name, code, requests: requests.slice(before), visualAcceptance: 'Record observed terminal evidence separately' })
+        assert.equal(code, 0, `${name} exited unsuccessfully; interactive acceptance is incomplete`)
+      }
+    }
   } finally {
     setUpstream(undefined)
     // Disable even on assertion/CLI failures; the parent subsequently tests permanent revocation.

@@ -587,3 +587,10 @@ await expect(guard.canActivate(context)).rejects.toMatchObject({
 - Claude 非交互 /model 确实请求目录且返回 200；OpenCode models ucli 列出配置模型。未验证交互 picker UI 或 Claude 磁盘缓存，不把目录成功扩大为全功能兼容。
 - 默认 Claude 缓存请求因未支持缓存写入估价被 400 拒绝，设置 DISABLE_PROMPT_CACHING=1 后成功，文档已补配置与输出限制。CLI 自带美元/零成本显示不是平台人民币采购账本；没有为验收放宽权限或计费检查。
 - 本轮只修改测试和文档，类型检查、脚本语法、12 项定向回归及包含真实 CLI 的完整 HTTP 脚本通过。实际采购模型、UCLI 客户端 UI 和 Docker 发布验证仍待完成，不合并、推送或部署。
+
+### 交互与发布检查续记（2026-09-15）
+
+- 增加显式 UCLI_TEST_INTERACTIVE 终端验收入口，异常退出不能记为通过；默认 CI 不启动交互客户端。
+- OpenCode 1.18.23 的 /models 选择器已显示、选中本地配置模型并正常退出。Claude 2.1.268 因自身启动检查 api.anthropic.com 返回 403 未进入选择器，不能宣称交互模型发现通过。
+- nginx Docker 单项重跑仍在 Node 基础镜像元数据拉取阶段因 Docker Hub 鉴权地址连接超时失败，未更改网络配置或测试门槛。
+- 后续非交互 HTTP + CLI 回归、typecheck、脚本语法检查通过；此次 OpenCode 可执行文件报告 1.18.31，未将它与 1.18.23 的 UI 证据混用。仅测试/文档变更，不合并、推送、部署或修改生产入口。
