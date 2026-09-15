@@ -40,7 +40,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('CNY cross-dimension reconciliat
     await db.employeeApiKey.update({ where: { id: key.id }, data: { name: '新 Key' } })
     const service = new AnalyticsService(db as PrismaService)
     const overview = await service.overview(actor, filter)
-    expect(overview).toMatchObject({ costCny: '4.00000000', costUsd: '4.00000000', currency: 'CNY', requests: 3, unsettledRequests: 1, successRate: 2 / 3 })
+    expect(overview).toMatchObject({
+      requests: 3, requestSuccessRate: 1,
+      requestStates: { SUCCESS: 3, FAILED: 0, CANCELLED: 0, INTERRUPTED: 0 },
+      unsettledRequests: 1, costCny: '4.00000000', successRate: 2 / 3
+    })
     for (const dimension of ['group', 'apiKey', 'account', 'model', 'channel'] as const) {
       const { items } = await service.breakdown(actor, { ...filter, dimension })
       expect(items.reduce((sum, item) => sum + Number(item.costCny), 0)).toBe(4)

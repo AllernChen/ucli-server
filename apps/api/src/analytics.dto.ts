@@ -13,6 +13,7 @@ export class AnalyticsQueryDto {
   @IsOptional() @IsString() @Length(1, 200) publicModelId?: string
   @IsOptional() @IsString() @Length(1, 200) model?: string
   @IsOptional() @IsUUID() channelModelId?: string
+  @IsOptional() @IsIn(['UNASSOCIATED']) channelModelScope?: 'UNASSOCIATED'
   @IsOptional() @IsIn(['hour', 'day']) interval?: 'hour' | 'day'
   @IsOptional() @IsIn(['organization', 'channel', 'model', 'channelModel', 'account', 'costRule', 'group', 'apiKey'])
   dimension?: 'organization' | 'channel' | 'model' | 'channelModel' | 'account' | 'costRule' | 'group' | 'apiKey'
@@ -29,6 +30,9 @@ export class AnalyticsQueryDto {
   @IsOptional() @IsUUID() costRuleId?: string
   @IsOptional() @Matches(/^[0-9a-f]{32}$/) priceKey?: string
   @IsOptional() @IsIn(['UNALLOCATED']) allocation?: 'UNALLOCATED'
+  @IsOptional() @IsIn(['organization', 'channel', 'model', 'channelModel', 'account', 'costRule', 'group', 'apiKey'])
+  optionDimension?: 'organization' | 'channel' | 'model' | 'channelModel' | 'account' | 'costRule' | 'group' | 'apiKey'
+  @IsOptional() @IsString() @Length(1, 100) q?: string
 }
 
 export class UsageQueryDto extends AnalyticsQueryDto {

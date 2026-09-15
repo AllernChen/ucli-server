@@ -9,6 +9,7 @@ export interface AnalyticsFilter {
   channelId?: string
   publicModelId?: string
   channelModelId?: string
+  channelModelScope?: 'UNASSOCIATED'
 }
 
 export type RequestState = 'SUCCESS' | 'FAILED' | 'CANCELLED' | 'INTERRUPTED'
@@ -28,7 +29,21 @@ export interface UsageReadFilter extends AnalyticsFilter {
   projectId?: string
 }
 
-export interface AnalyticsOverview {
+export interface UsageOperationalMetrics {
+  requestSuccessRate: number | null
+  requestStates: Record<RequestState, number>
+  uncachedInputTokens: string
+  cachedTokens: string
+  reasoningTokens: string
+  cacheHitRate: number | null
+  cacheCoverage: { knownInputTokens: string; totalInputTokens: string; unknownCalls: number }
+  estimatedCostCny: string
+  unallocatedCostCny: string
+  tokenUsageIncomplete: boolean
+  errorCounts: Array<{ errorCode: string; requests: number }>
+}
+
+export interface AnalyticsOverview extends UsageOperationalMetrics {
   requests: number
   successRate: number
   activeAccounts: number

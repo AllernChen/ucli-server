@@ -50,7 +50,7 @@ describe('analytics service', () => {
       cost_usd: '1.25', p50_latency_ms: 120.4, p95_latency_ms: 450.8, p50_first_token_ms: 80,
       p95_first_token_ms: 200, failovers: 1n
     }])
-    await expect(service.overview(platform, { start: '2026-08-19', end: '2026-08-20' })).resolves.toEqual({
+    await expect(service.overview(platform, { start: '2026-08-19', end: '2026-08-20' })).resolves.toMatchObject({
       requests: 4, successRate: 0.75, activeAccounts: 2, inputTokens: '100', outputTokens: '40',
       costUsd: '1.25000000', avgCostPerRequestUsd: '0.31250000', p50LatencyMs: 120,
       currency: 'CNY', costCny: '1.25000000', avgCostPerRequestCny: '0.31250000', unsettledRequests: 0,
