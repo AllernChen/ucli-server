@@ -148,7 +148,8 @@ export class GroupBudgetService {
         const usage = object(snapshot.request!).usage as Prisma.JsonObject | undefined
         if (!usage || usage.requestId !== entry.requestId || usage.organizationId !== entry.organizationId || usage.accountId !== entry.accountId || usage.groupId !== entry.groupId ||
           usage.credentialType !== entry.credentialType || (entry.credentialType === 'API_KEY' ? usage.apiKeyId : usage.deviceId) !== entry.credentialId) throw new ConflictException('Request log snapshot is missing; cannot reconcile safely')
-        await db.usageLog.create({ data: { ...usage as unknown as Prisma.UsageLogUncheckedCreateInput, costUsd: amount } })
+        await db.usageLog.create({ data: { ...usage as unknown as Prisma.UsageLogUncheckedCreateInput, costUsd: amount,
+          costSnapshot: { ...(usage.costSnapshot as Prisma.JsonObject ?? {}), billingState: input.action === 'RELEASE' ? 'NO_CHARGE' : 'CONFIRMED' } } })
       }
       const previous = entry.settledCny.toString()
       await db.groupBudgetPeriod.update({ where: { id: period.id }, data: { spentCny: { increment: new Decimal(amount).minus(previous).toFixed(8) },

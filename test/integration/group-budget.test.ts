@@ -110,6 +110,27 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('persistent group budget (Postgr
     expect((await db.groupBudgetEntry.findUniqueOrThrow({ where: { id: reservation.id } })).snapshot).toMatchObject({ manualFinal: true, request: { usage: { costUsd: '0' } } })
   }))
 
+  it.each([
+    { action: 'SETTLE' as const, amount: '0.20000000', billingState: 'CONFIRMED' },
+    { action: 'RELEASE' as const, amount: '0.00000000', billingState: 'NO_CHARGE' }
+  ])('records $billingState when $action reconstructs a missing usage log', ({ action, amount, billingState }) => withTestDatabase(async db => {
+    const f = await fixture(db); const requestId = randomUUID()
+    const usage = { ...f.usage(requestId, '0'), costSnapshot: { billingState: 'UNKNOWN', source: 'PUBLIC_MODEL_FALLBACK' } }
+    const reservation = await f.service.reserve({ requestId, identity: f.identity, startedAt: f.startedAt, estimateCny: '0.75',
+      snapshot: { usage: JSON.parse(JSON.stringify(usage)) } })
+    await f.service.markDispatched(reservation, new Date())
+    await f.service.markUncertain(reservation, 'Log transaction failed')
+    await f.service.reconcile(f.actor, f.group.id, reservation.id, { operationId: randomUUID(), action, actualCny: amount, reason: 'Supplier bill checked' })
+    const log = await db.usageLog.findUniqueOrThrow({ where: { requestId } })
+    expect(log.costSnapshot).toEqual({ billingState, source: 'PUBLIC_MODEL_FALLBACK' })
+    expect(log.costUsd.toFixed(8)).toBe(amount)
+    const period = await db.groupBudgetPeriod.findUniqueOrThrow({ where: { id: reservation.periodId } })
+    expect(period.spentCny.toFixed(8)).toBe(amount)
+    expect(period.reservedCny.toFixed(8)).toBe('0.00000000')
+    expect((await db.groupBudgetEntry.findUniqueOrThrow({ where: { id: reservation.id } })).snapshot)
+      .toMatchObject({ request: { usage: { costSnapshot: { billingState: 'UNKNOWN' } } } })
+  }))
+
   it('requires an explicit route cost split and corrects supplier totals together', () => withTestDatabase(async db => {
     const f = await fixture(db); const reservation = await f.reserve()
     const usage = f.usage(reservation.requestId, '0.3')

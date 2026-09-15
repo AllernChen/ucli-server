@@ -6,6 +6,8 @@ export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
     environment: 'node',
+    // Keep shared PostgreSQL and Docker workloads within the local/CI resource budget.
+    maxWorkers: 4,
     coverage: {
       provider: 'v8',
       include: [
