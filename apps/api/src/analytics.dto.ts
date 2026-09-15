@@ -21,9 +21,6 @@ export class AnalyticsQueryDto {
   @IsOptional() @IsIn(['asc', 'desc']) order?: 'asc' | 'desc'
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(200) limit?: number
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) offset?: number
-}
-
-export class UsageQueryDto extends AnalyticsQueryDto {
   @IsOptional() @IsIn(['UTC', 'Asia/Shanghai']) timezone?: 'UTC' | 'Asia/Shanghai'
   @IsOptional() @IsIn(['SUCCESS', 'FAILED', 'CANCELLED', 'INTERRUPTED']) requestState?: 'SUCCESS' | 'FAILED' | 'CANCELLED' | 'INTERRUPTED'
   @IsOptional() @IsIn(['CONFIRMED', 'ESTIMATED', 'UNKNOWN', 'NO_CHARGE']) billingState?: 'CONFIRMED' | 'ESTIMATED' | 'UNKNOWN' | 'NO_CHARGE'
@@ -32,6 +29,9 @@ export class UsageQueryDto extends AnalyticsQueryDto {
   @IsOptional() @IsUUID() costRuleId?: string
   @IsOptional() @Matches(/^[0-9a-f]{32}$/) priceKey?: string
   @IsOptional() @IsIn(['UNALLOCATED']) allocation?: 'UNALLOCATED'
+}
+
+export class UsageQueryDto extends AnalyticsQueryDto {
   @IsOptional() @IsUUID() sessionId?: string
   @IsOptional() @IsUUID() projectId?: string
   @IsOptional() @IsString() @Length(1, 200) requestId?: string

@@ -1,16 +1,26 @@
 import 'reflect-metadata'
-import { BadRequestException } from '@nestjs/common'
+import { BadRequestException, ValidationPipe } from '@nestjs/common'
+import { Prisma } from '@prisma/client'
 import { plainToInstance } from 'class-transformer'
 import { validate } from 'class-validator'
 import { describe, expect, it } from 'vitest'
-import { UsageQueryDto } from '../../apps/api/src/analytics.dto.js'
+import { AnalyticsQueryDto, UsageQueryDto } from '../../apps/api/src/analytics.dto.js'
 import { requestStateSql, resolveUsageFilter, usageWhere } from '../../apps/api/src/usage-query.js'
+import { withTestDatabase } from '../integration/database.js'
 
 const now = new Date('2026-09-15T16:00:00Z')
 const platform = { sub: 'platform', organizationId: 'home', role: 'PLATFORM_ADMIN' as const }
 const member = { sub: 'self', organizationId: 'own', role: 'MEMBER' as const }
 
 describe('usage query', () => {
+  it('accepts shared operation filters on analytics HTTP queries and rejects invalid values', async () => {
+    const pipe = new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true })
+    const metadata = { type: 'query' as const, metatype: AnalyticsQueryDto }
+    await expect(pipe.transform({ timezone: 'Asia/Shanghai', requestState: 'SUCCESS', billingState: 'UNKNOWN', groupScope: 'UNGROUPED', keyScope: 'NO_KEY', costRuleId: '123e4567-e89b-12d3-a456-426614174000', priceKey: '0123456789abcdef0123456789abcdef', allocation: 'UNALLOCATED' }, metadata))
+      .resolves.toMatchObject({ timezone: 'Asia/Shanghai', requestState: 'SUCCESS', billingState: 'UNKNOWN', groupScope: 'UNGROUPED', keyScope: 'NO_KEY', allocation: 'UNALLOCATED' })
+    await expect(pipe.transform({ requestState: 'PENDING' }, metadata)).rejects.toBeInstanceOf(BadRequestException)
+  })
+
   it('rejects invalid scoped-operation query values at the HTTP DTO boundary', async () => {
     const dto = plainToInstance(UsageQueryDto, {
       timezone: 'Europe/London', requestState: 'PENDING', billingState: 'PENDING', groupScope: 'GROUPED', keyScope: 'KEYED',
@@ -49,17 +59,27 @@ describe('usage query', () => {
     expect(resolveUsageFilter(platform, { model: 'legacy' }, now)).toMatchObject({ publicModelId: 'legacy' })
   })
 
-  it('binds request-state filtering while keeping accounting uncertainty out of request success', () => {
+  it('binds request-state filtering values', () => {
     const where = usageWhere({
       ...resolveUsageFilter(platform, { start: '2026-09-14', end: '2026-09-15' }, now),
       requestState: 'SUCCESS', publicModelId: "model' OR 1=1 --"
     })
-    const state = requestStateSql.strings.join('')
     expect(where.strings.join('')).not.toContain("model' OR 1=1 --")
     expect(where.values).toContain("model' OR 1=1 --")
     expect(where.values).toContain('SUCCESS')
-    expect(state).toContain("u.status_code NOT BETWEEN 200 AND 299 OR (u.error_code IS NOT NULL AND u.error_code <> 'RECONCILIATION_REQUIRED')")
-    expect(state).toContain("WHEN u.client_cancelled THEN 'CANCELLED'")
-    expect(state).toContain("WHEN u.stream_interrupted THEN 'INTERRUPTED'")
   })
+
+  it.skipIf(!process.env.TEST_DATABASE_URL)('classifies request state independently from reconciliation accounting markers', () => withTestDatabase(async db => {
+    const rows = await db.$queryRaw<Array<{ state: string }>>(Prisma.sql`
+      SELECT ${requestStateSql} AS state
+      FROM (VALUES
+        (200, 'RECONCILIATION_REQUIRED', false, false),
+        (503, 'RECONCILIATION_REQUIRED', false, false),
+        (200, 'UPSTREAM_ERROR', false, false),
+        (500, NULL, true, false),
+        (500, NULL, false, true),
+        (500, NULL, true, true)
+      ) AS u(status_code, error_code, client_cancelled, stream_interrupted)`)
+    expect(rows.map(row => row.state)).toEqual(['SUCCESS', 'FAILED', 'FAILED', 'CANCELLED', 'INTERRUPTED', 'CANCELLED'])
+  }))
 })
