@@ -32,7 +32,8 @@ function count(value: unknown): number {
 
 export function normalizeUsage(usage: Record<string, any> | null | undefined): NormalizedUsage {
   if (!usage || !['prompt_tokens', 'input_tokens', 'completion_tokens', 'output_tokens'].some(key => Number.isSafeInteger(usage[key]) && usage[key] >= 0)) return { inputTokens: 0, outputTokens: 0, cachedTokens: 0, reasoningTokens: 0, source: 'estimated' }
-  const cachedTokens = count(usage.prompt_tokens_details?.cached_tokens ?? usage.input_tokens_details?.cached_tokens ?? usage.cache_read_input_tokens)
+  // DeepSeek's Chat API reports cache hits separately; prompt_tokens already includes them.
+  const cachedTokens = count(usage.prompt_tokens_details?.cached_tokens ?? usage.input_tokens_details?.cached_tokens ?? usage.cache_read_input_tokens ?? usage.prompt_cache_hit_tokens)
   const providerInput = count(usage.prompt_tokens ?? usage.input_tokens)
   // OpenAI prompt_tokens already includes cached tokens; Anthropic input_tokens does not.
   const inputTokens = usage.cache_read_input_tokens === undefined ? providerInput : providerInput + cachedTokens

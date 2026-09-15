@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common'
 import Decimal from 'decimal.js'
 import type { GatewayProtocol } from '../../gateway-core/src/protocol.js'
+import { upstreamUrl } from '../../gateway-core/src/protocol.js'
 import type { PriceSnapshot } from '../../gateway-core/src/cost.js'
 
 export function cny(value: unknown): string {
@@ -21,7 +22,8 @@ export function budgetPeriodKey(mode: 'TOTAL' | 'MONTHLY', timezone: string, at:
   } catch { throw new BadRequestException('Invalid budget timezone or date') }
 }
 
-export function prepareBudgetRequest(protocol: GatewayProtocol, input: Record<string, any>, contextSize: number) {
+export function prepareBudgetRequest(protocol: GatewayProtocol, input: Record<string, any>, contextSize: number,
+  routes: ReadonlyArray<{ protocol: GatewayProtocol; baseUrl: string }> = []) {
   const invalid = () => new BadRequestException({ code: 'invalid_budget_request', message: 'Invalid input or output token limit' })
   const unsupported = () => new BadRequestException({ code: 'unsupported_budget_estimation', message: 'This input cannot be reliably estimated for a group budget' })
   const body = { ...input }
@@ -30,15 +32,37 @@ export function prepareBudgetRequest(protocol: GatewayProtocol, input: Record<st
   if (protocol !== 'openai_responses' && (!Array.isArray(content) || content.some(message => !message || typeof message !== 'object' ||
     !['system', 'developer', 'user', 'assistant', 'tool', 'function'].includes(message.role)))) throw invalid()
   if ((body.tools !== undefined && !Array.isArray(body.tools)) || (body.modalities !== undefined && !Array.isArray(body.modalities))) throw invalid()
+  // DeepSeek ignores these hints (https://api-docs.deepseek.com/guides/anthropic_api/).
+  // Check every possible upstream, not an editable provider/model name or only the first route.
+  const ignoresCacheHints = protocol === 'anthropic_messages' && routes.length > 0 && routes.every(route => {
+    try {
+      return route.protocol === 'anthropic_messages' &&
+        upstreamUrl(route.baseUrl, route.protocol) === 'https://api.deepseek.com/anthropic/v1/messages'
+    } catch { return false }
+  })
+  const cacheHint = (value: any): boolean => {
+    if (!ignoresCacheHints || !value || value.type !== 'ephemeral' ||
+      (value.ttl !== undefined && !['5m', '1h'].includes(value.ttl)) ||
+      Object.keys(value).some(key => !['type', 'ttl'].includes(key))) {
+      throw new BadRequestException({ code: 'unsupported_budget_estimation',
+        message: 'Prompt cache hints cannot be budgeted for these routes. Disable client prompt caching (Claude Code: DISABLE_PROMPT_CACHING=1) or use only the official DeepSeek Anthropic endpoint.' })
+    }
+    return true
+  }
+  // Top-level automatic caching is not part of DeepSeek's documented ignored fields.
+  if (body.cache_control !== undefined) throw unsupported()
   // Only text and caller-supplied function tools have prices in the current procurement model.
   const textOnly = (value: any): boolean => {
     if (value == null || typeof value !== 'object') return true
     if (Array.isArray(value)) return value.every(textOnly)
     if (value.type && !['text', 'input_text', 'output_text', 'message', 'tool_use', 'tool_result', 'function', 'function_call', 'function_call_output', 'thinking', 'redacted_thinking'].includes(value.type)) return false
-    return Object.entries(value).every(([key, child]) => !['image_url', 'audio', 'file_id', 'cache_control', 'attachments'].includes(key) && (['input', 'arguments'].includes(key) ? true : textOnly(child)))
+    return Object.entries(value).every(([key, child]) => key === 'cache_control'
+      ? ['text', 'tool_use', 'tool_result'].includes(value.type) && cacheHint(child)
+      : !['image_url', 'audio', 'file_id', 'attachments'].includes(key) && (['input', 'arguments'].includes(key) ? true : textOnly(child)))
   }
   if (!textOnly(content) || !textOnly(body.system) || body.previous_response_id || body.conversation || body.audio || body.modalities?.some((v: string) => v !== 'text') ||
-    (body.n !== undefined && body.n !== 1) || body.best_of !== undefined || body.tools?.some((tool: any) => !tool || tool.cache_control || (tool.type && tool.type !== 'function'))) throw unsupported()
+    (body.n !== undefined && body.n !== 1) || body.best_of !== undefined || body.tools?.some((tool: any) => !tool ||
+      (tool.cache_control !== undefined && !cacheHint(tool.cache_control)) || (tool.type && tool.type !== 'function'))) throw unsupported()
   const capFields = ['max_tokens', 'max_completion_tokens', 'max_output_tokens']
   const provided = capFields.filter(field => body[field] !== undefined)
   if (provided.some(field => !Number.isSafeInteger(body[field]) || body[field] <= 0) || new Set(provided.map(field => body[field])).size > 1) throw invalid()

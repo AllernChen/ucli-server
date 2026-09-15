@@ -1,7 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import { endpointFor, normalizeUsage, retryableBeforeResponse, upstreamUrl } from '../../packages/gateway-core/src/protocol.js'
+import { calculateCost } from '../../packages/gateway-core/src/cost.js'
 
 describe('gateway protocol handling', () => {
+  it.each([
+    [800, 200, '0.00123200'], [0, 1000, '0.00280000'], [1000, 0, '0.00084000']
+  ])('uses DeepSeek reported cache hits (%s) without adding them to prompt total', (hit, miss, expectedCost) => {
+    const usage = normalizeUsage({ prompt_tokens: 1000, prompt_cache_hit_tokens: hit, prompt_cache_miss_tokens: miss,
+      completion_tokens: 100, completion_tokens_details: { reasoning_tokens: 60 } })
+    expect(usage).toEqual({ inputTokens: 1000, cachedTokens: hit, outputTokens: 100, reasoningTokens: 60, source: 'upstream' })
+    expect(calculateCost(usage, { inputPerMillion: '2', cachedPerMillion: '0.04', outputPerMillion: '8', reasoningPerMillion: '8' })).toBe(expectedCost)
+  })
+
+  it('preserves explicit standard cache counts including zero when alias fields coexist', () => {
+    expect(normalizeUsage({ prompt_tokens: 1000, completion_tokens: 100, prompt_tokens_details: { cached_tokens: 0 }, prompt_cache_hit_tokens: 800 }).cachedTokens).toBe(0)
+    expect(normalizeUsage({ input_tokens: 200, output_tokens: 100, cache_read_input_tokens: 800, prompt_cache_hit_tokens: 800 }))
+      .toMatchObject({ inputTokens: 1000, cachedTokens: 800 })
+  })
+
   it('maps supported public protocols to upstream endpoints', () => {
     expect(endpointFor('openai_responses')).toBe('/v1/responses')
     expect(endpointFor('openai_chat')).toBe('/v1/chat/completions')

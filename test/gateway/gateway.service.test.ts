@@ -1,5 +1,6 @@
 import 'reflect-metadata'
 import { HttpException, ServiceUnavailableException } from '@nestjs/common'
+import { Writable } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { GatewayService } from '../../apps/gateway/src/gateway.service.js'
 import { encryptSecret } from '../../packages/security/src/envelope-crypto.js'
@@ -82,6 +83,48 @@ function makeResponse() {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('gateway service orchestration', () => {
+  it.each([[false, 0], [true, 0], [false, 7], [true, 7]] as const)('accounts for DeepSeek cache reads and holds unexpected writes (stream=%s, writes=%s)', async (stream, cacheWrites) => {
+    const ability = makeAbility()
+    ability.protocol = 'ANTHROPIC_MESSAGES'
+    ability.channel.baseUrl = 'https://api.deepseek.com/anthropic'
+    ability.costRules[0].cachedPerMillion = '0.1'
+    const { service, budget } = makeHarness({ prisma: {
+      publicModel: { findFirst: vi.fn().mockResolvedValue({ id: 'gpt-4o', contextSize: 8192, policies: [], prices: [], channelModels: [makeProtocolMapping('ANTHROPIC_MESSAGES')] }) },
+      channelModel: { findMany: vi.fn().mockResolvedValue([ability]) },
+      groupMember: { findFirst: vi.fn().mockResolvedValue({ group: { models: [{ publicModelId: 'gpt-4o' }] } }) }
+    } })
+    const received: any[] = []
+    vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
+      received.push(JSON.parse(String(init.body)))
+      return stream ? new Response([
+        `event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":0,"cache_read_input_tokens":20,"cache_creation_input_tokens":${cacheWrites}}}}\n\n`,
+        'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":5}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+      ].join(''), { headers: { 'content-type': 'text/event-stream' } })
+        : new Response(JSON.stringify({ usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 20, cache_creation_input_tokens: cacheWrites } }))
+    })
+    const system = [{ type: 'text', text: 'Hello', cache_control: { type: 'ephemeral' } }]
+    const chunks: Buffer[] = []
+    const response = Object.assign(new Writable({ write(chunk, _encoding, callback) { chunks.push(Buffer.from(chunk)); callback() } }), {
+      status: vi.fn(), setHeader: vi.fn(), send(this: Writable, bytes: Buffer) { this.end(bytes) }
+    })
+    await service.relay({ protocol: 'anthropic_messages', body: { model: 'gpt-4o', system, messages: [{ role: 'user', content: 'Hi' }], max_tokens: 16, stream },
+      headers: {}, principal: { ...principal, groupId: 'group-1' }, response: response as any })
+    const finalize = cacheWrites ? budget.hold : budget.settle
+    await vi.waitFor(() => expect(finalize).toHaveBeenCalledTimes(1))
+    response.emit('close')
+    expect(received[0].system).toEqual(system)
+    expect(budget.reserve.mock.calls[0][0].estimateCny).not.toBe('0.00000000')
+    expect(finalize).toHaveBeenCalledTimes(1)
+    expect(finalize.mock.calls[0][1]).toMatchObject({ actualCny: cacheWrites ? '0.00000000' : '0.00002200',
+      usage: { inputTokens: 30, cachedTokens: 20, outputTokens: 5, costSnapshot: { billingState: cacheWrites ? 'UNKNOWN' : 'CONFIRMED' } } })
+    if (cacheWrites) {
+      expect(budget.hold.mock.calls[0][1].unresolvedCny).toBe(budget.reserve.mock.calls[0][0].estimateCny)
+      expect(budget.settle).not.toHaveBeenCalled()
+    } else expect(budget.hold).not.toHaveBeenCalled()
+    expect(Buffer.concat(chunks).toString()).toContain('output_tokens')
+  })
+
   it.each([true, false])('attributes employee key usage without inventing a device (upstream success=%s)', async success => {
     const { service, budget } = makeHarness({ prisma: { groupMember: { findFirst: vi.fn().mockResolvedValue({ group: { models: [{ publicModelId: 'gpt-4o' }] } }) } } })
     vi.stubGlobal('fetch', async () => {

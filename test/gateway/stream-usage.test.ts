@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { StreamUsageCollector } from '../../packages/gateway-core/src/stream-usage.js'
 
 describe('stream usage collector', () => {
+  it('uses DeepSeek cache hits in streamed usage, retaining the reported prompt total', () => {
+    const collector = new StreamUsageCollector('openai_chat')
+    collector.push(Buffer.from('data: {"usage":{"prompt_tokens":1000,"prompt_cache_hit_'))
+    collector.push(Buffer.from('tokens":800,"prompt_cache_miss_tokens":200,"completion_tokens":100}}\n\ndata: [DONE]\n\n'))
+    expect(collector.usage()).toEqual({ inputTokens: 1000, outputTokens: 100, cachedTokens: 800, reasoningTokens: 0, source: 'upstream' })
+    expect(collector.completed).toBe(true)
+  })
+
   it('collects OpenAI usage split across transport chunks', () => {
     const collector = new StreamUsageCollector('openai_chat')
     collector.push(Buffer.from('data: {"choices":[],"usage":{"prompt_tokens":10,'))

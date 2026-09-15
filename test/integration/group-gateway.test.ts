@@ -20,6 +20,67 @@ class ClientResponse extends Writable {
 afterEach(() => vi.unstubAllGlobals())
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('group gateway lifecycle (PostgreSQL + local upstream)', () => {
+  it.each(['anthropic_messages', 'openai_chat'] as const)('settles DeepSeek cached tool history in CNY for normal and streaming employee key requests (%s)', protocol => withTestDatabase(async db => {
+    const { organization, account, actor } = await createOrganization(db)
+    const group = await db.usageGroup.create({ data: { organizationId: organization.id, name: 'DeepSeek cache test', type: 'PROJECT', defaultLimitCny: '1' } })
+    await db.groupMember.create({ data: { organizationId: organization.id, accountId: account.id, groupId: group.id } })
+    const key = await db.employeeApiKey.create({ data: { organizationId: organization.id, accountId: account.id, groupId: group.id,
+      createdById: account.id, name: 'cache test', secretHash: randomUUID(), secretHint: 'test' } })
+    process.env.MASTER_KEY = Buffer.alloc(32, 6).toString('base64')
+    const encrypted = encryptSecret('fake-supplier-key', Buffer.alloc(32, 6))
+    const anthropic = protocol === 'anthropic_messages'
+    const channel = await db.channel.create({ data: { name: 'DeepSeek cache fixture', provider: 'test', protocol: anthropic ? 'ANTHROPIC' : 'OPENAI', maxRetries: 0,
+      baseUrl: anthropic ? 'https://api.deepseek.com/anthropic' : 'https://api.deepseek.com', keys: { create: { ciphertext: encrypted.ciphertext, iv: encrypted.iv, tag: encrypted.tag, suffix: 'test' } } } })
+    const model = await db.publicModel.create({ data: { id: randomUUID(), displayName: 'Cache fixture', enabled: true, contextSize: 8192,
+      prices: { create: { inputPerMillion: '1', outputPerMillion: '2', cachedPerMillion: '0.1', validFrom: new Date(0) } },
+      channelModels: { create: { channelId: channel.id, upstreamModel: 'deepseek-v4-flash', protocol: anthropic ? 'ANTHROPIC_MESSAGES' : 'OPENAI_CHAT', health: 'HEALTHY' } } } })
+    await db.groupModelAccess.create({ data: { organizationId: organization.id, groupId: group.id, publicModelId: model.id } })
+    const budget = new GroupBudgetService(db as PrismaService)
+    const service = new GatewayService(db as PrismaService, {} as RedisQuotaService, undefined, budget)
+    const identity = { ...actor, credentialType: 'API_KEY' as const, apiKeyId: key.id, groupId: group.id }
+    const marker = { type: 'ephemeral' }
+    const body = anthropic ? { model: model.id, max_tokens: 16, system: [{ type: 'text', text: 'Help', cache_control: marker }],
+      tools: [{ name: 'read', input_schema: { type: 'object' }, cache_control: marker }],
+      messages: [{ role: 'user', content: 'Read' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'read', input: {} }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'Hello', cache_control: marker }] }] }
+      : { model: model.id, max_tokens: 16, tools: [{ type: 'function', function: { name: 'read', parameters: { type: 'object' } } }],
+        messages: [{ role: 'user', content: 'Read' },
+          { role: 'assistant', content: null, tool_calls: [{ id: 't1', type: 'function', function: { name: 'read', arguments: '{}' } }] },
+          { role: 'tool', tool_call_id: 't1', content: 'Hello' }] }
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      expect(url).toBe(anthropic ? 'https://api.deepseek.com/anthropic/v1/messages' : 'https://api.deepseek.com/v1/chat/completions')
+      const sent = JSON.parse(String(init.body))
+      expect(sent).toMatchObject({ ...body, model: 'deepseek-v4-flash' })
+      if (!anthropic) {
+        const usage = { prompt_tokens: 30, prompt_cache_hit_tokens: 20, prompt_cache_miss_tokens: 10, completion_tokens: 5 }
+        return sent.stream ? new Response(`data: ${JSON.stringify({ usage })}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } })
+          : new Response(JSON.stringify({ usage }))
+      }
+      return sent.stream ? new Response(
+        'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":20,"output_tokens":0}}}\n\n' +
+        'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":5}}\n\n' +
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n', { headers: { 'content-type': 'text/event-stream' } })
+        : new Response('{"usage":{"input_tokens":10,"cache_read_input_tokens":20,"output_tokens":5}}')
+    })
+    for (const stream of [false, true]) {
+      const response = new ClientResponse()
+      await service.relay({ protocol, body: { ...body, stream }, headers: {}, principal: identity, response: response as any })
+      const requestId = response.headers.get('x-ucli-request-id')!
+      await vi.waitFor(async () => expect(await db.usageLog.count({ where: { requestId } })).toBe(1))
+      response.emit('close')
+      const entry = await db.groupBudgetEntry.findUniqueOrThrow({ where: { operationId: `request:${requestId}` } })
+      expect(entry.status).toBe('SETTLED')
+      expect(entry.settledCny.toFixed(8)).toBe('0.00002200')
+      const log = await db.usageLog.findUniqueOrThrow({ where: { requestId } })
+      expect(log).toMatchObject({ inputTokens: 30n, cachedTokens: 20n, outputTokens: 5n, usageSource: 'UPSTREAM', apiKeyId: key.id })
+      expect(log.actorSnapshot).toMatchObject({ employeeName: 'Test employee' })
+    }
+    const period = await db.groupBudgetPeriod.findFirstOrThrow({ where: { groupId: group.id } })
+    expect(period.spentCny.toFixed(8)).toBe('0.00004400')
+    expect(period.reservedCny.toFixed(8)).toBe('0.00000000')
+  }))
+
   it('rejects zero budgets, caps upstream output and settles normal/streaming calls once', () => withTestDatabase(async db => {
     const { organization, account, actor } = await createOrganization(db)
     const group = await db.usageGroup.create({ data: { organizationId: organization.id, name: 'Gateway budget', type: 'PROJECT' } })

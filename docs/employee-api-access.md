@@ -54,7 +54,7 @@ Invoke-RestMethod -Method Post -Uri "$base/gateway/v1/chat/completions" `
 $env:ANTHROPIC_BASE_URL = 'https://ucli.company.example/gateway/anthropic'
 $env:ANTHROPIC_API_KEY = $env:UCLI_API_KEY
 $env:CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = '1'
-# 当前组预算尚不支持缓存写入计价，必须关闭客户端提示缓存
+# 未发布下述 DeepSeek 兼容修复，或使用其他渠道时，关闭客户端提示缓存
 $env:DISABLE_PROMPT_CACHING = '1'
 # 首次验收使用小输出上限，之后按模型上下文和组预算调整
 $env:CLAUDE_CODE_MAX_OUTPUT_TOKENS = '1024'
@@ -66,6 +66,22 @@ claude
 服务端保留请求体，并向 Messages 上游透传 `anthropic-version`、`anthropic-beta`；认证头始终替换成采购渠道凭据。本次没有实现所有 Claude 扩展接口或任意 `anthropic-*` 头透传，不能宣称完整 Claude Code 兼容。
 
 2026-09-15 已用真实 Claude Code 2.1.268 连接本地网关/模拟上游验证：关闭提示缓存后的文本流与 Read 工具往返成功，非交互 `/model` 触发真实目录请求并返回 200。未验收交互模型选择器画面。默认缓存请求实际返回 400 `unsupported_budget_estimation`；不能把缓存读费率当作缓存写入费率，也不在网关偷偷删除 `cache_control`。`DISABLE_PROMPT_CACHING=1` 是官方客户端开关，见[环境变量说明](https://code.claude.com/docs/en/env-vars)（2026-09-15 核对）。验收时另用 `MAX_THINKING_TOKENS=0` 关闭推理，未覆盖全部推理/缓存扩展。
+
+### DeepSeek 缓存标记兼容修复（0.4.1）
+
+本修复发布后，若模型的全部候选上游均为 `https://api.deepseek.com/anthropic`（允许末尾 `/`），组预算允许文本块、工具调用/结果及工具定义中的合法 `cache_control: { type: "ephemeral", ttl?: "5m" | "1h" }` 原样透传。依据是 [DeepSeek 官方兼容说明](https://api-docs.deepseek.com/guides/anthropic_api/)明确忽略这些标记；不依赖可编辑的渠道名称或模型 ID。预占仍按完整输入保守计算，结算仍使用上游实际缓存命中用量和人民币采购价。
+
+管理员确认修复已发布且渠道满足上述条件后，可在启动 Claude Code 的同一 PowerShell 窗口执行 `Remove-Item Env:DISABLE_PROMPT_CACHING -ErrorAction SilentlyContinue`，再重新启动客户端。若任一备用渠道是其他供应商/代理，仍须关闭客户端提示缓存；顶层自动缓存标记、图片、托管工具和未配置费率的缓存写入不在本次开放范围。上游若意外返回缓存写入 token，仍转待核对，不按免费处理。本地模拟上游测试不替代发布后的真实 Claude Code 验收。
+
+2026-09-15 本地验证：类型检查、服务端/管理端构建、452 项许可证检查通过；真实测试 PG/Redis 的普通/流式工具历史请求按每笔 ¥0.000022 结算，预算预占归零。`npx vitest run --coverage --maxWorkers=2 --exclude test/dependencies/prisma-config.test.ts` 为 110 文件、688 项通过，行覆盖率 96.01%，分支 85.76%。完整 `npm run verify` **未通过**：既有 Prisma 配置加载测试在 5 秒子进程限时内超时，串行重跑仍复现，单独导入约 9.7 秒；上述排除文件包含 2 项测试，不代表完整门禁通过。未调整该测试限时、未提交或发布生产；生产仍使用客户端缓存开关，待后续复验与发布。
+
+### DeepSeek 用量字段与生产价格核对（2026-09-15，0.4.1）
+
+共享 `normalizeUsage` 已补充 `prompt_cache_hit_tokens` 作为标准缓存字段缺省时的来源，保留 `prompt_tokens` 总量，不再次叠加命中数；未命中量仍为总输入减命中量。先复现普通/流式解析缺失和真实 PG 账本多计费用，再修复：本轮网关、配额及预算/成本集成回归 20 文件、128 项通过，类型检查和服务端构建通过。测试输入 1000、命中 800、输出 100，按 Flash 高峰价核算为 ¥0.001232；这不是生产请求或供应商账单验收。上一轮全量门禁的 Prisma 配置加载超时仍待解决。
+
+17:06（北京时间）只读核对生产两个 DeepSeek 官方渠道：Flash 与 Vision 旧别名均使用旧价，高峰输入/缓存/输出为 3 / 0.1 / 9，空闲为 1.5 / 0.05 / 4.5 元每百万 Token；[官网当前价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)为高峰 2 / 0.04 / 8、空闲 1 / 0.02 / 4。Pro 价格、Asia/Shanghai 时区及周一至周五 09:00–12:00、14:00–18:00 高峰窗口一致。公共目录的两个 Flash 别名底价也仍为旧空闲价。建议后续经确认以执行时间启用新价格版本，同步两个渠道和公共目录，保留旧规则与历史成本快照；未执行生产价格变更、历史重算、代码发布或付费请求对账。
+
+2026-09-15 17:20:05.858（北京时间），用户确认后已在生产原子更新：4 个渠道模型映射新增 12 条规则，原 12 条有效规则在同一时刻结束；其他旧规则保持不变。两个公共目录底价各新增一个版本（1 / 0.02 / 4，推理同输出），保留旧版本，按最新有效版本解析。Flash / Vision 高峰为 2 / 0.04 / 8、空闲为 1 / 0.02 / 4，Pro 和模型 ID 未改。审计 ID：`7dc7e94f-1a16-4f1b-a6af-a9432ff4d0f6`，包含变更前后价格快照。独立回读核验通过：旧记录保留、当前 4 条实际选价均为新高峰价、下一切换点 18:00、样例费用 ¥0.001232；API/Gateway 健康通过。没有重算历史账单、修改密钥或发布代码，缓存字段/缓存标记两项代码修复仍待发布。
 
 ## OpenCode
 
@@ -95,6 +111,8 @@ OpenCode 自定义 provider 的模型列表需要配置，不能假定只填地�
 CLI 可能自行估算美元费用，或因为自定义 provider 没有价格而显示零；这些不是平台采购成本。本次 Claude 显示其默认美元估价、OpenCode 显示零，但服务端每笔均按测试采购价计 ¥0.00000700。组预算和公司统计只使用服务端人民币账本，切勿以 CLI 本地金额对账。
 
 交互补测：OpenCode 1.18.23 的 `/models` 已实际显示并选中配置模型；Claude 2.1.268 在隔离配置下启动时访问 `api.anthropic.com` 返回 403，尚未进入选择器。非交互成功不代表交互启动不依赖客户端自身联网检查，详见[验收记录](employee-gateway-acceptance.md)。
+
+后续发布门禁复验已通过：111 文件、696 项测试无跳过，完整 `npm run verify` 退出码 0，三组 HTTP 集成检查通过。上述超时为此前记录；0.4.1 的部署状态及真实验收证据以[发布记录](release-0.4.1.md)为准。
 
 ## 管理接口与故障
 

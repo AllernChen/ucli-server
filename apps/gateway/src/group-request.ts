@@ -22,7 +22,7 @@ export async function relayGroupRequest(input: {
   requestId: string; startedAt: Date; contextSize: number; headers: Record<string, string | string[] | undefined>
 }) {
   const { prisma, quota, budget, protocol, principal, response, candidates, policies, requestId, startedAt, headers } = input
-  const prepared = prepareBudgetRequest(protocol, input.body, input.contextSize)
+  const prepared = prepareBudgetRequest(protocol, input.body, input.contextSize, candidates)
   const { body, inputTokens, outputTokens } = prepared
   const estimateCny = estimateBudgetCost(inputTokens, outputTokens, candidates.map(c => c.cost))
   const estimateTokens = inputTokens + outputTokens
