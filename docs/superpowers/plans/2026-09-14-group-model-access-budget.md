@@ -594,3 +594,9 @@ await expect(guard.canActivate(context)).rejects.toMatchObject({
 - OpenCode 1.18.23 的 /models 选择器已显示、选中本地配置模型并正常退出。Claude 2.1.268 因自身启动检查 api.anthropic.com 返回 403 未进入选择器，不能宣称交互模型发现通过。
 - nginx Docker 单项重跑仍在 Node 基础镜像元数据拉取阶段因 Docker Hub 鉴权地址连接超时失败，未更改网络配置或测试门槛。
 - 后续非交互 HTTP + CLI 回归、typecheck、脚本语法检查通过；此次 OpenCode 可执行文件报告 1.18.31，未将它与 1.18.23 的 UI 证据混用。仅测试/文档变更，不合并、推送、部署或修改生产入口。
+
+### Docker 镜像补齐后复验（2026-09-15）
+
+- 用户拉取 Node/nginx 基础镜像后，nginx 容器健康用例独立及全量复跑通过，Docker Hub 阻塞解除。
+- 修正本轮本地 PG 启动漏带端口参数的问题并检查连接后，默认并发仍为 652 通过、group-gateway 一项 5 秒超时；4 worker 全量覆盖率为 108 文件、653 项通过，无排除项，行覆盖率 95.96%。不修改测试超时或阈值。
+- typecheck、服务端/管理端构建及许可证检查均通过；默认 npm run verify 的高并发稳定性问题仍保留，不冒称默认命令全绿。未修改业务代码、未发布，Claude 交互启动和公司真实渠道验收仍待完成。
