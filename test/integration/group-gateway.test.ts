@@ -62,6 +62,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('group gateway lifecycle (Postgr
       expect(entry.status).toBe('SETTLED')
       expect(entry.settledCny.toFixed(8)).toBe('0.00000700')
       expect(await db.usageLog.count({ where: { requestId, apiKeyId: key.id, deviceId: null, groupId: group.id } })).toBe(1)
+      expect((await db.usageLog.findUniqueOrThrow({ where: { requestId } })).actorSnapshot).toMatchObject({ keyName: 'test', keyHint: 'test' })
     }
     expect(sent.map(body => body.max_tokens)).toEqual([4096, 4096])
     expect((await db.groupBudgetPeriod.findFirstOrThrow({ where: { groupId: group.id } })).spentCny.toFixed(8)).toBe('0.00001400')

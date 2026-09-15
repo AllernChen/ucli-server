@@ -8,6 +8,7 @@ import { formatCny } from '../currency'
 import { toast } from '../toast'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import Pagination from '../components/Pagination.vue'
+import Usage from './Usage.vue'
 const route = useRoute(), router = useRouter(), lifecycle = createRequestLifecycle()
 const id = computed(() => String(route.params.id)), base = computed(() => `/api/v1/admin/usage-groups/${id.value}`)
 const group = ref<UsageGroup | null>(null), budget = ref<GroupBudget | null>(null)
@@ -101,7 +102,7 @@ onUnmounted(() => { generation++; lifecycle.dispose(); optionLifecycle.dispose()
       <h3>周期设置</h3><p class="muted">有请求记录的周期不能切换模式或时区。</p><form class="stack-form" @submit.prevent="saveBudget(true)"><label>模式<select v-model="config.budgetMode" :disabled="pending"><option value="TOTAL">项目总额（长期累计）</option><option value="MONTHLY">自然月（不结转）</option></select></label><label>时区<input v-model="config.budgetTimezone" required :disabled="pending"></label><label>变更原因<input v-model="config.reason" required maxlength="2000" :disabled="pending"></label><button :disabled="!editable || pending || !config.reason.trim()">保存周期设置</button></form>
       <h3>预算账目与调整记录</h3><table v-if="entries.items.length"><thead><tr><th>时间 / 请求</th><th>周期 / 类型</th><th>状态</th><th>预占 / 已结算</th><th>原因</th></tr></thead><tbody><tr v-for="e in entries.items" :key="e.id"><td>{{ new Date(e.startedAt).toLocaleString() }}<small class="mono">{{ e.requestId || e.operationId }}</small></td><td>{{ e.periodId }}<small>{{ e.kind }}</small></td><td>{{ e.status }}</td><td>{{ formatCny(e.reservedCny) }} / {{ formatCny(e.settledCny) }}</td><td>{{ e.reason || '—' }}<details v-if="e.kind !== 'REQUEST'"><summary>调整前后</summary><pre>{{ JSON.stringify({ before: e.snapshot?.before, after: e.snapshot?.after }, null, 2) }}</pre></details></td></tr></tbody></table><p v-else class="empty">暂无预算账目</p><Pagination :total="entries.total" :offset="entryOffset" :limit="20" @change="entryOffset = $event; load()" />
     </section>
-    <section v-if="tab === 'usage'" class="panel"><h2>组用量</h2><p>组内已结算 {{ formatCny(budget.spentCny) }}，处理中或待核对 {{ formatCny(budget.reservedCny) }}。</p><button @click="router.push({ path: '/usage', query: { groupId: id } })">查看组使用明细</button></section>
+    <section v-if="tab === 'usage'"><div class="actions"><button @click="router.push({ path: '/analytics', query: { groupId: id } })">组成本趋势与员工分析</button></div><Usage :group-id="id" embedded /></section>
   </template>
   <ConfirmDialog :open="Boolean(confirmation)" title="确认组管理操作" :message="confirmation?.message || ''" danger :close-disabled="pending" @cancel="confirmation = null" @confirm="confirmation && mutate(confirmation.path, confirmation.method)" />
 </template>

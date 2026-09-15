@@ -34,11 +34,12 @@ export async function relayGroupRequest(input: {
   const context = parseUcliContext(headers)
   const actor = await prisma.account.findUniqueOrThrow({ where: { id: principal.sub }, select: { displayName: true } })
   const group = await prisma.usageGroup.findUniqueOrThrow({ where: { id: principal.groupId }, select: { name: true } })
+  const key = principal.apiKeyId ? await prisma.employeeApiKey.findUniqueOrThrow({ where: { id: principal.apiKeyId }, select: { name: true, secretHint: true } }) : null
   const initial = candidates[0]!
   const usageBase = {
     requestId, organizationId: principal.organizationId, accountId: principal.sub, groupId: principal.groupId,
     credentialType: principal.credentialType, apiKeyId: principal.apiKeyId ?? null, deviceId: principal.deviceId ?? null,
-    actorSnapshot: { employeeName: actor.displayName, groupName: group.name }, ...context,
+    actorSnapshot: { employeeName: actor.displayName, groupName: group.name, ...(key ? { keyName: key.name, keyHint: key.secretHint } : {}) }, ...context,
     protocol: { openai_chat: 'OPENAI_CHAT', openai_responses: 'OPENAI_RESPONSES', anthropic_messages: 'ANTHROPIC_MESSAGES', gemini: 'GEMINI' }[protocol] as Prisma.UsageLogUncheckedCreateInput['protocol'],
     publicModelId: String(body.model), upstreamModel: initial.upstreamModel, channelId: initial.channelId, channelModelId: initial.channelModelId,
     startedAt, finishedAt: startedAt, durationMs: 0, costUsd: '0.00000000', usageSource: 'ESTIMATED' as const, streaming: body.stream === true,

@@ -3,6 +3,9 @@ export interface AnalyticsFilter {
   end: Date
   organizationId?: string
   accountId?: string
+  groupId?: string
+  apiKeyId?: string
+  credentialType?: 'DEVICE' | 'API_KEY'
   channelId?: string
   publicModelId?: string
   channelModelId?: string
@@ -15,6 +18,11 @@ export interface AnalyticsOverview {
   inputTokens: string
   outputTokens: string
   costUsd: string
+  /** Compatibility costUsd fields contain CNY, not a currency conversion. */
+  currency: 'CNY'
+  costCny: string
+  avgCostPerRequestCny: string
+  unsettledRequests: number
   avgCostPerRequestUsd: string
   p50LatencyMs: number | null
   p95LatencyMs: number | null

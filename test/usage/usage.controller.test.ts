@@ -23,10 +23,10 @@ describe('usage controller', () => {
       account: { displayName: '陈旭均', email: '443803527@qq.com' }
     })])
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
-      include: {
+      include: expect.objectContaining({
         account: { select: { displayName: true, email: true } },
-        routes: true
-      }
+        routes: expect.objectContaining({ orderBy: { attempt: 'asc' } })
+      })
     }))
   })
 })

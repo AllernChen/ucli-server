@@ -32,6 +32,8 @@ describe('analytics service', () => {
       .toMatchObject({ organizationId: 'org-1', accountId: 'account-2' })
     expect(service.resolveFilter(member, { organizationId: 'org-2', accountId: 'account-2' }, now))
       .toMatchObject({ organizationId: 'org-1', accountId: 'member-1' })
+    expect(service.resolveFilter(member, { accountId: 'other', groupId: 'group-a', apiKeyId: 'key-a', credentialType: 'API_KEY' }, now))
+      .toMatchObject({ organizationId: 'org-1', accountId: 'member-1', groupId: 'group-a', apiKeyId: 'key-a', credentialType: 'API_KEY' })
   })
 
   it('rejects invalid or overlong time ranges and hourly ranges over 31 days', async () => {
@@ -51,6 +53,7 @@ describe('analytics service', () => {
     await expect(service.overview(platform, { start: '2026-08-19', end: '2026-08-20' })).resolves.toEqual({
       requests: 4, successRate: 0.75, activeAccounts: 2, inputTokens: '100', outputTokens: '40',
       costUsd: '1.25000000', avgCostPerRequestUsd: '0.31250000', p50LatencyMs: 120,
+      currency: 'CNY', costCny: '1.25000000', avgCostPerRequestCny: '0.31250000', unsettledRequests: 0,
       p95LatencyMs: 451, p50FirstTokenMs: 80, p95FirstTokenMs: 200, failoverRate: 0.25
     })
   })
