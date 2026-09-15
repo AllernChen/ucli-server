@@ -2,8 +2,9 @@ import { BadRequestException, Injectable } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import Decimal from 'decimal.js'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
-import type { AnalyticsFilter, AnalyticsOverview, AnalyticsPrincipal } from '../../../packages/usage/src/analytics-types.js'
+import type { AnalyticsFilter, AnalyticsOverview, AnalyticsPrincipal, UsageReadFilter } from '../../../packages/usage/src/analytics-types.js'
 import type { AnalyticsQueryDto } from './analytics.dto.js'
+import { resolveUsageFilter, usageWhere } from './usage-query.js'
 
 const DAY = 86_400_000
 const DIMENSIONS = {
@@ -27,19 +28,8 @@ function money(value: unknown): string { return new Decimal(value?.toString() ||
 export class AnalyticsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  resolveFilter(principal: AnalyticsPrincipal, query: AnalyticsQueryDto, now = new Date()): AnalyticsFilter {
-    const end = query.end ? new Date(query.end) : now
-    const start = query.start ? new Date(query.start) : new Date(end.getTime() - 7 * DAY)
-    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start >= end) throw new BadRequestException('Invalid analytics time range')
-    if (end.getTime() - start.getTime() > 90 * DAY) throw new BadRequestException('Analytics range cannot exceed 90 days')
-    return {
-      start, end,
-      organizationId: principal.role === 'PLATFORM_ADMIN' ? query.organizationId || undefined : principal.organizationId,
-      accountId: principal.role === 'MEMBER' ? principal.sub : query.accountId || undefined,
-      groupId: query.groupId || undefined, apiKeyId: query.apiKeyId || undefined, credentialType: query.credentialType,
-      channelId: query.channelId || undefined, publicModelId: query.publicModelId || query.model || undefined,
-      channelModelId: query.channelModelId || undefined
-    }
+  resolveFilter(principal: AnalyticsPrincipal, query: AnalyticsQueryDto, now = new Date()): UsageReadFilter {
+    return resolveUsageFilter(principal, query, now)
   }
 
   // Only expand into one row per request/channel when a channel dimension or filter needs it.
@@ -55,17 +45,9 @@ export class AnalyticsService {
   private cost(filter: AnalyticsFilter, byChannel = false) { return Prisma.raw(byChannel || filter.channelId ? 'COALESCE(b.cost_cny, u.cost_usd)' : 'u.cost_usd') }
   private unsettled(filter: AnalyticsFilter, byChannel = false) { return Prisma.raw(byChannel || filter.channelId ? "COALESCE(b.unsettled, u.cost_snapshot->>'billingState' = 'UNKNOWN', false)" : "COALESCE(u.cost_snapshot->>'billingState' = 'UNKNOWN', false)") }
 
-  private where(filter: AnalyticsFilter): Prisma.Sql {
-    // Prisma stores DateTime as UTC timestamp without time zone; bind dates explicitly in UTC.
-    const conditions = [Prisma.sql`u.started_at >= (${filter.start}::timestamptz AT TIME ZONE 'UTC')`, Prisma.sql`u.started_at < (${filter.end}::timestamptz AT TIME ZONE 'UTC')`]
-    if (filter.organizationId) conditions.push(Prisma.sql`u.organization_id = ${filter.organizationId}::uuid`)
-    if (filter.accountId) conditions.push(Prisma.sql`u.account_id = ${filter.accountId}::uuid`)
-    if (filter.groupId) conditions.push(Prisma.sql`u.group_id = ${filter.groupId}::uuid`)
-    if (filter.apiKeyId) conditions.push(Prisma.sql`u.api_key_id = ${filter.apiKeyId}::uuid`)
-    if (filter.credentialType) conditions.push(Prisma.sql`u.credential_type::text = ${filter.credentialType}`)
+  private where(filter: UsageReadFilter): Prisma.Sql {
+    const conditions = [usageWhere(filter)]
     if (filter.channelId) conditions.push(Prisma.sql`COALESCE(b.channel_id, u.channel_id) = ${filter.channelId}::uuid`)
-    if (filter.publicModelId) conditions.push(Prisma.sql`u.public_model_id = ${filter.publicModelId}`)
-    if (filter.channelModelId) conditions.push(Prisma.sql`u.channel_model_id = ${filter.channelModelId}::uuid`)
     return Prisma.join(conditions, ' AND ')
   }
 

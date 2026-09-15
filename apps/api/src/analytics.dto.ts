@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer'
-import { IsISO8601, IsIn, IsInt, IsOptional, IsString, IsUUID, Length, Max, Min } from 'class-validator'
+import { IsISO8601, IsIn, IsInt, IsOptional, IsString, IsUUID, Length, Matches, Max, Min } from 'class-validator'
 
 export class AnalyticsQueryDto {
   @IsOptional() @IsISO8601({ strict: true }) start?: string
@@ -24,6 +24,14 @@ export class AnalyticsQueryDto {
 }
 
 export class UsageQueryDto extends AnalyticsQueryDto {
+  @IsOptional() @IsIn(['UTC', 'Asia/Shanghai']) timezone?: 'UTC' | 'Asia/Shanghai'
+  @IsOptional() @IsIn(['SUCCESS', 'FAILED', 'CANCELLED', 'INTERRUPTED']) requestState?: 'SUCCESS' | 'FAILED' | 'CANCELLED' | 'INTERRUPTED'
+  @IsOptional() @IsIn(['CONFIRMED', 'ESTIMATED', 'UNKNOWN', 'NO_CHARGE']) billingState?: 'CONFIRMED' | 'ESTIMATED' | 'UNKNOWN' | 'NO_CHARGE'
+  @IsOptional() @IsIn(['UNGROUPED']) groupScope?: 'UNGROUPED'
+  @IsOptional() @IsIn(['NO_KEY']) keyScope?: 'NO_KEY'
+  @IsOptional() @IsUUID() costRuleId?: string
+  @IsOptional() @Matches(/^[0-9a-f]{32}$/) priceKey?: string
+  @IsOptional() @IsIn(['UNALLOCATED']) allocation?: 'UNALLOCATED'
   @IsOptional() @IsUUID() sessionId?: string
   @IsOptional() @IsUUID() projectId?: string
   @IsOptional() @IsString() @Length(1, 200) requestId?: string

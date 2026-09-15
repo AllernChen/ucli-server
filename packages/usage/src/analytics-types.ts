@@ -11,6 +11,23 @@ export interface AnalyticsFilter {
   channelModelId?: string
 }
 
+export type RequestState = 'SUCCESS' | 'FAILED' | 'CANCELLED' | 'INTERRUPTED'
+export type CostState = 'CONFIRMED' | 'ESTIMATED' | 'UNKNOWN' | 'NO_CHARGE'
+
+export interface UsageReadFilter extends AnalyticsFilter {
+  timezone: 'UTC' | 'Asia/Shanghai'
+  requestState?: RequestState
+  billingState?: CostState
+  groupScope?: 'UNGROUPED'
+  keyScope?: 'NO_KEY'
+  costRuleId?: string
+  priceKey?: string
+  allocation?: 'UNALLOCATED'
+  requestId?: string
+  sessionId?: string
+  projectId?: string
+}
+
 export interface AnalyticsOverview {
   requests: number
   successRate: number
