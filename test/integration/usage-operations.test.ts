@@ -34,6 +34,22 @@ const historicalPrice = (extra = {}) => ({ id: randomUUID(), source: 'CHANNEL_CO
   validFrom: '2026-01-01T00:00:00Z', internalSecret: { credential: 'must-not-leak' }, ...extra })
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('routed operational usage analytics', () => {
+  it('sorts independent request success oppositely to legacy billing-dependent success without changing the old contract', () => withTestDatabase(async db => {
+    const f = await fixture(db)
+    const second = await db.publicModel.create({ data: { id: randomUUID(), displayName: 'Partly failed' } })
+    await f.log({ costSnapshot: { billingState: 'UNKNOWN' }, errorCode: 'RECONCILIATION_REQUIRED' })
+    await f.log({ publicModelId: second.id })
+    await f.log({ publicModelId: second.id, statusCode: 500, errorCode: 'UPSTREAM_ERROR' })
+    const operational = await f.service.breakdown(f.actor, { ...range, dimension: 'model', sort: 'requestSuccessRate', order: 'desc' })
+    const legacy = await f.service.breakdown(f.actor, { ...range, dimension: 'model', sort: 'successRate', order: 'desc' })
+    expect(operational.items.map(row => row.id)).toEqual([f.model.id, second.id])
+    expect(legacy.items.map(row => row.id)).toEqual([second.id, f.model.id])
+    expect(operational.items).toMatchObject([{ requestSuccessRate: 1, successRate: 0 }, { requestSuccessRate: .5, successRate: .5 }])
+    const page = await f.service.breakdown(f.actor, { ...range, dimension: 'model', sort: 'requestSuccessRate', order: 'desc', limit: 1, offset: 1 })
+    expect(page).toMatchObject({ total: 2, items: [{ id: second.id }] })
+    const exported = await f.service.exportRows(f.actor, { ...range, dimension: 'model', sort: 'requestSuccessRate', order: 'desc', limit: 1, offset: 1 })
+    expect(exported.map(row => row.id)).toEqual([f.model.id, second.id])
+  }))
   it('keeps paging, details and both exports on the same matched request costs and safe historical names', () => withTestDatabase(async db => {
     const f = await fixture(db), usage = new UsageController(db as PrismaService), request = { principal: f.actor }
     const log = await f.log({ costUsd: '1.5', actorSnapshot: { employeeName: '=中文', internalSecret: 'DO_NOT_EXPOSE' }, costSnapshot: { billingState: 'UNKNOWN', internalSecret: 'DO_NOT_EXPOSE' }, errorCode: 'RECONCILIATION_REQUIRED' })

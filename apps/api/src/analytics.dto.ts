@@ -17,8 +17,8 @@ export class AnalyticsQueryDto {
   @IsOptional() @IsIn(['hour', 'day']) interval?: 'hour' | 'day'
   @IsOptional() @IsIn(['organization', 'channel', 'model', 'channelModel', 'account', 'costRule', 'group', 'apiKey'])
   dimension?: 'organization' | 'channel' | 'model' | 'channelModel' | 'account' | 'costRule' | 'group' | 'apiKey'
-  @IsOptional() @IsIn(['requests', 'costCny', 'costUsd', 'tokens', 'successRate', 'p95LatencyMs'])
-  sort?: 'requests' | 'costCny' | 'costUsd' | 'tokens' | 'successRate' | 'p95LatencyMs'
+  @IsOptional() @IsIn(['requests', 'costCny', 'costUsd', 'tokens', 'successRate', 'requestSuccessRate', 'p95LatencyMs'])
+  sort?: 'requests' | 'costCny' | 'costUsd' | 'tokens' | 'successRate' | 'requestSuccessRate' | 'p95LatencyMs'
   @IsOptional() @IsIn(['asc', 'desc']) order?: 'asc' | 'desc'
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(200) limit?: number
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) offset?: number

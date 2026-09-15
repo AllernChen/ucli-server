@@ -17,6 +17,11 @@ function makeService(rows: any[] = []) {
 }
 
 describe('analytics service', () => {
+  it('accepts independent request-success sorting while retaining the legacy success sort at the HTTP boundary', async () => {
+    for (const sort of ['requestSuccessRate', 'successRate']) {
+      expect(await validate(plainToInstance(AnalyticsQueryDto, { dimension: 'model', sort }), { whitelist: true, forbidNonWhitelisted: true })).toHaveLength(0)
+    }
+  })
   it('validates UUIDs, pagination and breakdown enums at the HTTP DTO boundary', async () => {
     const dto = plainToInstance(AnalyticsQueryDto, {
       organizationId: 'not-a-uuid', offset: '1.5', dimension: 'channel;drop table usage_logs'

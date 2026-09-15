@@ -18,7 +18,7 @@ const DIMENSIONS = {
   apiKey: { id: 'u.api_key_id::text', name: "COALESCE(u.actor_snapshot->>'keyName', u.api_key_id::text, '设备凭据')" },
   costRule: { id: 'a.price_key', name: "COALESCE(a.price_snapshot->>'ruleName', a.price_snapshot->>'source', '历史价格信息不足')" }
 } as const
-const SORTS = { requests: 'requests', costCny: 'matched_cost_cny', costUsd: 'matched_cost_cny', tokens: 'total_tokens', successRate: 'success_rate', p95LatencyMs: 'p95_latency_ms', name: 'name' } as const
+const SORTS = { requests: 'requests', costCny: 'matched_cost_cny', costUsd: 'matched_cost_cny', tokens: 'total_tokens', successRate: 'success_rate', requestSuccessRate: 'request_success_rate', p95LatencyMs: 'p95_latency_ms', name: 'name' } as const
 const integer = (value: unknown) => Number(value || 0)
 const nullableInteger = (value: unknown): number | null => value === null || value === undefined ? null : Math.round(Number(value))
 const money = (value: unknown) => new Decimal(value?.toString() || 0).toFixed(8)
@@ -189,7 +189,8 @@ export class AnalyticsService {
       SELECT m.dimension_id AS id, MAX(m.name) AS name, ${requestMetricsSql(source)},
         COALESCE(SUM(m.matched_cost_cny), 0)::numeric AS matched_cost_cny,
         COALESCE(SUM(u.cost_usd), 0)::numeric AS request_cost_cny,
-        COUNT(*) FILTER (WHERE u.status_code < 400 AND NOT ${source.unsettled})::numeric / NULLIF(COUNT(*), 0) AS success_rate
+        COUNT(*) FILTER (WHERE u.status_code < 400 AND NOT ${source.unsettled})::numeric / NULLIF(COUNT(*), 0) AS success_rate,
+        COUNT(*) FILTER (WHERE ${requestStateSql} = 'SUCCESS')::numeric / NULLIF(COUNT(*), 0) AS request_success_rate
       FROM dimension_requests m JOIN scoped_usage u ON u.id = m.usage_log_id GROUP BY m.dimension_id
     ), prices AS (
       SELECT a.dimension_id,

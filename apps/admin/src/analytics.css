@@ -2,3 +2,14 @@
 @media(max-width:1250px){.analytics-filters{grid-template-columns:repeat(3,1fr)}.analytics-cards{grid-template-columns:repeat(3,1fr)}}@media(max-width:760px){.analytics-filters,.analytics-cards{grid-template-columns:1fr}.trend-chart{height:280px}}
 .shell{grid-template-columns:238px minmax(0,1fr)}
 @media(max-width:900px){.shell{grid-template-columns:1fr}}
+.analytics-cards{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+.analytics-cards article{min-width:0}
+.analytics-cards strong,.analytics-applied{overflow-wrap:anywhere}
+.analytics-applied{color:#8293aa;font-size:13px;line-height:1.7}
+.analytics-errors{margin-bottom:18px}
+.analytics-scope{padding:0 18px}
+.breakdown-panel>.tabs{flex-wrap:wrap}
+.historical-price{min-width:300px}
+.historical-price strong,.historical-price small{display:block;white-space:normal}
+.analytics-row-actions{min-width:140px}
+.analytics-row-actions button{display:block;margin:5px 0}

@@ -6,13 +6,14 @@ import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/compon
 import { CanvasRenderer } from 'echarts/renderers'
 
 use([LineChart, BarChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
-const props = defineProps<{ data: Array<any>; metric: 'requests' | 'tokens' | 'cost' }>()
+const props = withDefaults(defineProps<{ data: Array<any>; metric: 'requests' | 'tokens' | 'cost'; timezone?: 'UTC' | 'Asia/Shanghai' }>(), { timezone: 'UTC' })
 const root = ref<HTMLDivElement>(); let chart: ECharts | null = null; let observer: ResizeObserver | null = null
 function render() {
   if (!chart) return
-  const labels = props.data.map(item => new Date(item.bucket).toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit' }))
+  const formatter = new Intl.DateTimeFormat('en-US', { timeZone: props.timezone, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+  const labels = props.data.map(item => formatter.format(new Date(item.bucket)).replace(',', ''))
   const values = props.data.map(item => props.metric === 'requests' ? item.requests : props.metric === 'tokens'
-    ? Number(item.inputTokens) + Number(item.outputTokens) : Number(item.costUsd))
+    ? Number(item.inputTokens) + Number(item.outputTokens) : item.costCny === undefined ? Number(item.costUsd) : item.costCny === null ? null : Number(item.costCny))
   const names = { requests: '请求数', tokens: 'Token', cost: '采购成本 CNY' }
   const option: EChartsOption = {
     animationDuration: 300, backgroundColor: 'transparent', tooltip: { trigger: 'axis' }, legend: { textStyle: { color: '#8fa1b8' } },
@@ -21,13 +22,16 @@ function render() {
       { type: 'value', min: 0, max: 100, axisLabel: { color: '#728199', formatter: '{value}%' }, splitLine: { show: false } }],
     series: [{ name: names[props.metric], type: props.metric === 'cost' ? 'bar' : 'line', smooth: true, data: values,
       itemStyle: { color: '#52d6b3' }, lineStyle: { width: 2 }, areaStyle: props.metric === 'cost' ? undefined : { opacity: .12 } },
-    { name: '成功率', type: 'line', yAxisIndex: 1, smooth: true, data: props.data.map(item => Number(item.successRate) * 100),
+    { name: '请求成功率', type: 'line', yAxisIndex: 1, smooth: true, data: props.data.map(item => {
+      const rate = item.requestSuccessRate === undefined ? item.successRate : item.requestSuccessRate
+      return rate == null ? null : Number(rate) * 100
+    }),
       itemStyle: { color: '#f8c66a' }, lineStyle: { width: 1.5 } }]
   }
   chart.setOption(option, true)
 }
 onMounted(() => { if (!root.value) return; chart = init(root.value); render(); observer = new ResizeObserver(() => chart?.resize()); observer.observe(root.value) })
-watch(() => [props.data, props.metric], render, { deep: true })
+watch(() => [props.data, props.metric, props.timezone], render, { deep: true })
 onBeforeUnmount(() => { observer?.disconnect(); chart?.dispose(); chart = null })
 </script>
 <template><div class="trend-chart-shell"><div ref="root" class="trend-chart" :class="{ invisible: !data.length }"></div><p v-if="!data.length" class="empty chart-empty">当前筛选范围没有使用数据</p></div></template>
