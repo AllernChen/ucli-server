@@ -47,8 +47,9 @@ async function load() {
   } catch (value: any) { if (lifecycle.isCurrent(current)) error.value = value.message } finally { if (lifecycle.isCurrent(current)) loading.value = false }
 }
 function apply(next: Record<string, string>) {
-  applied.value = { ...next, ...(props.groupId ? { groupId: props.groupId } : {}) }; draft.value = { ...applied.value }; page.value.offset = 0; selectedId.value = null
-  const query = Object.fromEntries(new URLSearchParams(usageQuery(applied.value, props.groupId)))
+  page.value.offset = 0; selectedId.value = null
+  const query = Object.fromEntries(new URLSearchParams(usageQuery({ ...next, limit: String(page.value.limit), offset: '0' }, props.groupId)))
+  applied.value = query; draft.value = { ...query }
   lastRoute = JSON.stringify(query); void router.replace({ query }); void load()
 }
 function replaceRoute() { const query = Object.fromEntries(new URLSearchParams(appliedQuery())); lastRoute = JSON.stringify(query); void router.replace({ query }) }

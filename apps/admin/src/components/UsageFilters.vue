@@ -91,10 +91,12 @@ function activate(dimension: Dimension) { activeDimension.value = dimension; opt
 function searchOptions() { if (activeDimension.value) void loadOptions(activeDimension.value, optionQuery.value, 0) }
 function changeOptions(offset: number) { if (activeDimension.value) void loadOptions(activeDimension.value, optionQuery.value, offset) }
 function apply() {
+  error.value = ''
   const next = { ...draft.value }
   if (dateTouched.value) {
     if (!startDay.value || !endDay.value) { error.value = '请选择完整日期范围'; return }
-    Object.assign(next, companyDateRange(startDay.value, endDay.value))
+    try { Object.assign(next, companyDateRange(startDay.value, endDay.value)) }
+    catch (value: any) { error.value = value.message; return }
   }
   if (props.pinnedGroupId) { next.groupId = props.pinnedGroupId; next.groupScope = '' }
   update(next); emit('apply', next)
@@ -106,7 +108,7 @@ function clear() {
 watch(() => props.modelValue, value => {
   const changedDates = value.start !== externalStart || value.end !== externalEnd
   externalStart = value.start || ''; externalEnd = value.end || ''
-  draft.value = { ...draft.value, ...value, ...(props.pinnedGroupId ? { groupId: props.pinnedGroupId, groupScope: '' } : {}) }
+  draft.value = { ...value, ...(props.pinnedGroupId ? { groupId: props.pinnedGroupId, groupScope: '' } : {}) }
   if (changedDates || !dateTouched.value) { startDay.value = asDay(value.start || ''); endDay.value = asDay(value.end || '', true); dateTouched.value = false }
 }, { immediate: true, deep: true })
 watch(() => [props.mode, props.pinnedGroupId], () => { if (activeDimension.value) void loadOptions(activeDimension.value) })

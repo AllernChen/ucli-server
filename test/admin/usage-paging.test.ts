@@ -19,6 +19,23 @@ beforeEach(() => {
   })
 })
 afterEach(() => wrapper?.unmount())
+it('applies filters from page two with the same first-page query in results, URL and refresh', async () => {
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/usage', component: Usage }] })
+  await router.push({ path: '/usage', query: { ...range, limit: '200', offset: '200', channelId: 'old-channel' } })
+  const start = () => mount(Usage, { global: { plugins: [router] } })
+  wrapper = start(); await flushPromises()
+  await router.push({ path: '/usage', query: { ...range, limit: '200', offset: '200' } }); await flushPromises()
+  expect(wrapper.get<HTMLSelectElement>('[aria-label="渠道筛选"]').element.value).toBe('')
+  await wrapper.get('button.primary').trigger('click'); await flushPromises()
+  expect(wrapper.text()).toContain('第 1 页')
+  expect(router.currentRoute.value.query).toEqual({ ...range, limit: '200', offset: '0' })
+  const url = state.api.mock.calls.filter(([path]) => path.includes('/logs-page?')).at(-1)![0]
+  expect(Object.fromEntries(new URL(url, 'http://local').searchParams)).toEqual(router.currentRoute.value.query)
+  wrapper.unmount(); wrapper = start(); await flushPromises()
+  expect(wrapper.text()).toContain('第 1 页')
+  expect(wrapper.findAll('tbody tr')).toHaveLength(200)
+})
+
 it('restores 200-row URLs on entry, browser back and remount, and keeps page navigation at that size', async () => {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/usage', component: Usage }] })
   await router.push({ path: '/usage', query: { ...range, limit: '200', offset: '200' } })

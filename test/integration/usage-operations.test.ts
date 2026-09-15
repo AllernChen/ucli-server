@@ -35,6 +35,26 @@ const historicalPrice = (extra = {}) => ({ id: randomUUID(), source: 'CHANNEL_CO
   validFrom: '2026-01-01T00:00:00Z', internalSecret: { credential: 'must-not-leak' }, ...extra })
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('routed operational usage analytics', () => {
+  it('shows safe request-only legacy prices consistently with analytics despite changed current prices and enforces detail scope', () => withTestDatabase(async db => {
+    const f = await fixture(db), usage = new UsageController(db as PrismaService), request = { principal: f.actor }
+    const model = await db.channelModel.create({ data: { channelId: f.channel.id, publicModelId: f.model.id, upstreamModel: 'legacy', protocol: 'OPENAI_CHAT' } })
+    const price = historicalPrice({ ruleName: '请求历史价格', channelModelId: model.id })
+    await db.channelModelCostRule.create({ data: { id: price.id, channelModelId: model.id, name: 'Current price', daysOfWeek: [1], startMinute: 0, endMinute: 1439,
+      inputPerMillion: '999', outputPerMillion: '999', validFrom: new Date('2026-09-01T00:00:00Z') } })
+    const log = await f.log({ channelModelId: model.id, channelCostRuleId: price.id, costSnapshot: price, costUsd: '1.5' })
+    // Legacy attempts can exist without billed route evidence; they must not gain invented route prices.
+    await f.route(log.id, 1, { billingState: null, costCny: null, usageSnapshot: {} })
+    const detail = await usage.detail(request, log.id, range)
+    expect(detail).toMatchObject({ requestPrice: { inputPerMillion: '1', cachedPerMillion: '0.5', outputPerMillion: '2', reasoningPerMillion: '0', ruleName: '请求历史价格' }, costCny: '1.50000000', routes: [{ price: null }] })
+    expect(JSON.stringify(detail)).not.toMatch(/Current price|must-not-leak|internalSecret|costSnapshot|usageSnapshot/)
+    expect((await f.service.breakdown(f.actor, { ...range, dimension: 'channel' })).items[0]).toMatchObject({ price: { inputPerMillion: '1' }, costCny: detail.costCny })
+    const outsider = await fixture(db)
+    await expect(usage.detail({ principal: outsider.actor }, log.id, { ...range, organizationId: f.organization.id })).rejects.toMatchObject({ status: 404 })
+    await expect(usage.detail({ principal: { ...f.actor, sub: outsider.account.id, role: 'MEMBER' } }, log.id, { ...range, accountId: f.account.id })).rejects.toMatchObject({ status: 404 })
+    const missing = await f.log()
+    expect(await usage.detail(request, missing.id, range)).toHaveProperty('requestPrice', null)
+  }))
+
   it('joins many price groups without quadratic pair checks while preserving the null allocation group', () => withTestDatabase(async db => {
     const f = await fixture(db)
     const channels = Array.from({ length: 100 }, (_, index) => ({ id: randomUUID(), name: `Plan ${index}`, provider: 'test', protocol: 'OPENAI' as const, baseUrl: 'http://127.0.0.1' }))

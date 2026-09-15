@@ -113,6 +113,31 @@ it('keeps successful ranks visible when trend loading fails and rejects analysis
   expect(w.text()).toContain('统计范围不能超过 90 天'); expect(state.api.mock.calls).toHaveLength(count)
 })
 
+it('opens full analytics with the pinned group, applied dates and selected dimension only', async () => {
+  state.route.query = { groupId: 'foreign', groupScope: 'UNGROUPED', start: '2020-01-01', channelId: 'foreign-channel' }
+  const w = render(UsageGroupDetail); await flushPromises()
+  await w.get('[data-tab="analysis"]').trigger('click'); await flushPromises()
+  await w.get('[aria-label="分析开始日期"]').setValue('2025-01-01'); await w.get('[aria-label="分析结束日期"]').setValue('2025-01-02')
+  await w.get('#group-analysis-form').trigger('submit'); await flushPromises()
+  await w.get('[aria-label="排行维度"]').setValue('apiKey'); await flushPromises()
+  await w.get('[aria-label="分析开始日期"]').setValue('2025-02-01')
+  await w.get('[aria-label="查看完整分析"]').trigger('click')
+  const target = state.push.mock.calls.at(-1)![0]
+  expect(target.path).toBe('/analytics')
+  expect(target.query).toEqual({ groupId: 'g', start: '2024-12-31T16:00:00.000Z', end: '2025-01-02T16:00:00.000Z', timezone: 'Asia/Shanghai', dimension: 'apiKey' })
+})
+
+it('labels retained settled and released reservations as historical and open reservations as current', async () => {
+  const original = state.api.getMockImplementation()!
+  state.api.mockImplementation((url: string) => url.includes('/budget-entries?') ? Promise.resolve(page(
+    ['SETTLED', 'RELEASED', 'RESERVED', 'RECONCILIATION_REQUIRED'].map(status => ({ ...entry, id: status, status }))
+  )) : original(url))
+  const w = render(UsageGroupDetail); await flushPromises(); await w.get('[data-tab="budget"]').trigger('click')
+  const rows = w.findAll('tbody tr')
+  for (const row of rows.slice(0, 2)) expect(row.text()).toContain('历史预留 ¥2')
+  for (const row of rows.slice(2)) expect(row.text()).toContain('当前保留 ¥2')
+})
+
 it('opens historical ledger request detail with fixed group and exact entry-day bounds', async () => {
   state.route.query = { groupId: 'foreign', requestId: 'other' }
   const w = render(UsageGroupDetail); await flushPromises(); await w.get('[data-tab="budget"]').trigger('click')

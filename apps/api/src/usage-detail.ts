@@ -72,7 +72,7 @@ export function projectUsage(row: UsageLog & { channel?: { name: string } | null
     credentialType: row.credentialType, publicModelId: row.publicModelId, channelId: row.channelId, channelName: row.channel?.name ?? row.channelId,
     upstreamModel: row.upstreamModel, inputTokens: String(row.inputTokens), outputTokens: String(row.outputTokens), cachedTokens: String(row.cachedTokens), reasoningTokens: String(row.reasoningTokens),
     costCny: row.costUsd.toFixed(8), costUsd: row.costUsd.toFixed(8), currency: 'CNY' as const,
-    matchedCostCny: new Decimal(String(matchedCost ?? 0)).toFixed(8), priceKeys,
+    matchedCostCny: new Decimal(String(matchedCost ?? 0)).toFixed(8), priceKeys, requestPrice: safePrice(cost),
     usageSource: row.usageSource, requestState, billingState: text(cost.billingState) ?? (row.usageSource === 'ESTIMATED' ? 'ESTIMATED' : 'CONFIRMED'),
     statusCode: row.statusCode, errorCode: row.errorCode, durationMs: row.durationMs, firstTokenMs: row.firstTokenMs, routeAttempts: row.routeAttempts,
     routes: (row.routes ?? []).map(projectRoute) }

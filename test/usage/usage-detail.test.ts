@@ -1,8 +1,19 @@
 import { BudgetEntryStatus, Prisma } from '@prisma/client'
 import { describe, expect, it } from 'vitest'
-import { projectBudgetEntry, projectRoute } from '../../apps/api/src/usage-detail.js'
+import { projectBudgetEntry, projectRoute, projectUsage, safePrice } from '../../apps/api/src/usage-detail.js'
 
 describe('safe request detail', () => {
+  it('projects only whitelisted request historical prices without inventing route prices or current costs', () => {
+    const snapshot = { inputPerMillion: '1', cachedPerMillion: '2', outputPerMillion: '3', reasoningPerMillion: '4', ruleName: '请求历史价格', internalSecret: 'DO_NOT_EXPOSE', request: { secretHash: 'DO_NOT_EXPOSE' } }
+    const row = { costSnapshot: snapshot, costUsd: new Prisma.Decimal('1.5'), inputTokens: 1, outputTokens: 2, cachedTokens: 0, reasoningTokens: 0,
+      channel: { name: '渠道', inputPerMillion: '999' }, routes: [] } as any
+    const result = projectUsage(row, 'SUCCESS', '1.5')
+    expect(result).toMatchObject({ requestPrice: safePrice(snapshot), costCny: '1.50000000', routes: [] })
+    expect(JSON.stringify(result)).not.toMatch(/DO_NOT_EXPOSE|internalSecret|secretHash|999|costSnapshot/)
+    for (const costSnapshot of [null, {}, { cost: snapshot }, { ...snapshot, inputPerMillion: 'NaN' }]) {
+      expect(projectUsage({ ...row, costSnapshot }, 'SUCCESS', '1.5')).toHaveProperty('requestPrice', null)
+    }
+  })
   it('projects historical reservations separately from a settled current hold without internal snapshots', () => {
     const result = projectBudgetEntry({ status: BudgetEntryStatus.SETTLED, reservedCny: new Prisma.Decimal('4'),
       settledCny: new Prisma.Decimal('1'), reason: null, snapshot: { initialEstimateCny: '3', extensions: [{ amount: '1' }],

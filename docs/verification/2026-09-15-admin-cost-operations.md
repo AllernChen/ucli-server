@@ -90,7 +90,28 @@
 
 实现、真实 PG、HTTP、参数化 EXPLAIN、最终全量回归和上述浏览器流程已完成，包括本地服务不可达后的人工健康检查重试。明确保留一项人工验证限制：浏览器 5,000 行下载事件未捕获；实际 CSV 字节已通过真实 HTTP 验证。独立代码审查由主控安排，本记录不替代该审查。未执行任何生产发布动作。
 
-## 附录：执行期间的 17 项裁定
+## 最终整分支审查修复轮（基线 3612c51）
+
+本轮只修复独立审查确认的 5 项 Important 和 2 项功能性 minor，复用现有日期、查询、价格白名单和请求生命周期工具；没有新增依赖、迁移或核算写入。
+
+- 无效自定义日期在“应用筛选”点击后显示错误，不发送应用事件；改正后清除错误。
+- 外部 URL 条件恢复替换普通筛选字段，删除渠道或组不会在下次应用时复活；普通筛选变更仍保留未应用日期编辑。
+- 应用筛选统一把已应用查询、URL 和 API 的 offset 重置为 0，并保留当前规范化 limit；重载保持第一页。
+- 用量组分析恢复“查看完整分析”，仅携带固定当前 groupId、已应用日期和当前排行维度，外部伪造组 ID 与未应用日期均不会进入目标查询。
+- 请求详情增加显式“请求级历史价格”，通过现有 safePrice 从请求 costSnapshot 投影，缺失时显示未提供；与 LEGACY 分配源相同。真实 PG 验证旧价格、当前价不参与、空路由价格不被补造、内部字段不泄露，以及组织和员工权限。
+- 已结算 / 已释放账目的 retained reservedCny 显示“历史预留”，尚未结清显示“当前保留”，金额不变。复制 API 缺失 / 拒绝时显示手动复制说明，成功才显示已复制；请求切换清除状态，迟到详情或复制完成不会覆盖新请求。
+
+RED 均先于对应实现：日期和筛选 2 failed；分页 1 failed；组分析入口和账目标签 2 failed；请求历史价格单测、真实 PG、组件各 1 failed；Clipboard 缺失导致假成功 1 failed。随后逐项 GREEN；01:54:54 联合定向回归 8 文件 / 58 passed / 0 skipped，真实 PG 已执行，服务端 build exit 0。
+
+主控实时浏览器确认：200/200 应用后 URL offset=0、页面第 1 页，重载一致；反向日期可见报错，改正恢复；侧栏进入日志删除组筛选后控件清空且应用不恢复旧值；组内未应用 8 月 18 日日期，选模型后进入完整分析仍携带已应用 9 月 10–16 日及固定本组。
+
+本轮仅一次 `npm run verify` 全量验证 exit 0：测试于 01:56:43 开始，124 文件 / 803 passed / 0 skipped，70.31 秒；typecheck、coverage、服务端 build、admin build 和许可证检查全部通过。Coverage statements / lines 96.07%、branches 87.71%、functions 97.82%；admin build 708 模块、主包 889.31 kB、7.56 秒；licenses 452 条。Prisma 配置测试 2/2 通过，真实 ESM 加载 1,800 ms。故障注入日志与既有包体警告保留。
+
+主控重启已确认归属的本地后端后，浏览器验证旧价格样本：完整 / 匹配成本均为 1.5、未分配为 0、不适用组预算，显示“请求级历史价格”1/2/3/4 与历史 22:00–02:00 规则；没有补造路由价格或使用当前 999。该新增合成日志不归属已有核算组，不改变既有组总额。预算账目显示“历史预留 / 当前保留 / 已结算”。Clipboard 缺失、拒绝、成功和切换重置由组件测试证明；浏览器点击后未等待异步复制确认，不声称人工复制成功。主控将对完成代码另行执行独立全量验证。
+
+保留并明确延期：缺失金额“—”与“未提供”措辞统一、未证实加载问题的图表包体优化、清空按钮原生白色样式、已有故障注入日志和此前一次未解释的 Engine empty 诊断。浏览器 CSV 下载事件未捕获仍是验证限制；已有两次真实 HTTP 字节检查，不将其描述为浏览器下载事件通过。本轮不为这些观察隐藏日志或调整打包架构。
+
+## 附录：执行期间的 18 项裁定
 
 按执行记录中的顺序保留原文；每项包含决策、原因以及判断错误时的修正成本。仅摘录裁定，不复制本地凭据、连接信息或其他执行流水。
 
@@ -127,3 +148,5 @@
 16. Ruling: Abnormal-channel reminder uses two accurately labeled complete-result links for enabled DEGRADED and enabled UNHEALTHY channels, while combined total/top5 retains both — existing Channels UI/API supports one health and both exact destinations cover the requested set without broadening or another interface — cost if wrong: add a combined multi-health channel filter/navigation later; no channel state or data changes. Task8brief carries exact labels/URLs/tests.
 
 17. Ruling: Task8 may update test/catalog/catalog-runtime-isolation.test.ts with the new MonitoringController constructor dependency while retaining existing assertions — a direct test constructor outside the planned file list otherwise fails typecheck after the required service reuse — cost if wrong: one test-fixture argument to revise; no runtime or permission behavior change.
+
+18. Ruling: Add a whitelisted request-level historical price projection and explicitly labeled detail section for legacy records — the design requires request-only historical prices, but the task's safe-field list omitted them; reuse safePrice and never expose raw snapshot or replace route prices/current costs — cost if wrong: additive read DTO/detail section to revise, no stored pricing or accounting change.

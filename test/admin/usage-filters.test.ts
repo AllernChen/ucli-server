@@ -28,6 +28,30 @@ it('rejects calendar dates and ranges that do not exist', () => {
   expect(() => companyDateRange('2026-09-16', '2026-09-15')).toThrow('结束')
 })
 
+it('shows an invalid edited date range without applying it and recovers after correction', async () => {
+  const wrapper = mount(UsageFilters, { props: { modelValue: companyDateRange('2026-09-15', '2026-09-16'), role: '' }, global: { config: { errorHandler: () => {} } } })
+  await wrapper.get('[aria-label="开始日期"]').setValue('2026-09-20')
+  await wrapper.get('button.primary').trigger('click')
+  expect(wrapper.get('.state.error').text()).toContain('结束')
+  expect(wrapper.emitted('apply')).toBeUndefined()
+  await wrapper.get('[aria-label="开始日期"]').setValue('2026-09-15')
+  await wrapper.get('button.primary').trigger('click')
+  expect(wrapper.find('.state.error').exists()).toBe(false)
+  expect(wrapper.emitted('apply')).toHaveLength(1)
+  wrapper.unmount()
+})
+
+it('removes an externally deleted channel from the control and the next applied query', async () => {
+  const range = companyDateRange('2026-09-15', '2026-09-16')
+  const wrapper = mount(UsageFilters, { props: { modelValue: { ...range, channelId: 'old-channel' }, role: '', mode: 'logs' } })
+  expect(wrapper.get<HTMLSelectElement>('[aria-label="渠道筛选"]').element.value).toBe('old-channel')
+  await wrapper.setProps({ modelValue: range })
+  expect(wrapper.get<HTMLSelectElement>('[aria-label="渠道筛选"]').element.value).toBe('')
+  await wrapper.get('button.primary').trigger('click')
+  expect(new URLSearchParams(usageQuery(wrapper.emitted('apply')![0][0] as Record<string, string>)).has('channelId')).toBe(false)
+  wrapper.unmount()
+})
+
 it('keeps Task 1 filters, removes blanks, and pins the group last', () => {
   const query = new URLSearchParams(usageQuery({ groupId: 'other', requestId: 'request-1', nope: 'drop', model: '' }, 'pinned'))
   expect(query.get('groupId')).toBe('pinned')
