@@ -3,12 +3,15 @@ import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { createRequestLifecycle, type Page } from '../device-grants'
-import { budgetLabel, operationId, type GroupBudget, type UsageGroup } from '../usage-groups'
+import { budgetLabel, budgetWarning, budgetEntryStatus, operationId, type GroupBudget, type UsageGroup } from '../usage-groups'
+import { companyDateRange, defaultCompanyDateRange, usageQuery } from '../usage-filters'
 import { formatCny } from '../currency'
 import { toast } from '../toast'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import Pagination from '../components/Pagination.vue'
 import Usage from './Usage.vue'
+import UsageDetail from '../components/UsageDetail.vue'
+import TrendChart from '../components/TrendChart.vue'
 const route = useRoute(), router = useRouter(), lifecycle = createRequestLifecycle()
 const id = computed(() => String(route.params.id)), base = computed(() => `/api/v1/admin/usage-groups/${id.value}`)
 const group = ref<UsageGroup | null>(null), budget = ref<GroupBudget | null>(null)
@@ -26,6 +29,54 @@ const adjust = reactive({ scope: 'CURRENT', limitCny: '0', unlimited: false, rea
 const config = reactive({ budgetMode: 'TOTAL', budgetTimezone: 'Asia/Shanghai', reason: '' })
 const confirmation = ref<{ path: string; method: string; message: string } | null>(null)
 const editable = computed(() => Boolean(group.value && !group.value.archivedAt))
+const seriesLifecycle = createRequestLifecycle(), rankLifecycle = createRequestLifecycle(), requestLifecycle = createRequestLifecycle()
+const groupSeries = ref<any[]>([]), ranking = ref<Page<any>>({ items: [], total: 0, offset: 0, limit: 20 })
+const seriesError = ref(''), rankError = ref(''), analysisError = ref(''), seriesLoading = ref(false), rankLoading = ref(false)
+const analysisLoaded = ref(false), dimension = ref('account'), rankOffset = ref(0)
+const companyDay = (value: string) => new Date(new Date(value).getTime() + 8 * 3_600_000).toISOString().slice(0, 10)
+const analysisRange = ref(defaultCompanyDateRange())
+const analysisDates = reactive({ start: companyDay(analysisRange.value.start), end: companyDay(new Date(new Date(analysisRange.value.end).getTime() - 1).toISOString()) })
+const selectedId = ref<string | null>(null), requestQuery = ref(''), requestError = ref(''), requestLoading = ref(false)
+const chinaTime = (value: string) => new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value))
+async function loadSeries() {
+  const request = seriesLifecycle.next(); seriesLoading.value = true; seriesError.value = ''; groupSeries.value = []
+  try {
+    const result = await api<any[]>(`/api/v1/analytics/timeseries?${usageQuery({ ...analysisRange.value, interval: 'day' }, id.value)}`)
+    if (seriesLifecycle.isCurrent(request)) groupSeries.value = result
+  } catch (e: any) { if (seriesLifecycle.isCurrent(request)) seriesError.value = e.message }
+  finally { if (seriesLifecycle.isCurrent(request)) seriesLoading.value = false }
+}
+async function loadRanking() {
+  const request = rankLifecycle.next(); rankLoading.value = true; rankError.value = ''; ranking.value = { items: [], total: 0, offset: rankOffset.value, limit: 20 }
+  try {
+    const result = await api<Page<any>>(`/api/v1/analytics/breakdown?${usageQuery({ ...analysisRange.value, dimension: dimension.value, sort: 'costCny', order: 'desc', offset: String(rankOffset.value), limit: '20' }, id.value)}`)
+    if (rankLifecycle.isCurrent(request)) ranking.value = result
+  } catch (e: any) { if (rankLifecycle.isCurrent(request)) rankError.value = e.message }
+  finally { if (rankLifecycle.isCurrent(request)) rankLoading.value = false }
+}
+function loadAnalysis() { analysisLoaded.value = true; void loadSeries(); void loadRanking() }
+function applyAnalysis() {
+  analysisError.value = ''
+  try {
+    const range = companyDateRange(analysisDates.start, analysisDates.end)
+    if (new Date(range.end).getTime() - new Date(range.start).getTime() > 90 * 86_400_000) throw new Error('统计范围不能超过 90 天')
+    analysisRange.value = range; rankOffset.value = 0; loadAnalysis()
+  } catch (e: any) { analysisError.value = e.message }
+}
+async function openRequest(entry: { requestId: string; startedAt: string }) {
+  const request = requestLifecycle.next(), groupId = id.value
+  selectedId.value = null; requestError.value = ''; requestLoading.value = true
+  try {
+    const day = companyDay(entry.startedAt)
+    const query = usageQuery({ ...companyDateRange(day, day), requestId: entry.requestId, limit: '1', offset: '0' }, groupId)
+    const result = await api<Page<{ id: string; requestId: string; groupId: string }>>(`/api/v1/usage/logs-page?${query}`)
+    if (!requestLifecycle.isCurrent(request)) return
+    const match = result.items.find(row => row.requestId === entry.requestId && row.groupId === groupId)
+    if (!match) { requestError.value = '未找到该组的请求记录'; return }
+    requestQuery.value = query; selectedId.value = match.id
+  } catch (e: any) { if (requestLifecycle.isCurrent(request)) requestError.value = e.message }
+  finally { if (requestLifecycle.isCurrent(request)) requestLoading.value = false }
+}
 let generation = 0
 // Retry an identical adjustment with its original ID; editing the payload starts a new operation.
 let budgetRetry = { body: '', id: '' }
@@ -79,20 +130,28 @@ watch(() => adjust.scope, () => {
   adjust.limitCny = adjust.scope === 'CURRENT' ? budget.value.limitCny : budget.value.defaultLimitCny
   adjust.unlimited = adjust.scope === 'CURRENT' ? budget.value.unlimited : budget.value.defaultUnlimited
 })
-watch(tab, value => { if (value === 'models') loadModels(); if (value === 'members') searchUsers() })
+watch(tab, value => { if (value === 'models') loadModels(); if (value === 'members') searchUsers(); if (value === 'analysis' && !analysisLoaded.value) loadAnalysis() })
 watch(id, () => {
   generation++; pending.value = false; group.value = null; budget.value = null; confirmation.value = null
   memberOffset.value = 0; entryOffset.value = 0; previewAccount.value = ''; models.value = []; tab.value = 'overview'; budgetRetry = { body: '', id: '' }
+  members.value = { items: [], total: 0, offset: 0, limit: 20 }; entries.value = { items: [], total: 0, offset: 0, limit: 20 }; users.value = { items: [], total: 0, offset: 0, limit: 20 }
+  userOffset.value = 0; userSearch.value = ''; accountId.value = ''; modelsReady.value = false; selected.value = []; modelSearch.value = ''
+  adjust.scope = 'CURRENT'; adjust.reason = ''; config.reason = ''
+  seriesLifecycle.next(); rankLifecycle.next(); requestLifecycle.next()
+  groupSeries.value = []; ranking.value = { items: [], total: 0, offset: 0, limit: 20 }; analysisLoaded.value = false; dimension.value = 'account'; rankOffset.value = 0
+  seriesError.value = ''; rankError.value = ''; analysisError.value = ''; seriesLoading.value = false; rankLoading.value = false
+  selectedId.value = null; requestQuery.value = ''; requestError.value = ''; requestLoading.value = false
+  analysisRange.value = defaultCompanyDateRange(); analysisDates.start = companyDay(analysisRange.value.start); analysisDates.end = companyDay(new Date(new Date(analysisRange.value.end).getTime() - 1).toISOString())
   optionLifecycle.next(); userLifecycle.next(); load()
 }, { immediate: true })
-onUnmounted(() => { generation++; lifecycle.dispose(); optionLifecycle.dispose(); userLifecycle.dispose() })
+onUnmounted(() => { generation++; lifecycle.dispose(); optionLifecycle.dispose(); userLifecycle.dispose(); seriesLifecycle.dispose(); rankLifecycle.dispose(); requestLifecycle.dispose() })
 </script>
 <template>
   <header class="page-header"><div><button class="back-link" @click="router.push('/usage-groups')">← 返回用量组</button><h1>{{ group?.name || '用量组详情' }}</h1><span v-if="group" class="subtitle">{{ group.type === 'PROJECT' ? '项目组' : '部门组' }} · {{ group.archivedAt ? '已归档' : group.enabled ? '启用' : '停用' }}</span></div><button :disabled="loading || pending" @click="load">刷新</button></header>
-  <nav class="actions" aria-label="用量组详情"><button v-for="t in [['overview','概览'],['members','成员'],['models','允许模型'],['budget','预算'],['usage','用量']]" :key="t[0]" :data-tab="t[0]" :class="{ primary: tab === t[0] }" :disabled="pending" @click="tab = t[0]">{{ t[1] }}</button></nav>
+  <nav class="actions" aria-label="用量组详情"><button v-for="t in [['overview','概览'],['members','成员'],['models','允许模型'],['budget','预算'],['analysis','使用分析'],['usage','用量']]" :key="t[0]" :data-tab="t[0]" :class="{ primary: tab === t[0] }" :disabled="pending || !group" @click="tab = t[0]">{{ t[1] }}</button></nav>
   <p v-if="error" class="state error" role="alert">{{ error }}</p><p v-if="loading" class="state">正在加载…</p>
   <template v-if="group && budget">
-    <div class="detail-grid"><article class="panel metric-block"><span>当前额度 · {{ budget.periodKey }}</span><strong class="small-strong">{{ budgetLabel(budget) }}</strong></article><article class="panel metric-block"><span>已结算采购成本</span><strong class="small-strong">{{ formatCny(budget.spentCny) }}</strong></article><article class="panel metric-block"><span>预占（含待核对）</span><strong class="small-strong">{{ formatCny(budget.reservedCny) }}</strong><small>待核对 {{ formatCny(budget.uncertainCny) }}</small></article><article class="panel metric-block"><span>可用额度</span><strong class="small-strong">{{ budget.unlimited ? '不限额' : formatCny(budget.availableCny) }}</strong></article></div>
+    <div class="detail-grid"><article class="panel metric-block"><span>当前周期 · {{ budget.periodKey }}</span><strong class="small-strong">{{ budgetLabel(budget) }}</strong><small>{{ budget.budgetMode === 'TOTAL' ? '项目总额（长期累计）' : '自然月' }} · {{ budget.budgetTimezone }}</small><small v-if="budgetWarning(budget)">{{ budgetWarning(budget) }}</small></article><article class="panel metric-block"><span>已结算采购成本</span><strong class="small-strong">{{ formatCny(budget.spentCny) }}</strong></article><article class="panel metric-block"><span>预占</span><strong class="small-strong">{{ formatCny(budget.reservedCny) }}</strong><small>待核算（包含在预占内）{{ formatCny(budget.uncertainCny) }}</small></article><article class="panel metric-block"><span>可用额度</span><strong class="small-strong">{{ budget.unlimited ? '不限额' : formatCny(budget.availableCny) }}</strong></article></div>
     <section v-if="tab === 'overview'" class="panel"><form class="stack-form" @submit.prevent="mutate('', 'PATCH', form)"><label>名称<input v-model="form.name" required maxlength="120" :disabled="!editable || pending"></label><label>说明<textarea v-model="form.description" maxlength="2000" :disabled="!editable || pending" /></label><div class="actions"><button :disabled="!editable || pending">保存资料</button><button type="button" :disabled="!editable || pending" @click="confirmation = { path: group.enabled ? '/disable' : '/enable', method: 'POST', message: '停用会阻止此组所有新模型调用；启用仍需满足成员、模型和预算条件。' }">{{ group.enabled ? '停用组' : '启用组' }}</button><button type="button" :disabled="!editable || pending" @click="confirmation = { path: '', method: 'DELETE', message: '归档不可恢复，将永久撤销组内 Key 和设备授权，历史成本保留。' }">归档组</button></div></form></section>
     <section v-if="tab === 'members'" class="panel table-panel"><h2>组成员</h2><p class="muted">移除成员会永久撤销该员工在本组的 Key 和设备授权；重新加入不会恢复。</p><table v-if="members.items.length"><thead><tr><th>员工</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="m in members.items" :key="m.accountId"><td><button @click="router.push(`/users/${m.accountId}`)">{{ m.membership.account.displayName }}</button><small>{{ m.membership.account.email }}</small></td><td>{{ m.membership.status }}</td><td><button :disabled="!editable || pending" @click="confirmation = { path: `/members/${m.accountId}`, method: 'DELETE', message: '永久撤销该员工本组凭据，并移除成员，确认继续？' }">移除</button><button @click="previewAccount = m.accountId; tab = 'models'">预览模型权限</button></td></tr></tbody></table><p v-else class="empty">暂无成员</p><Pagination :total="members.total" :offset="memberOffset" :limit="20" @change="memberOffset = $event; load()" />
       <form class="form-row" @submit.prevent="userOffset = 0; searchUsers()"><input v-model="userSearch" placeholder="搜索员工姓名或邮箱" aria-label="搜索员工"><button :disabled="pending">搜索员工</button></form><form class="form-row" @submit.prevent="mutate('/members', 'POST', { accountId })"><label>添加员工<select v-model="accountId" required><option value="">请选择</option><option v-for="u in users.items" :key="u.id" :value="u.id" :disabled="u.status !== 'ACTIVE'">{{ u.displayName }} · {{ u.email }}</option></select></label><button :disabled="!editable || pending || !accountId">加入组</button></form><Pagination :total="users.total" :offset="userOffset" :limit="20" @change="userOffset = $event; searchUsers()" />
@@ -100,9 +159,19 @@ onUnmounted(() => { generation++; lifecycle.dispose(); optionLifecycle.dispose()
     <section v-if="tab === 'models'" class="panel"><h2>允许模型</h2><p class="muted">模型权限是组白名单与现有组织/员工/角色策略的交集。协议表示当前配置，不代表实时健康。</p><p v-if="previewAccount">正在预览成员 {{ members.items.find(m => m.accountId === previewAccount)?.membership.account.displayName || previewAccount }} 的已保存权限。<button @click="previewAccount = ''; loadModels()">退出预览</button></p><input v-model="modelSearch" placeholder="搜索模型" aria-label="搜索允许模型"><form @submit.prevent="mutate('/models', 'PUT', { publicModelIds: selected }).then(ok => ok && loadModels())"><div v-for="m in visibleModels" :key="m.id" class="panel"><label class="check-row"><input v-model="selected" type="checkbox" :value="m.id" :disabled="!editable || pending || (m.archived && !selected.includes(m.id))">{{ m.displayName }} · {{ m.id }}</label><small>{{ m.protocols.join(' / ') || '无可用协议' }}</small><p v-for="reason in m.reasons" :key="reason" class="muted">{{ reason }}</p><p v-if="m.allowed === true" class="muted">该员工可用</p></div><p v-if="!models.length" class="empty">暂无模型</p><button :disabled="!editable || pending">保存允许模型</button></form></section>
     <section v-if="tab === 'budget'" class="panel"><h2>人民币采购预算</h2><p class="muted">额度是上限，不是追加金额。0 表示不可调用；不限额必须显式勾选。当前调整不会改变下周期默认值。</p><form id="budget-adjust-form" class="stack-form" @submit.prevent="saveBudget()"><label>调整范围<select v-model="adjust.scope" :disabled="pending"><option value="CURRENT">当前周期总额度</option><option value="DEFAULT" :disabled="budget.budgetMode === 'TOTAL'">下周期默认额度</option></select></label><small>下周期默认：{{ budgetLabel({ unlimited: budget.defaultUnlimited, limitCny: budget.defaultLimitCny }) }}</small><label>额度（CNY）<input v-model="adjust.limitCny" aria-label="调整额度" inputmode="decimal" pattern="(0|[1-9][0-9]{0,11})(\.[0-9]{1,8})?" required :disabled="pending"></label><label class="check-row"><input v-model="adjust.unlimited" type="checkbox" :disabled="pending">显式不限额</label><label>调整原因<input v-model="adjust.reason" aria-label="调整原因" required maxlength="2000" :disabled="pending"></label><button :disabled="!editable || pending || !adjust.reason.trim()">保存额度</button></form>
       <h3>周期设置</h3><p class="muted">有请求记录的周期不能切换模式或时区。</p><form class="stack-form" @submit.prevent="saveBudget(true)"><label>模式<select v-model="config.budgetMode" :disabled="pending"><option value="TOTAL">项目总额（长期累计）</option><option value="MONTHLY">自然月（不结转）</option></select></label><label>时区<input v-model="config.budgetTimezone" required :disabled="pending"></label><label>变更原因<input v-model="config.reason" required maxlength="2000" :disabled="pending"></label><button :disabled="!editable || pending || !config.reason.trim()">保存周期设置</button></form>
-      <h3>预算账目与调整记录</h3><table v-if="entries.items.length"><thead><tr><th>时间 / 请求</th><th>周期 / 类型</th><th>状态</th><th>预占 / 已结算</th><th>原因</th></tr></thead><tbody><tr v-for="e in entries.items" :key="e.id"><td>{{ new Date(e.startedAt).toLocaleString() }}<small class="mono">{{ e.requestId || e.operationId }}</small></td><td>{{ e.periodId }}<small>{{ e.kind }}</small></td><td>{{ e.status }}</td><td>{{ formatCny(e.reservedCny) }} / {{ formatCny(e.settledCny) }}</td><td>{{ e.reason || '—' }}<details v-if="e.kind !== 'REQUEST'"><summary>调整前后</summary><pre>{{ JSON.stringify({ before: e.snapshot?.before, after: e.snapshot?.after }, null, 2) }}</pre></details></td></tr></tbody></table><p v-else class="empty">暂无预算账目</p><Pagination :total="entries.total" :offset="entryOffset" :limit="20" @change="entryOffset = $event; load()" />
+      <h3>预算账目与调整记录</h3><p v-if="requestLoading" class="state">正在查找请求…</p><p v-if="requestError" class="state error" role="alert">{{ requestError }}</p><table v-if="entries.items.length"><thead><tr><th>时间（中国标准时间） / 请求</th><th>周期 / 类型</th><th>状态</th><th>预占 / 已结算</th><th>原因</th></tr></thead><tbody><tr v-for="e in entries.items" :key="e.id"><td>{{ chinaTime(e.startedAt) }}<small class="mono"><button v-if="e.requestId" :aria-label="`查看请求 ${e.requestId} 详情`" :disabled="requestLoading" @click="openRequest(e)">{{ e.requestId }}</button><template v-else>{{ e.operationId }}</template></small></td><td>{{ e.periodId }}<small>{{ e.kind }}</small></td><td>{{ budgetEntryStatus(e.status) }}</td><td>{{ formatCny(e.reservedCny) }} / {{ formatCny(e.settledCny) }}</td><td>{{ e.reason || '—' }}<details v-if="e.kind !== 'REQUEST'"><summary>调整前后</summary><pre>{{ JSON.stringify({ before: e.snapshot?.before, after: e.snapshot?.after }, null, 2) }}</pre></details></td></tr></tbody></table><p v-else class="empty">暂无预算账目</p><Pagination :total="entries.total" :offset="entryOffset" :limit="20" @change="entryOffset = $event; load()" />
     </section>
-    <section v-if="tab === 'usage'"><div class="actions"><button @click="router.push({ path: '/analytics', query: { groupId: id } })">组成本趋势与员工分析</button></div><Usage :group-id="id" embedded /></section>
+    <section v-if="tab === 'analysis'" class="panel">
+      <h2>使用分析</h2><p class="muted">当前用量组 · 人民币采购成本 · Asia/Shanghai 自然日 · 默认近 7 天，最多 90 天；分析日期不改变当前预算周期。</p>
+      <form id="group-analysis-form" class="form-row" @submit.prevent="applyAnalysis"><label>开始日期<input v-model="analysisDates.start" type="date" aria-label="分析开始日期" required></label><label>结束日期（含当日）<input v-model="analysisDates.end" type="date" aria-label="分析结束日期" required></label><button>应用日期</button></form>
+      <p v-if="analysisError" class="state error" role="alert">{{ analysisError }}</p><p class="muted">已应用：{{ companyDay(analysisRange.start) }} 至 {{ companyDay(new Date(new Date(analysisRange.end).getTime() - 1).toISOString()) }}</p>
+      <h3>采购成本趋势</h3><p v-if="seriesLoading" class="state">正在加载趋势…</p><p v-else-if="seriesError" class="state error" role="alert">{{ seriesError }} <button @click="loadSeries">重试趋势</button></p><TrendChart v-else :data="groupSeries" metric="cost" timezone="Asia/Shanghai" />
+      <h3>成本排行</h3><select v-model="dimension" aria-label="排行维度" @change="rankOffset = 0; loadRanking()"><option value="account">员工</option><option value="model">模型</option><option value="apiKey">员工 Key</option></select>
+      <p v-if="rankLoading" class="state">正在加载排行…</p><p v-else-if="rankError" class="state error" role="alert">{{ rankError }} <button @click="loadRanking">重试排行</button></p>
+      <template v-else><table v-if="ranking.items.length"><thead><tr><th>名称</th><th>请求数</th><th>Token</th><th>采购成本</th></tr></thead><tbody><tr v-for="(row, index) in ranking.items" :key="row.id ?? index"><td>{{ row.name }}<small>{{ row.id }}</small></td><td>{{ row.requests }}</td><td>{{ row.totalTokens ?? '未提供' }}</td><td>{{ formatCny(row.costCny) }}</td></tr></tbody></table><p v-else class="empty">当前维度没有数据</p><Pagination :total="ranking.total" :offset="rankOffset" :limit="20" @change="rankOffset = $event; loadRanking()" /></template>
+    </section>
+    <section v-if="tab === 'usage'"><Usage :group-id="id" embedded /></section>
   </template>
+  <UsageDetail v-if="selectedId" :id="selectedId" :query="requestQuery" @close="selectedId = null" />
   <ConfirmDialog :open="Boolean(confirmation)" title="确认组管理操作" :message="confirmation?.message || ''" danger :close-disabled="pending" @cancel="confirmation = null" @confirm="confirmation && mutate(confirmation.path, confirmation.method)" />
 </template>
