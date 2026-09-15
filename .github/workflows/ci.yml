@@ -42,6 +42,7 @@ jobs:
       - run: npm run build
       - run: node --import tsx test/integration/group-http.mjs
       - run: node --import tsx test/integration/employee-key-http.mjs
+      - run: node test/integration/skills-upload-http.mjs
 
   verify:
     runs-on: ubuntu-latest

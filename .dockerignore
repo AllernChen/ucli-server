@@ -1,6 +1,7 @@
 .git
 .gitignore
 .worktrees
+data
 .env
 node_modules
 dist

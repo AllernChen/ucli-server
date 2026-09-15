@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Query, Req, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common'
+import { BadRequestException, Body, Controller, Get, Param, Post, Query, Req, Res, UploadedFile, UseGuards, UseInterceptors, type CallHandler, type ExecutionContext } from '@nestjs/common'
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { FileInterceptor } from '@nestjs/platform-express'
 import AdmZip from 'adm-zip'
@@ -9,6 +9,19 @@ import { AuthGuard, Roles } from '../../../packages/security/src/auth.js'
 import { UuidPipe } from '../../../packages/http/src/uuid.pipe.js'
 import { scanSkillEntries } from '../../../packages/skills/src/archive-scan.js'
 import { ObjectStorageService } from '../../../packages/storage/src/object-storage.js'
+
+class SkillFileInterceptor extends FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }) {
+  async intercept(context: ExecutionContext, next: CallHandler) {
+    try { return await super.intercept(context, next) } catch (error) {
+      // NestJS 11 does not yet translate these Multer 2.3 input-validation errors.
+      if (error instanceof Error && error.name === 'MulterError' &&
+          ['LIMIT_FIELD_ARRAY_INDEX', 'INVALID_FIELD_NAME'].includes(Reflect.get(error, 'code'))) {
+        throw new BadRequestException('Invalid multipart field name')
+      }
+      throw error
+    }
+  }
+}
 
 @ApiTags('skills') @ApiBearerAuth() @UseGuards(AuthGuard) @Controller('api/v1/skills')
 export class SkillsController {
@@ -41,12 +54,12 @@ export class SkillsController {
   @Roles('PLATFORM_ADMIN') @Post('admin') create(@Body() body: any) {
     return this.prisma.skill.create({ data: { slug: body.slug, name: body.name, description: body.description } })
   }
-  @Roles('PLATFORM_ADMIN') @Post('admin/:id/versions') @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
+  @Roles('PLATFORM_ADMIN') @Post('admin/:id/versions') @UseInterceptors(SkillFileInterceptor)
   async version(@Param('id', UuidPipe) id: string, @Body() body: any, @UploadedFile() file: Express.Multer.File) {
     if (!file?.buffer) throw new BadRequestException('ZIP file is required')
     const zip = new AdmZip(file.buffer)
     const scanned = scanSkillEntries(zip.getEntries().filter(entry => !entry.isDirectory).map(entry => ({
-      name: entry.entryName, size: entry.header.size, content: entry.getData(), symbolicLink: (entry.header.attr >>> 16 & 0o170000) === 0o120000
+      name: entry.entryName, size: entry.header.size, get content() { return entry.getData() }, symbolicLink: (entry.header.attr >>> 16 & 0o170000) === 0o120000
     })))
     const sha256 = createHash('sha256').update(file.buffer).digest('hex')
     const objectKey = `skills/${id}/${body.version}/${sha256}.zip`

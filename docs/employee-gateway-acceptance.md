@@ -1,8 +1,22 @@
 # 员工网关与组预算验收记录
 
-日期：2026-09-15。分支：`codex/group-access`。已完成 Tasks 8–10 的源码、本地自动验收和真实 CLI 的本地模拟上游验收；未合并、推送、部署、连接公司中间件或调用付费上游。真实采购渠道与部署验收仍待执行。
+日期：2026-09-15。分支：`codex/group-access`。已完成 Tasks 8–10 的源码、本地自动验收、真实 CLI 的本地模拟上游验收及公司服务器隔离恢复/迁移/HTTP 启动演练；未合并、推送、升级生产或调用付费上游。正式发布和真实采购渠道验收仍待执行。
+
+## 公司服务器隔离演练（2026-09-15 12:30）
+
+- 用户确认后，从生产 UCLI 库创建新鲜自定义格式备份，保存在 `/data/ucli-server/backups/group-67f8151-20260915/ucli.dump`。SHA-256：`d201b73cb1d4cb36b7e747bca7d48c24b0e32ab2cc65b8c8dc72d27a3aa58e7d`，归档目录检查、实际恢复及最终哈希复验通过；同时保留升级前发布清单、Compose、安装脚本和配置连续性校验，不复制或打印生产 `.env`。
+- 创建独立 PG 容器，不在生产 PostgreSQL 实例内建库。PG 16.14 与生产使用同一镜像 ID `sha256:be2dedd215733ac25f6d3d2413f5f579f35c82bd659e09ef47fc0f2a4bada0eb`，数据库仅启用相同的 plpgsql 1.0。恢复目录 `/data/ucli-server/rehearsal/group-67f8151-20260915` 权限 700；独立 internal Docker 网络，无宿主机端口，无生产网络连接。
+- 从干净提交 `67f815178b5c27458d5d09e820f951ac2f7a8615` 导出迁移，Prisma 成功应用唯一待执行项 `202609140001_group_access_budget`，迁移记录由 15 增至 16，新增六张组/Key/预算表。迁移前后投影原有列，23 张历史表的行数和排序内容指纹完全一致。组织强制归组开关全部仍为 false。旧 `DeviceCodeStatus` 已不存在，其破坏性迁移早已完成，本轮没有重复执行。
+- 同一提交干净归档构建 runtime，标签 `ucli-server-runtime:rehearsal-67f8151`，镜像 ID `sha256:5806d0436a81eb2ce835d72586657e57fd6603f36e38b1d7dec54a232fb0d7e5`；上传 tar 哈希 `ccd800b62f1ce3a50b390ae11eaf8faee14451344eeeb453c7d5b07cafcd777e` 远端复验通过。它是演练镜像，不是正式离线发布包。
+- API/Gateway 使用独立 Redis 与随机演练 JWT/MASTER_KEY；不继承生产渠道解密密钥，不启动 Worker、不连接生产 MinIO、不发送推理请求。两服务健康检查通过。仅在恢复库创建合成员工/组织，真实 HTTP 验证：未认证管理请求 401、员工 Key 开关关闭 403、小组创建/加员/人民币预算分配、设备 preview/redeem/refresh/bootstrap、未分配模型的组目录为空、停用设备后既有 token 返回 401。脚本断言及最终退出码均通过。
+- 演练脚本与证据保留在上述远端目录：`rehearsal-smoke.cjs`、`smoke-result.txt`、`migration-result.txt`、`legacy-before.txt`、`legacy-after.txt`、`final-check.txt`。最初备份脚本在工作完成后因 PowerShell stdin 尾部 CR 报错；未重复创建资源，后续改用 SCP 上传脚本，恢复/迁移/启动/最终验证均独立退出 0。
+- 收尾确认四个演练容器已停止，未删除备份、恢复数据、网络、镜像或记录，待用户确认清理。生产四容器仍运行原 0.3.2 镜像，`.env` 哈希连续，12:29:45 API/Gateway 双健康检查通过；没有生产迁移、配置开关或业务数据写入。
+- 新发现发布待核查项：`npm audit --omit=dev --json --registry=https://registry.npmjs.org` 报 15 项受影响依赖（10 high、5 moderate、0 critical，含传递归因，不代表 15 个独立漏洞）。涉及 NestJS/multer、adm-zip、Prisma/deepmerge-ts、MinIO 等；部分自动修复建议跨主版本或降级，未运行 `audit fix`，未修改锁文件。当前镜像不能据此宣称安全审核通过，正式升级前需逐项核查可达性和修复/接受风险。
+- 验证边界：无管理端浏览器、UCLI 客户端 UI、MinIO 技能下载或真实付费模型流测试；本次 HTTP 设备流程不代替这些验收。未合并 main、推送、改版本、打正式标签或升级生产。
 
 ## 本地结果
+
+2026-09-15 14:29 最新复验：经用户批准，MinIO 客户端替换为 @aws-sdk/client-s3 3.1132.0，保留 MinIO 服务、配置及数据；Prisma 仍为 6.19.3。干净安装、生成和迁移检查通过，原样 `npm run verify` 为 110 文件、664 项全部通过，无跳过；行/语句覆盖率 95.96%、分支 85.12%、函数 97.77%。6 项真实 MinIO 回归、三条编译产物 HTTP 回归（组权限、员工 Key、真实 MinIO 技能上传下载）、双端构建及 452 条许可证检查通过。本地测试 PG/Redis 已停止并保留数据，临时 MinIO 容器和合成对象已清理。生产依赖审计为 0，含开发依赖仍有 4 项告警（1 high / 3 moderate）；未提交或部署，详见[依赖安全核查](dependency-security-review.md)。以下各节保留历史测试数及失败过程。
 
 环境：Windows、Node.js 24.9.0；专用本地 `ucli_test_group_verified` PostgreSQL（127.0.0.1:55439，数据库时区 Asia/Shanghai）和测试 Redis（127.0.0.1:56389/15）。普通 HTTP 上游由测试进程模拟，不使用公司采购 Key。
 
