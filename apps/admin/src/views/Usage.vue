@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import Decimal from 'decimal.js'
 import { useRoute, useRouter } from 'vue-router'
 import { api, downloadCsv } from '../api'
 import { formatCny } from '../currency'
@@ -19,6 +20,15 @@ const first = (value: unknown) => Array.isArray(value) ? String(value[0] || '') 
 const routeFilters = () => Object.fromEntries(Object.entries(route.query).map(([key, value]) => [key, first(value)]).filter(([, value]) => value)) as Record<string, string>
 const appliedQuery = () => usageQuery({ ...applied.value, limit: String(page.value.limit), offset: String(page.value.offset) }, props.groupId)
 const chinaTime = (value: string) => new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value))
+const integer = (value: unknown) => typeof value === 'string' && /^\d+$/.test(value) ? new Decimal(value) : null
+const uncached = (input: unknown, cached: unknown) => { const total = integer(input), cache = integer(cached); return total && cache ? Decimal.max(total.minus(cache), 0).toFixed(0) : '未提供' }
+const requestState = (value: string) => ({ SUCCESS: '成功', FAILED: '失败', CANCELLED: '已取消', INTERRUPTED: '已中断' }[value] || '未提供')
+const billingState = (value: string) => ({ CONFIRMED: '已确认', ESTIMATED: '估算', UNKNOWN: '待核对', NO_CHARGE: '无费用' }[value] || '未提供')
+const appliedSummary = computed(() => {
+  const labels = [['start', '开始'], ['end', '结束'], ['channelId', '渠道'], ['publicModelId', '模型'], ['channelModelScope', '渠道模型'], ['accountId', '员工'], ['groupId', '用量组'], ['groupScope', '用量组'], ['apiKeyId', '员工 Key'], ['keyScope', '员工 Key'], ['requestId', '请求 ID'], ['billingState', '计费状态']]
+  const values = labels.flatMap(([key, label]) => applied.value[key] ? [`${label}：${applied.value[key]}`] : [])
+  return values.length ? values.join(' · ') : '默认近 7 天'
+})
 async function load() {
   const current = lifecycle.next(); loading.value = true; error.value = ''
   try {
@@ -54,6 +64,6 @@ onUnmounted(() => lifecycle.dispose())
   <header v-if="!embedded" class="page-header"><div><p>UCLI CONTROL PLANE</p><h1>使用日志</h1><span class="subtitle">中国标准时间（Asia/Shanghai）· 默认近 7 天</span></div><div class="actions"><button @click="load">刷新数据</button><button :disabled="exporting" @click="exportCsv">{{ exporting ? '正在导出…' : '导出 CSV' }}</button></div></header>
   <UsageFilters v-model="draft" :role="role" :pinned-group-id="groupId" mode="logs" @apply="apply" />
   <p v-if="loading" class="state">正在加载…</p><p v-else-if="error" class="state error">{{ error }}</p>
-  <section v-else class="panel"><table v-if="rows.length"><thead><tr><th>时间</th><th>员工 / 用量组</th><th>凭据</th><th>模型 / 渠道</th><th>输入细分 / 输出</th><th>匹配记录成本</th><th>状态</th><th>详情</th></tr></thead><tbody><tr v-for="row in rows" :key="row.id"><td>{{ chinaTime(row.startedAt) }}</td><td><strong>{{ row.employeeName || '未提供' }}</strong><small>{{ row.groupName || '历史未归组' }}</small></td><td>{{ row.keyName || '设备凭据' }}<small class="mono">{{ row.keyHint || '未提供' }}</small></td><td>{{ row.publicModelId || '未提供' }}<small>{{ row.channelName || '未提供' }} · {{ row.upstreamModel || '未提供' }}</small></td><td>{{ row.inputTokens ?? '未提供' }} / {{ row.cachedTokens ?? '未提供' }} / {{ row.reasoningTokens ?? '未提供' }} / {{ row.outputTokens ?? '未提供' }}</td><td>{{ formatCny(row.matchedCostCny) }}<small>{{ row.billingState === 'UNKNOWN' ? '待核对费用，非最终成本' : row.usageSource === 'ESTIMATED' ? '估算' : '已结算' }}</small></td><td>{{ row.requestState || '未提供' }} · {{ row.statusCode ?? '未提供' }}</td><td><small class="mono">{{ row.requestId || '未提供' }}</small><button :aria-label="`查看请求 ${row.requestId} 详情`" @click="selectedId = row.id">查看</button></td></tr></tbody></table><p v-else class="empty">暂无日志</p><Pagination v-if="rows.length" :total="page.total" :limit="page.limit" :offset="page.offset" @change="changePage" /></section>
+  <section v-else class="panel"><p class="muted">当前结果：{{ appliedSummary }}</p><table v-if="rows.length"><thead><tr><th>时间</th><th>员工 / 用量组</th><th>凭据</th><th>模型 / 渠道</th><th>未缓存输入 / 缓存 / 推理 / 输出</th><th>匹配记录成本</th><th>状态</th><th>详情</th></tr></thead><tbody><tr v-for="row in rows" :key="row.id"><td>{{ chinaTime(row.startedAt) }}</td><td><strong>{{ row.employeeName || '未提供' }}</strong><small>{{ row.groupName || '历史未归组' }}</small></td><td>{{ row.keyName || '设备凭据' }}<small class="mono">{{ row.keyHint || '未提供' }}</small></td><td>{{ row.publicModelId || '未提供' }}<small>{{ row.channelName || '未提供' }} · {{ row.upstreamModel || '未提供' }}</small></td><td>{{ uncached(row.inputTokens, row.cachedTokens) }} / {{ row.cachedTokens ?? '未提供' }} / {{ row.reasoningTokens ?? '未提供' }} / {{ row.outputTokens ?? '未提供' }}</td><td>{{ formatCny(row.matchedCostCny) }}<small>{{ billingState(row.billingState) }}</small><small v-if="row.billingState === 'UNKNOWN'">待核对费用，非最终成本</small></td><td>{{ requestState(row.requestState) }} · {{ billingState(row.billingState) }} · {{ row.statusCode ?? '未提供' }}</td><td><small class="mono">{{ row.requestId || '未提供' }}</small><button :aria-label="`查看请求 ${row.requestId} 详情`" @click="selectedId = row.id">查看</button></td></tr></tbody></table><p v-else class="empty">暂无日志</p><Pagination v-if="rows.length" :total="page.total" :limit="page.limit" :offset="page.offset" @change="changePage" /></section>
   <UsageDetail :id="selectedId" :query="appliedQuery()" @close="selectedId = null" />
 </template>

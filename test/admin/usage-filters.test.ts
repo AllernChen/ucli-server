@@ -58,3 +58,70 @@ it('applies the unassociated channel-model sentinel without retaining an ID', as
   expect(wrapper.emitted('update:modelValue')!.at(-1)![0]).toMatchObject({ channelModelScope: 'UNASSOCIATED', channelModelId: '' })
   wrapper.unmount()
 })
+
+it('keeps an edited date when choosing another draft filter before apply', async () => {
+  state.api.mockResolvedValue({ organizations: [], channels: [], models: [], channelModels: [], accounts: [], costRules: [], groups: [], apiKeys: [], page: { dimension: 'channel', items: [{ id: 'channel-1', name: '渠道一', drillQuery: { channelId: 'channel-1' } }], total: 1, limit: 50, offset: 0 } })
+  const wrapper = mount(UsageFilters, { props: { modelValue: { start: '2026-09-14T16:00:00.000Z', end: '2026-09-15T16:00:00.000Z' }, role: '' } })
+  await wrapper.get('[aria-label="开始日期"]').setValue('2026-09-14')
+  await wrapper.get('[aria-label="渠道筛选"]').trigger('focus'); await flushPromises()
+  await wrapper.get('[aria-label="渠道筛选"]').setValue('channel-1')
+  await wrapper.setProps({ modelValue: wrapper.emitted('update:modelValue')!.at(-1)![0] })
+  await wrapper.get('button.primary').trigger('click')
+  expect(wrapper.emitted('apply')!.at(-1)![0]).toMatchObject({ start: '2026-09-13T16:00:00.000Z', end: '2026-09-15T16:00:00.000Z', channelId: 'channel-1' })
+  wrapper.unmount()
+})
+
+it('searches and pages the active option dimension through visible controls', async () => {
+  state.api.mockResolvedValue({ organizations: [], channels: [], models: [], channelModels: [], accounts: [], costRules: [], groups: [], apiKeys: [], page: { dimension: 'channel', items: [{ id: 'channel-1', name: '渠道一' }], total: 101, limit: 50, offset: 0 } })
+  const wrapper = mount(UsageFilters, { props: { modelValue: {}, role: '' } })
+  await wrapper.get('[aria-label="渠道筛选"]').trigger('focus'); await flushPromises()
+  await wrapper.get('[aria-label="搜索渠道选项"]').setValue('alpha'); await flushPromises()
+  expect(state.api.mock.calls.at(-1)![0]).toContain('optionDimension=channel')
+  expect(state.api.mock.calls.at(-1)![0]).toContain('q=alpha')
+  await wrapper.get('[aria-label="渠道选项下一页"]').trigger('click'); await flushPromises()
+  expect(state.api.mock.calls.at(-1)![0]).toContain('offset=50')
+  wrapper.unmount()
+})
+
+it('keeps a selected historical option visible after a later search page excludes it', async () => {
+  state.api.mockImplementation((path: string) => {
+    const query = new URL('http://local' + path).searchParams
+    const items = query.get('q') ? [{ id: 'channel-2', name: '另一个渠道' }] : [{ id: 'channel-1', name: '历史渠道' }]
+    return Promise.resolve({ organizations: [], channels: [], models: [], channelModels: [], accounts: [], costRules: [], groups: [], apiKeys: [], page: { dimension: 'channel', items, total: 2, limit: 50, offset: 0 } })
+  })
+  const wrapper = mount(UsageFilters, { props: { modelValue: {}, role: '' } })
+  const control = wrapper.get('[aria-label="渠道筛选"]')
+  await control.trigger('focus'); await flushPromises(); await control.setValue('channel-1')
+  await wrapper.get('[aria-label="搜索渠道选项"]').setValue('other'); await flushPromises()
+  expect((control.element as HTMLSelectElement).value).toBe('channel-1')
+  expect(wrapper.text()).toContain('历史值 channel-1')
+  wrapper.unmount()
+})
+
+it('uses distinct All and null drill choices before serializing each affected dimension', async () => {
+  const pages: Record<string, any[]> = {
+    group: [{ id: null, name: '历史未归组', drillQuery: { groupScope: 'UNGROUPED' } }, { id: 'group-real', name: '组' }],
+    apiKey: [{ id: null, name: '设备', drillQuery: { keyScope: 'NO_KEY' } }, { id: 'key-real', name: 'Key' }],
+    channelModel: [{ id: null, name: '未关联', drillQuery: { channelModelScope: 'UNASSOCIATED' } }, { id: 'model-real', name: '模型' }],
+    channel: [{ id: null, name: '差额', drillQuery: { allocation: 'UNALLOCATED' } }, { id: 'channel-real', name: '渠道' }],
+    costRule: [{ id: null, name: '无快照', drillQuery: { allocation: 'UNALLOCATED' } }, { id: 'price-real', name: '价格', drillQuery: { priceKey: 'price-real' } }]
+  }
+  state.api.mockImplementation((path: string) => {
+    const dimension = new URL('http://local' + path).searchParams.get('optionDimension')!
+    return Promise.resolve({ organizations: [], channels: [], models: [], channelModels: [], accounts: [], costRules: [], groups: [], apiKeys: [], page: { dimension, items: pages[dimension] || [], total: 2, limit: 50, offset: 0 } })
+  })
+  const wrapper = mount(UsageFilters, { props: { modelValue: {}, role: '' } })
+  for (const [label, sentinel, real] of [['用量组筛选', '__UNGROUPED__', 'group-real'], ['员工 Key 筛选', '__NO_KEY__', 'key-real'], ['渠道模型筛选', '__UNASSOCIATED__', 'model-real'], ['渠道筛选', '__option_channel_0', 'channel-real'], ['价格快照筛选', '__option_costRule_0', 'price-real']] as const) {
+    const control = wrapper.get(`[aria-label="${label}"]`)
+    await control.trigger('focus'); await flushPromises()
+    await control.setValue(sentinel); expect((control.element as HTMLSelectElement).value).toBe(sentinel)
+    await control.setValue(real); expect((control.element as HTMLSelectElement).value).toBe(real)
+    await control.setValue('')
+    expect((control.element as HTMLSelectElement).value).toBe('')
+  }
+  await wrapper.get('button.primary').trigger('click')
+  const applied = wrapper.emitted('apply')!.at(-1)![0] as Record<string, string>
+  const query = new URLSearchParams(usageQuery(applied))
+  for (const key of ['groupId', 'groupScope', 'apiKeyId', 'keyScope', 'channelModelId', 'channelModelScope', 'channelId', 'allocation', 'priceKey', 'costRuleId']) expect(query.has(key)).toBe(false)
+  wrapper.unmount()
+})
