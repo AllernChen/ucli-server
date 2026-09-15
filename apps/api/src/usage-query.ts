@@ -74,9 +74,26 @@ export function hasAllocationFilter(filter: UsageReadFilter): boolean {
   return Boolean(filter.channelId || filter.channelModelId || filter.channelModelScope || filter.costRuleId || filter.priceKey || filter.allocation)
 }
 
+// Shared by matched requests and per-dimension request rows; alias a is always an allocation.
+export const allocationMetricsSql = Prisma.sql`
+  SUM(a.cost_cny)::numeric AS matched_cost_cny,
+  SUM(a.input_tokens)::numeric AS input_tokens,
+  SUM(a.cached_tokens)::numeric AS cached_tokens,
+  SUM(a.output_tokens)::numeric AS output_tokens,
+  SUM(a.reasoning_tokens)::numeric AS reasoning_tokens,
+  BOOL_OR(a.billing_state = 'UNKNOWN') AS unsettled,
+  COALESCE(SUM(a.cost_cny) FILTER (WHERE a.billing_state = 'ESTIMATED' AND a.allocation_kind <> 'UNALLOCATED'), 0)::numeric AS estimated_cost_cny,
+  COALESCE(SUM(a.cached_tokens) FILTER (WHERE a.usage_source = 'upstream' AND COALESCE(a.cached_tokens, 0) > 0), 0)::numeric AS known_cached_tokens,
+  COALESCE(SUM(a.input_tokens) FILTER (WHERE a.usage_source = 'upstream' AND COALESCE(a.cached_tokens, 0) > 0), 0)::numeric AS known_input_tokens,
+  COUNT(*) FILTER (WHERE a.allocation_kind <> 'UNALLOCATED'
+    AND (a.usage_source IS DISTINCT FROM 'upstream' OR COALESCE(a.cached_tokens, 0) <= 0))::bigint AS unknown_cache_calls,
+  BOOL_OR((a.input_tokens IS NULL OR a.output_tokens IS NULL OR a.cached_tokens IS NULL OR a.reasoning_tokens IS NULL)
+    AND a.allocation_kind <> 'UNALLOCATED') AS token_usage_incomplete,
+  COALESCE(SUM(a.cost_cny) FILTER (WHERE a.allocation_kind = 'UNALLOCATED'), 0)::numeric AS unallocated_cost_cny`
+
 export function usageReadCte(filter: UsageReadFilter, _dimension?: AnalyticsQueryDto['dimension']): Prisma.Sql {
   const routePrice = Prisma.sql`r.usage_snapshot->'cost'`
-  const routeChannelModel = Prisma.sql`CASE WHEN r.usage_snapshot->>'channelModelId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN (r.usage_snapshot->>'channelModelId')::uuid ELSE NULL END`
+  const routeChannelModel = Prisma.sql`CASE WHEN ${routePrice}->>'channelModelId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN (${routePrice}->>'channelModelId')::uuid ELSE NULL END`
   const routeRule = Prisma.sql`CASE WHEN ${routePrice}->>'source' = 'CHANNEL_COST_RULE' AND ${routePrice}->>'id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN (${routePrice}->>'id')::uuid ELSE NULL END`
   const priceKey = (snapshot: Prisma.Sql) => Prisma.sql`md5(jsonb_build_object(
     'id', ${snapshot}->>'id', 'source', ${snapshot}->>'source', 'inputPerMillion', ${snapshot}->>'inputPerMillion',
@@ -116,13 +133,7 @@ export function usageReadCte(filter: UsageReadFilter, _dimension?: AnalyticsQuer
       FROM scoped_usage u WHERE EXISTS (SELECT 1 FROM route_attempts r WHERE r.usage_log_id = u.id AND (r.billing_state IS NOT NULL OR r.cost_cny IS NOT NULL))
         AND u.cost_usd::numeric <> COALESCE((SELECT SUM(r.cost_cny) FROM route_attempts r WHERE r.usage_log_id = u.id AND (r.billing_state IS NOT NULL OR r.cost_cny IS NOT NULL)), 0)
     ), matched_requests AS (
-      SELECT a.usage_log_id, SUM(a.cost_cny)::numeric AS matched_cost_cny, SUM(a.input_tokens)::numeric AS input_tokens,
-        SUM(a.cached_tokens)::numeric AS cached_tokens, SUM(a.output_tokens)::numeric AS output_tokens, SUM(a.reasoning_tokens)::numeric AS reasoning_tokens,
-        BOOL_OR(a.billing_state = 'UNKNOWN') AS unsettled, COALESCE(SUM(a.cost_cny) FILTER (WHERE a.billing_state = 'ESTIMATED' AND a.allocation_kind <> 'UNALLOCATED'), 0)::numeric AS estimated_cost_cny,
-        COALESCE(SUM(a.cached_tokens) FILTER (WHERE a.usage_source = 'upstream' AND COALESCE(a.cached_tokens, 0) > 0), 0)::numeric AS known_cached_tokens,
-        COALESCE(SUM(a.input_tokens) FILTER (WHERE a.usage_source = 'upstream' AND COALESCE(a.cached_tokens, 0) > 0), 0)::numeric AS known_input_tokens,
-        COUNT(*) FILTER (WHERE a.allocation_kind <> 'UNALLOCATED' AND NOT (a.usage_source = 'upstream' AND COALESCE(a.cached_tokens, 0) > 0))::bigint AS unknown_cache_calls,
-        BOOL_OR(a.input_tokens IS NULL AND a.allocation_kind <> 'UNALLOCATED') AS token_usage_incomplete
+      SELECT a.usage_log_id, ${allocationMetricsSql}
       FROM allocations a WHERE ${matching} GROUP BY a.usage_log_id
     )`
 }

@@ -1,11 +1,138 @@
 import 'reflect-metadata'
 import { randomUUID } from 'node:crypto'
+import type { PrismaClient, Prisma } from '@prisma/client'
 import { describe, expect, it } from 'vitest'
 import { AnalyticsService } from '../../apps/api/src/analytics.service.js'
 import { PrismaService } from '../../packages/database/src/prisma.service.js'
 import { createOrganization, withTestDatabase } from './database.js'
 
+const range = { start: '2026-09-15T00:00:00Z', end: '2026-09-17T00:00:00Z' }
+async function fixture(db: PrismaClient) {
+  const owner = await createOrganization(db)
+  const channel = await db.channel.create({ data: { name: 'Alpha', provider: 'test', protocol: 'OPENAI', baseUrl: 'http://127.0.0.1' } })
+  const model = await db.publicModel.create({ data: { id: randomUUID(), displayName: 'Model' } })
+  const device = await db.device.create({ data: { organizationId: owner.organization.id, accountId: owner.account.id, name: 'Device', refreshTokenHash: randomUUID() } })
+  const at = new Date('2026-09-15T01:00:00Z')
+  const log = (data: Partial<Prisma.UsageLogUncheckedCreateInput> = {}) => db.usageLog.create({ data: {
+    requestId: randomUUID(), organizationId: owner.organization.id, accountId: owner.account.id, deviceId: device.id,
+    credentialType: 'DEVICE', publicModelId: model.id, upstreamModel: 'upstream', channelId: channel.id,
+    protocol: 'OPENAI_CHAT', startedAt: at, finishedAt: at, durationMs: 10, statusCode: 200, costUsd: '1',
+    usageSource: 'UPSTREAM', streaming: false, inputTokens: 100, outputTokens: 10, cachedTokens: 20, reasoningTokens: 7, ...data
+  } })
+  const route = (usageLogId: string, attempt: number, data: Partial<Prisma.RouteAttemptUncheckedCreateInput> = {}) => db.routeAttempt.create({ data: {
+    usageLogId, channelId: channel.id, attempt, startedAt: at, durationMs: 1, costCny: '1', billingState: 'CONFIRMED',
+    usageSnapshot: { source: 'upstream', inputTokens: 10, outputTokens: 1, cachedTokens: 2, reasoningTokens: 0 }, ...data
+  } })
+  return { ...owner, channel, model, log, route, service: new AnalyticsService(db as PrismaService) }
+}
+
+const historicalPrice = (extra = {}) => ({ id: randomUUID(), source: 'CHANNEL_COST_RULE', inputPerMillion: '1', cachedPerMillion: '0.5',
+  outputPerMillion: '2', reasoningPerMillion: '0', timezone: 'Asia/Shanghai', daysOfWeek: [1, 2], startMinute: 0, endMinute: 1440,
+  validFrom: '2026-01-01T00:00:00Z', internalSecret: { credential: 'must-not-leak' }, ...extra })
+
 describe.skipIf(!process.env.TEST_DATABASE_URL)('routed operational usage analytics', () => {
+  it('deduplicates request latency and sorts the log-authoritative token and latency totals', () => withTestDatabase(async db => {
+    const f = await fixture(db)
+    const first = await f.log({ inputTokens: 1000, reasoningTokens: 70, costUsd: '2' })
+    await f.route(first.id, 1)
+    await f.route(first.id, 2)
+    const second = await f.log({ durationMs: 100 })
+    await f.route(second.id, 1)
+    for (const extra of [{ dimension: 'channel' as const }, { dimension: 'account' as const, channelId: f.channel.id }]) {
+      const result = await f.service.breakdown(f.actor, { ...range, ...extra })
+      expect(result.items[0]).toMatchObject({ requests: 2, p95LatencyMs: 96 })
+    }
+    const other = await db.account.create({ data: { email: `${randomUUID()}@example.invalid`, displayName: 'Other' } })
+    const third = await f.log({ accountId: other.id, inputTokens: 500, durationMs: 94, costUsd: '1' })
+    await f.route(third.id, 1, { usageSnapshot: { source: 'upstream', inputTokens: 5000, outputTokens: 1, cachedTokens: 1, reasoningTokens: 0 } })
+    const tokens = await f.service.breakdown(f.actor, { ...range, dimension: 'account', sort: 'tokens' })
+    expect(tokens.items.map(item => item.id)).toEqual([f.account.id, other.id])
+    expect(tokens.items[0]).toMatchObject({ inputTokens: '1100', totalTokens: '1120', reasoningTokens: '77', p95LatencyMs: 96 })
+    const latency = await f.service.breakdown(f.actor, { ...range, dimension: 'account', sort: 'p95LatencyMs' })
+    expect(latency.items.map(item => item.id)).toEqual([f.account.id, other.id])
+  }))
+
+  it('preserves known tokens and unknown cache evidence, and exposes real errors and deltas', () => withTestDatabase(async db => {
+    const f = await fixture(db)
+    const log = await f.log({ costUsd: '1.5', errorCode: 'UPSTREAM_ERROR', statusCode: 500 })
+    await f.route(log.id, 1, { usageSnapshot: { inputTokens: 100, cachedTokens: 20 } })
+    const overview = await f.service.overview(f.actor, { ...range, channelId: f.channel.id })
+    expect(overview).toMatchObject({ inputTokens: '100', outputTokens: '0', tokenUsageIncomplete: true, cacheCoverage: { unknownCalls: 1 }, unallocatedCostCny: '0.00000000' })
+    const channel = await f.service.breakdown(f.actor, { ...range, dimension: 'channel', channelId: f.channel.id })
+    expect(channel.items[0]).toMatchObject({ totalTokens: '100', inputTokens: '100', tokenUsageIncomplete: true, cacheCoverage: { unknownCalls: 1 }, errorCounts: [{ errorCode: 'UPSTREAM_ERROR', requests: 1 }], avgInputPerMillion: null, avgOutputPerMillion: null, schedule: null })
+    const series = await f.service.timeseries(f.actor, range)
+    expect(series[0]).toMatchObject({ unallocatedCostCny: '0.50000000', errorCounts: [{ errorCode: 'UPSTREAM_ERROR', requests: 1 }] })
+    const account = await f.service.breakdown(f.actor, { ...range, dimension: 'account' })
+    expect(account.items[0]).toMatchObject({ unallocatedCostCny: '0.50000000', errorCounts: [{ errorCode: 'UPSTREAM_ERROR', requests: 1 }] })
+  }))
+
+  it('requires one complete historical price and reads the nested historical model on the matching route', () => withTestDatabase(async db => {
+    const f = await fixture(db)
+    const early = await db.channelModel.create({ data: { channelId: f.channel.id, publicModelId: f.model.id, upstreamModel: 'early', protocol: 'OPENAI_CHAT' } })
+    const later = await db.channelModel.create({ data: { channelId: f.channel.id, publicModelId: f.model.id, upstreamModel: 'later', protocol: 'ANTHROPIC_MESSAGES' } })
+    const price = historicalPrice({ channelModelId: early.id })
+    const finalPrice = historicalPrice({ channelModelId: later.id, inputPerMillion: '9' })
+    for (const [id, channelModelId] of [[price.id, early.id], [finalPrice.id, later.id]]) {
+      await db.channelModelCostRule.create({ data: { id, channelModelId, name: 'Current renamed rule', daysOfWeek: [1], startMinute: 0, endMinute: 1439,
+        inputPerMillion: '999', outputPerMillion: '999', validFrom: new Date('2026-09-01T00:00:00Z') } })
+    }
+    const log = await f.log({ costUsd: '2', channelModelId: later.id, channelCostRuleId: finalPrice.id, costSnapshot: finalPrice })
+    await f.route(log.id, 1, { usageSnapshot: { source: 'upstream', inputTokens: 10, cachedTokens: 2, outputTokens: 1, reasoningTokens: 0, cost: price } })
+    const second = await f.route(log.id, 2)
+    const breakdown = () => f.service.breakdown(f.actor, { ...range, dimension: 'channel' })
+    expect((await breakdown()).items[0].price).toBeNull()
+    expect(await f.service.overview(f.actor, { ...range, channelModelScope: 'UNASSOCIATED' })).toMatchObject({ requests: 1, costCny: '1.00000000' })
+    await db.routeAttempt.update({ where: { id: second.id }, data: { usageSnapshot: { cost: { ...price, billingState: 'UNKNOWN' } } } })
+    const same = (await breakdown()).items[0]
+    expect(same.price).toMatchObject({ inputPerMillion: '1', validFrom: price.validFrom })
+    expect(JSON.stringify(same.price)).not.toContain('internalSecret')
+    expect((await f.service.breakdown(f.actor, { ...range, dimension: 'costRule' })).total).toBe(1)
+    await db.routeAttempt.update({ where: { id: second.id }, data: { usageSnapshot: { cost: { ...price, inputPerMillion: '3' } } } })
+    expect((await f.service.breakdown(f.actor, { ...range, dimension: 'costRule' })).total).toBe(2)
+    expect((await breakdown()).items[0].price).toBeNull()
+    await db.routeAttempt.update({ where: { id: second.id }, data: { usageSnapshot: { cost: finalPrice } } })
+    expect((await breakdown()).items[0].price).toBeNull()
+    const rules = await f.service.breakdown(f.actor, { ...range, dimension: 'costRule' })
+    expect(rules.total).toBe(2)
+    for (const item of rules.items) {
+      expect(await f.service.overview(f.actor, { ...range, ...item.drillQuery })).toMatchObject({ requests: item.requests, costCny: item.costCny })
+    }
+    const models = await f.service.breakdown(f.actor, { ...range, dimension: 'channelModel', channelModelId: early.id })
+    expect(models.items[0]).toMatchObject({ id: early.id, costCny: '1.00000000' })
+    expect(await f.service.overview(f.actor, { ...range, ...models.items[0].drillQuery, costRuleId: price.id })).toMatchObject({ requests: 1, costCny: '1.00000000' })
+    expect(await f.service.overview(f.actor, { ...range, channelModelId: early.id, costRuleId: finalPrice.id })).toMatchObject({ requests: 0 })
+    await db.routeAttempt.update({ where: { id: second.id }, data: { usageSnapshot: { cost: { ...finalPrice, inputPerMillion: 'NaN' } } } })
+    expect((await f.service.breakdown(f.actor, { ...range, dimension: 'channelModel', channelModelId: later.id })).items[0].price).toBeNull()
+  }))
+
+  it('keeps account delta drills narrow and option pages in stable name/id order with principal scope', () => withTestDatabase(async db => {
+    const f = await fixture(db)
+    const other = await db.account.create({ data: { email: `${randomUUID()}@example.invalid`, displayName: 'Renamed' } })
+    const beta = await db.channel.create({ data: { name: 'Beta', provider: 'test', protocol: 'OPENAI', baseUrl: 'http://127.0.0.1' } })
+    const alphaTwin = await db.channel.create({ data: { name: 'Alpha', provider: 'test', protocol: 'OPENAI', baseUrl: 'http://127.0.0.1' } })
+    for (const [accountId, channelId, costUsd] of [[f.account.id, f.channel.id, '1.5'], [other.id, beta.id, '9.5'], [f.account.id, alphaTwin.id, '1.5']]) {
+      const log = await f.log({ accountId, channelId, costUsd, actorSnapshot: { employeeName: accountId === other.id ? 'Historical' : 'Self' } })
+      await f.route(log.id, 1, { channelId, costCny: String(Number(costUsd) - 0.5) })
+    }
+    const groups = await f.service.breakdown(f.actor, { ...range, dimension: 'account', allocation: 'UNALLOCATED' })
+    for (const row of groups.items) {
+      expect(row.drillQuery).toMatchObject({ accountId: row.id, allocation: 'UNALLOCATED' })
+      expect(await f.service.overview(f.actor, { ...range, ...row.drillQuery })).toMatchObject({ requests: row.requests, costCny: row.costCny })
+    }
+    const expected = [f.channel.id, alphaTwin.id].sort().concat(beta.id)
+    for (let offset = 0; offset < expected.length; offset++) {
+      const options = await f.service.filterOptions(f.actor, { ...range, optionDimension: 'channel', channelId: beta.id, sort: 'costCny', limit: 1, offset })
+      expect(options.page?.items[0].id).toBe(expected[offset])
+    }
+    const outsider = await fixture(db)
+    await outsider.log()
+    const scoped = await f.service.filterOptions({ ...f.actor, role: 'MEMBER' }, { ...range, organizationId: outsider.organization.id, accountId: other.id, optionDimension: 'account', channelId: f.channel.id })
+    expect(scoped.page?.items).toEqual([{ id: f.account.id, name: 'Self', drillQuery: { accountId: f.account.id } }])
+    expect((await f.service.filterOptions(f.actor, { ...range, organizationId: outsider.organization.id, optionDimension: 'account' })).page?.items.map(item => item.id).sort())
+      .toEqual([f.account.id, other.id].sort())
+    expect((await f.service.filterOptions(f.actor, { ...range, optionDimension: 'account', channelId: beta.id })).page?.items).toEqual([{ id: other.id, name: 'Historical', drillQuery: { accountId: other.id } }])
+    expect((await f.service.filterOptions(f.actor, { ...range, optionDimension: 'channel', offset: 99 })).page).toMatchObject({ items: [], total: 4 })
+  }))
   it('keeps route usage and costs together, exposes the reconciliation delta, and drills unassociated channel models safely', () => withTestDatabase(async db => {
     const { actor, organization, account } = await createOrganization(db)
     const channels = await Promise.all(['Alpha route', 'Beta route'].map(name => db.channel.create({ data: { name, provider: 'test', protocol: 'OPENAI', baseUrl: 'http://127.0.0.1' } })))
@@ -28,6 +155,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('routed operational usage analyt
       requests: 1, costCny: '4.00000000', requestSuccessRate: 1,
       requestStates: { SUCCESS: 1, FAILED: 0, CANCELLED: 0, INTERRUPTED: 0 },
       cachedTokens: '150', unallocatedCostCny: '0.50000000', estimatedCostCny: '2.00000000',
+      cacheHitRate: 1 / 3,
       cacheCoverage: { knownInputTokens: '150', totalInputTokens: '350', unknownCalls: 1 }
     })
     await expect(service.overview(actor, { ...filter, billingState: 'ESTIMATED' })).resolves.toMatchObject({ requests: 1, costCny: '4.00000000' })
@@ -75,5 +203,17 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('routed operational usage analyt
     })
     await expect(service.overview(actor, { ...filter, billingState: 'NO_CHARGE' })).resolves.toMatchObject({ requests: 1, costCny: '0.00000000' })
     await expect(service.timeseries(actor, { ...filter, interval: 'day' })).resolves.toMatchObject([{ bucket: '2026-09-14T16:00:00.000Z', requests: 5 }])
+    await expect(service.breakdown(actor, { ...filter, billingState: 'UNKNOWN', dimension: 'channel' })).resolves.toMatchObject({
+      items: [{ requests: 1, successRate: 0, requestSuccessRate: 1 }]
+    })
+    await expect(service.overview(actor, { ...filter, billingState: 'UNKNOWN' })).resolves.toMatchObject({ requests: 1, successRate: 0, requestSuccessRate: 1 })
+    await expect(service.timeseries(actor, { ...filter, billingState: 'UNKNOWN' })).resolves.toMatchObject([{ requests: 1, successRate: 0, requestSuccessRate: 1 }])
+    await db.usageLog.create({ data: { ...base, startedAt: new Date('2026-09-15T16:00:00Z'), requestId: randomUUID(), statusCode: 200, costUsd: '0' } })
+    expect((await service.timeseries(actor, { ...filter, interval: 'day' })).map(row => ({ bucket: row.bucket, requests: row.requests }))).toEqual([
+      { bucket: '2026-09-14T16:00:00.000Z', requests: 5 }, { bucket: '2026-09-15T16:00:00.000Z', requests: 1 }
+    ])
+    // A failed UNKNOWN request must not subtract an unrelated HTTP-successful request.
+    await db.usageLog.create({ data: { ...base, requestId: randomUUID(), statusCode: 500, costUsd: '0.4', costSnapshot: { billingState: 'UNKNOWN' } } })
+    expect((await service.breakdown(actor, { ...filter, dimension: 'channel' })).items[0]).toMatchObject({ successRate: 2 / 7, requestSuccessRate: 3 / 7 })
   }))
 })

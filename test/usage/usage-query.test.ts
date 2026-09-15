@@ -19,6 +19,9 @@ describe('usage query', () => {
     await expect(pipe.transform({ timezone: 'Asia/Shanghai', requestState: 'SUCCESS', billingState: 'UNKNOWN', groupScope: 'UNGROUPED', keyScope: 'NO_KEY', costRuleId: '123e4567-e89b-12d3-a456-426614174000', priceKey: '0123456789abcdef0123456789abcdef', allocation: 'UNALLOCATED' }, metadata))
       .resolves.toMatchObject({ timezone: 'Asia/Shanghai', requestState: 'SUCCESS', billingState: 'UNKNOWN', groupScope: 'UNGROUPED', keyScope: 'NO_KEY', allocation: 'UNALLOCATED' })
     await expect(pipe.transform({ requestState: 'PENDING' }, metadata)).rejects.toBeInstanceOf(BadRequestException)
+    await expect(pipe.transform({ channelModelScope: 'UNASSOCIATED', optionDimension: 'channelModel', q: 'historical', limit: '1', offset: '0' }, metadata))
+      .resolves.toMatchObject({ channelModelScope: 'UNASSOCIATED', optionDimension: 'channelModel', q: 'historical', limit: 1, offset: 0 })
+    await expect(pipe.transform({ channelModelScope: 'CURRENT' }, metadata)).rejects.toBeInstanceOf(BadRequestException)
   })
 
   it('rejects invalid scoped-operation query values at the HTTP DTO boundary', async () => {
