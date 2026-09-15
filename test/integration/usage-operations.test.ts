@@ -1,7 +1,8 @@
 import 'reflect-metadata'
 import { randomUUID } from 'node:crypto'
-import type { PrismaClient, Prisma } from '@prisma/client'
+import { Prisma, type PrismaClient } from '@prisma/client'
 import { describe, expect, it } from 'vitest'
+import Decimal from 'decimal.js'
 import { AnalyticsService } from '../../apps/api/src/analytics.service.js'
 import { AnalyticsController } from '../../apps/api/src/analytics.controller.js'
 import { UsageController } from '../../apps/api/src/usage.controller.js'
@@ -34,6 +35,68 @@ const historicalPrice = (extra = {}) => ({ id: randomUUID(), source: 'CHANNEL_CO
   validFrom: '2026-01-01T00:00:00Z', internalSecret: { credential: 'must-not-leak' }, ...extra })
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('routed operational usage analytics', () => {
+  it('joins many price groups without quadratic pair checks while preserving the null allocation group', () => withTestDatabase(async db => {
+    const f = await fixture(db)
+    const channels = Array.from({ length: 100 }, (_, index) => ({ id: randomUUID(), name: `Plan ${index}`, provider: 'test', protocol: 'OPENAI' as const, baseUrl: 'http://127.0.0.1' }))
+    await db.channel.createMany({ data: channels })
+    const log = await f.log({ costUsd: '100.5' })
+    await db.routeAttempt.createMany({ data: channels.map((channel, index) => ({ usageLogId: log.id, channelId: channel.id, attempt: index + 1,
+      startedAt: log.startedAt, durationMs: 1, costCny: '1', billingState: 'CONFIRMED' as const, usageSnapshot: { source: 'upstream', inputTokens: 1, cachedTokens: 1 } })) })
+    let selected: Prisma.Sql | undefined
+    const service = new AnalyticsService({ $queryRaw: (sql: Prisma.Sql) => { if (/LIMIT/.test(sql.sql)) selected = sql; return db.$queryRaw(sql) } } as PrismaService)
+    const result = await service.breakdown(f.actor, { ...range, dimension: 'channel', limit: 200 })
+    expect(result.total).toBe(101)
+    expect(result.items.filter(row => row.id === null)).toMatchObject([{ matchedCostCny: '0.50000000', drillQuery: { allocation: 'UNALLOCATED' } }])
+    expect(result.items.reduce((sum, row) => sum.plus(row.matchedCostCny), new Decimal(0)).toFixed(8)).toBe('100.50000000')
+    const plan = await db.$transaction(async tx => {
+      // Small fixtures may favor nested loops; check that a linear join is possible independent of planner estimates.
+      await tx.$executeRaw`SET LOCAL enable_nestloop = off`
+      return tx.$queryRaw<any[]>(Prisma.sql`EXPLAIN (ANALYZE, FORMAT JSON) ${selected!}`)
+    })
+    const pairChecks = (node: any): number => Math.max(Number(node['Rows Removed by Join Filter'] || 0) * Number(node['Actual Loops'] || 1), ...(node.Plans || []).map(pairChecks), 0)
+    // 101 groups must not compare all 101 x 101 price pairs. No timing threshold depends on machine speed.
+    expect(pairChecks(plan[0]['QUERY PLAN'][0].Plan)).toBeLessThan(1000)
+  }))
+
+  it('uses the same route-call denominator for cache coverage through every aggregate while retaining request tokens', () => withTestDatabase(async db => {
+    const f = await fixture(db)
+    const log = await f.log({ inputTokens: 50, cachedTokens: 10, costUsd: '3.5' })
+    await f.route(log.id, 1, { usageSnapshot: { source: 'upstream', inputTokens: 100, cachedTokens: 20, outputTokens: 10, reasoningTokens: 0 } })
+    await f.route(log.id, 2, { usageSnapshot: { source: 'upstream', inputTokens: 200, cachedTokens: 40, outputTokens: 10, reasoningTokens: 0 } })
+    await f.route(log.id, 3, { usageSnapshot: { source: 'estimated', inputTokens: 50, cachedTokens: 10, outputTokens: 10, reasoningTokens: 0 } })
+    const coverage = { knownInputTokens: '300', totalInputTokens: '350', unknownCalls: 1 }
+    expect(await f.service.overview(f.actor, range)).toMatchObject({ inputTokens: '50', cachedTokens: '10', costCny: '3.50000000', cacheHitRate: .2, cacheCoverage: coverage })
+    expect(await f.service.timeseries(f.actor, range)).toMatchObject([{ inputTokens: '50', cacheCoverage: coverage }])
+    for (const dimension of ['account', 'channel'] as const) {
+      const filter = { ...range, dimension, ...(dimension === 'channel' ? { channelId: f.channel.id } : {}) }
+      expect((await f.service.breakdown(f.actor, filter)).items[0]).toMatchObject({ cacheCoverage: coverage })
+      expect((await f.service.exportRows(f.actor, filter))[0]).toMatchObject({ cacheCoverage: coverage })
+    }
+    expect(await f.service.overview(f.actor, { ...range, allocation: 'UNALLOCATED' })).toMatchObject({ cacheCoverage: { knownInputTokens: '0', totalInputTokens: '0', unknownCalls: 0 } })
+  }))
+
+  it('reconciles Decimal matched costs across log pages, both CSVs and overview with pending accounting', () => withTestDatabase(async db => {
+    const f = await fixture(db), usage = new UsageController(db as PrismaService), request = { principal: f.actor }
+    for (const [index, cost] of ['0.10000001', '0.20000002', '0.30000003'].entries()) {
+      const log = await f.log({ costUsd: new Decimal(cost).plus('.5').toFixed(8), costSnapshot: { billingState: index === 0 ? 'UNKNOWN' : 'CONFIRMED' } })
+      await f.route(log.id, 1, { costCny: cost })
+    }
+    const filter = { ...range, channelId: f.channel.id }
+    const overview = await f.service.overview(f.actor, filter)
+    const pages = await Promise.all([0, 2].map(offset => usage.logsPage(request, { ...filter, limit: 2, offset })))
+    const rows = pages.flatMap(page => page.items)
+    expect(pages.map(page => page.items.length)).toEqual([2, 1])
+    expect(new Set(rows.map(row => row.id)).size).toBe(3)
+    expect(rows.some(row => row.billingState === 'UNKNOWN')).toBe(true)
+    expect(rows.reduce((sum, row) => sum.plus(row.matchedCostCny), new Decimal(0)).toFixed(8)).toBe('0.60000006')
+    expect(rows.reduce((sum, row) => sum.plus(row.costCny), new Decimal(0)).toFixed(8)).toBe('2.10000006')
+    expect(overview).toMatchObject({ costCny: '0.60000006', requestSuccessRate: 1 })
+    const csvRows = (csv: string) => csv.replace(/^\uFEFF/, '').trim().split('\r\n').map(line => line.slice(1, -1).split('","'))
+    for (const csv of [await usage.exportCsv(request, { ...filter, limit: 2, offset: 2 }), await new AnalyticsController(f.service).exportCsv(request, { ...filter, dimension: 'channel', limit: 2, offset: 2 })]) {
+      const [header, ...records] = csvRows(csv)
+      expect(records.reduce((sum, row) => sum.plus(row[header.indexOf('matchedCostCny')]), new Decimal(0)).toFixed(8)).toBe(overview.costCny)
+    }
+  }))
   it('sorts independent request success oppositely to legacy billing-dependent success without changing the old contract', () => withTestDatabase(async db => {
     const f = await fixture(db)
     const second = await db.publicModel.create({ data: { id: randomUUID(), displayName: 'Partly failed' } })

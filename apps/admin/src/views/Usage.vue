@@ -63,7 +63,7 @@ watch(() => route.query, () => {
   if (!next.start && !next.end) Object.assign(next, defaultCompanyDateRange())
   const key = JSON.stringify(next)
   if (key === lastRoute) return
-  lastRoute = key; draft.value = { ...next, limit: next.limit || '50' }; applied.value = { ...draft.value }; page.value.offset = Number(next.offset) || 0; selectedId.value = null; void load()
+  lastRoute = key; draft.value = { ...next, limit: next.limit || '50' }; applied.value = { ...draft.value }; page.value.limit = Math.min(200, Math.max(1, Math.trunc(Number(next.limit) || 50))); page.value.offset = Number(next.offset) || 0; selectedId.value = null; void load()
 }, { immediate: true, deep: true })
 watch(() => props.groupId, () => { const next = { ...applied.value, ...(props.groupId ? { groupId: props.groupId } : {}) }; apply(next) })
 onMounted(async () => { try { role.value = (await api<any>('/api/v1/auth/me')).role || '' } catch { /* Server scope remains authoritative. */ } })

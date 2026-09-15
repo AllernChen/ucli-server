@@ -58,6 +58,7 @@ function requestMetricsSql(source: MetricSource) {
     COALESCE(SUM(m.unallocated_cost_cny), 0)::numeric AS unallocated_cost_cny,
     COALESCE(SUM(m.known_cached_tokens), 0)::numeric AS known_cached_tokens,
     COALESCE(SUM(m.known_input_tokens), 0)::numeric AS known_input_tokens,
+    COALESCE(SUM(m.input_tokens), 0)::numeric AS cache_total_input_tokens,
     COALESCE(SUM(m.unknown_cache_calls), 0)::bigint AS unknown_cache_calls,
     COALESCE(BOOL_OR(m.token_usage_incomplete), false) AS token_usage_incomplete,
     percentile_cont(0.5) WITHIN GROUP (ORDER BY u.duration_ms) AS p50_latency_ms,
@@ -80,7 +81,8 @@ function metrics(row: any, errorCounts: Array<{ errorCode: string; requests: num
     cachedTokens: numeric(row.cached_tokens), uncachedInputTokens: numeric(row.uncached_input_tokens),
     reasoningTokens: numeric(row.reasoning_tokens),
     cacheHitRate: knownInput.isZero() ? null : knownCached.div(knownInput).toNumber(),
-    cacheCoverage: { knownInputTokens: knownInput.toString(), totalInputTokens: numeric(row.input_tokens), unknownCalls: integer(row.unknown_cache_calls) },
+    // Coverage and cache hit rate describe matched route calls (legacy request usage when no billed routes exist).
+    cacheCoverage: { knownInputTokens: knownInput.toString(), totalInputTokens: numeric(row.cache_total_input_tokens), unknownCalls: integer(row.unknown_cache_calls) },
     estimatedCostCny: money(row.estimated_cost_cny), unallocatedCostCny: money(row.unallocated_cost_cny),
     tokenUsageIncomplete: Boolean(row.token_usage_incomplete), errorCounts,
     costUsd: money(row.cost_usd), currency: 'CNY' as const, costCny: money(row.cost_usd),
@@ -209,7 +211,8 @@ export class AnalyticsService {
       SELECT g.*, p.price_snapshot, p.price_key, p.allocation_kind,
         COALESCE((SELECT jsonb_agg(jsonb_build_object('errorCode', e.error_code, 'requests', e.requests) ORDER BY e.error_code)
           FROM errors e WHERE e.dimension_id IS NOT DISTINCT FROM g.id), '[]'::jsonb) AS error_counts
-      FROM grouped g JOIN prices p ON p.dimension_id IS NOT DISTINCT FROM g.id
+      FROM grouped g JOIN prices p ON COALESCE(p.dimension_id, '') = COALESCE(g.id, '')
+        AND (p.dimension_id IS NULL) = (g.id IS NULL)
       ORDER BY ${Prisma.raw(SORTS[sort])} ${Prisma.raw(order.toUpperCase())}, g.id ASC NULLS LAST LIMIT ${limit} OFFSET ${offset}`)
     return { items: rows.map(row => {
       const price = safePrice(row.price_snapshot)
