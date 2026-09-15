@@ -56,6 +56,7 @@ describe('usage query', () => {
     expect(() => resolveUsageFilter(platform, { apiKeyId: 'key', keyScope: 'NO_KEY' }, now)).toThrow(BadRequestException)
     expect(() => resolveUsageFilter(platform, { channelId: 'channel', allocation: 'UNALLOCATED' }, now)).toThrow(BadRequestException)
     expect(() => resolveUsageFilter(platform, { publicModelId: 'one', model: 'two' }, now)).toThrow(BadRequestException)
+    expect(() => resolveUsageFilter(platform, { channelModelId: '123e4567-e89b-12d3-a456-426614174000', channelModelScope: 'UNASSOCIATED' }, now)).toThrow(BadRequestException)
     expect(resolveUsageFilter(platform, { model: 'legacy' }, now)).toMatchObject({ publicModelId: 'legacy' })
   })
 
