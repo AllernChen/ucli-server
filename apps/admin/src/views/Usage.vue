@@ -25,8 +25,18 @@ const uncached = (input: unknown, cached: unknown) => { const total = integer(in
 const requestState = (value: string) => ({ SUCCESS: '成功', FAILED: '失败', CANCELLED: '已取消', INTERRUPTED: '已中断' }[value] || '未提供')
 const billingState = (value: string) => ({ CONFIRMED: '已确认', ESTIMATED: '估算', UNKNOWN: '待核对', NO_CHARGE: '无费用' }[value] || '未提供')
 const appliedSummary = computed(() => {
-  const labels = [['start', '开始'], ['end', '结束'], ['channelId', '渠道'], ['publicModelId', '模型'], ['channelModelScope', '渠道模型'], ['accountId', '员工'], ['groupId', '用量组'], ['groupScope', '用量组'], ['apiKeyId', '员工 Key'], ['keyScope', '员工 Key'], ['requestId', '请求 ID'], ['billingState', '计费状态']]
-  const values = labels.flatMap(([key, label]) => applied.value[key] ? [`${label}：${applied.value[key]}`] : [])
+  const labels = [['start', '开始'], ['end', '结束'], ['timezone', '时区'], ['organizationId', '组织'], ['accountId', '员工'], ['groupId', '用量组'], ['groupScope', '用量组'], ['apiKeyId', '员工 Key'], ['keyScope', '员工 Key'], ['credentialType', '凭据'], ['publicModelId', '模型'], ['model', '兼容模型'], ['channelId', '渠道'], ['channelModelId', '渠道模型'], ['channelModelScope', '渠道模型'], ['costRuleId', '成本规则'], ['priceKey', '价格快照'], ['requestState', '请求状态'], ['billingState', '计费状态'], ['allocation', '渠道核算'], ['requestId', '请求 ID'], ['sessionId', '会话'], ['projectId', '项目']]
+  const readable = (key: string, value: string) => {
+    if (key === 'credentialType') return value === 'API_KEY' ? '员工 API Key' : value === 'DEVICE' ? 'UCLI 设备' : value
+    if (key === 'requestState') return requestState(value)
+    if (key === 'billingState') return billingState(value)
+    if (key === 'groupScope' && value === 'UNGROUPED') return '历史未归组'
+    if (key === 'keyScope' && value === 'NO_KEY') return '设备凭据'
+    if (key === 'channelModelScope' && value === 'UNASSOCIATED') return '未关联渠道模型'
+    if (key === 'allocation' && value === 'UNALLOCATED') return '未分配到渠道的核算差额'
+    return value
+  }
+  const values = labels.flatMap(([key, label]) => applied.value[key] ? [`${label}：${readable(key, applied.value[key])}`] : [])
   return values.length ? values.join(' · ') : '默认近 7 天'
 })
 async function load() {

@@ -42,6 +42,6 @@ export function usageQuery(filters: Record<string, string | undefined>, pinnedGr
   else if (normalized.groupId) delete normalized.groupScope
   else if (normalized.groupScope) delete normalized.groupId
   const query = new URLSearchParams()
-  for (const [key, value] of Object.entries(normalized)) if (QUERY_FIELDS.has(key) && (value?.trim() || key === 'q' && value !== undefined)) query.set(key, value.trim())
+  for (const [key, value] of Object.entries(normalized)) if (QUERY_FIELDS.has(key) && value?.trim()) query.set(key, value.trim())
   return query.toString()
 }

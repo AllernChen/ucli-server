@@ -1,8 +1,12 @@
 // @vitest-environment happy-dom
 import { expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import 'reflect-metadata'
+import { plainToInstance } from 'class-transformer'
+import { validate } from 'class-validator'
 import { companyDateRange, defaultCompanyDateRange, usageQuery } from '../../apps/admin/src/usage-filters.js'
 import UsageFilters from '../../apps/admin/src/components/UsageFilters.vue'
+import { UsageQueryDto } from '../../apps/api/src/analytics.dto.js'
 
 const state = vi.hoisted(() => ({ api: vi.fn() }))
 vi.mock('../../apps/admin/src/api.js', () => ({ api: state.api }))
@@ -37,7 +41,7 @@ it('preserves route ISO precision until a date input changes and uses analytics 
   await wrapper.get('select').trigger('focus'); await flushPromises()
   expect(state.api.mock.calls[0][0]).toContain('/api/v1/analytics/filter-options?')
   expect(state.api.mock.calls[0][0]).toContain('optionDimension=channel')
-  expect(state.api.mock.calls[0][0]).toContain('q=')
+  expect(new URL('http://local' + state.api.mock.calls[0][0]).searchParams.has('q')).toBe(false)
   await wrapper.get('button').trigger('click')
   expect(wrapper.emitted('apply')![0][0]).toMatchObject({ start: '2026-09-14T16:30:00.000Z', end: '2026-09-15T17:45:00.000Z' })
   wrapper.unmount()
@@ -75,11 +79,23 @@ it('searches and pages the active option dimension through visible controls', as
   state.api.mockResolvedValue({ organizations: [], channels: [], models: [], channelModels: [], accounts: [], costRules: [], groups: [], apiKeys: [], page: { dimension: 'channel', items: [{ id: 'channel-1', name: '渠道一' }], total: 101, limit: 50, offset: 0 } })
   const wrapper = mount(UsageFilters, { props: { modelValue: {}, role: '' } })
   await wrapper.get('[aria-label="渠道筛选"]').trigger('focus'); await flushPromises()
+  const emitted = () => Object.fromEntries(new URL('http://local' + state.api.mock.calls.at(-1)![0]).searchParams) as Record<string, string>
+  expect(emitted()).toEqual({ optionDimension: 'channel', limit: '50', offset: '0' })
+  expect(Object.hasOwn(emitted(), 'q')).toBe(false)
+  expect(await validate(plainToInstance(UsageQueryDto, emitted()))).toHaveLength(0)
+  await wrapper.get('[aria-label="渠道选项下一页"]').trigger('click'); await flushPromises()
+  expect(emitted()).toEqual({ optionDimension: 'channel', limit: '50', offset: '50' })
+  expect(Object.hasOwn(emitted(), 'q')).toBe(false)
+  expect(await validate(plainToInstance(UsageQueryDto, emitted()))).toHaveLength(0)
   await wrapper.get('[aria-label="搜索渠道选项"]').setValue('alpha'); await flushPromises()
   expect(state.api.mock.calls.at(-1)![0]).toContain('optionDimension=channel')
   expect(state.api.mock.calls.at(-1)![0]).toContain('q=alpha')
-  await wrapper.get('[aria-label="渠道选项下一页"]').trigger('click'); await flushPromises()
-  expect(state.api.mock.calls.at(-1)![0]).toContain('offset=50')
+  expect(emitted()).toEqual({ optionDimension: 'channel', q: 'alpha', limit: '50', offset: '0' })
+  expect(await validate(plainToInstance(UsageQueryDto, emitted()))).toHaveLength(0)
+  await wrapper.get('[aria-label="搜索渠道选项"]').setValue(''); await flushPromises()
+  expect(Object.hasOwn(emitted(), 'q')).toBe(false)
+  expect(emitted()).toEqual({ optionDimension: 'channel', limit: '50', offset: '0' })
+  expect(await validate(plainToInstance(UsageQueryDto, emitted()))).toHaveLength(0)
   wrapper.unmount()
 })
 

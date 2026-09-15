@@ -30,6 +30,19 @@ it('shows applied-filter result context and billing state independently', async 
   w.unmount()
 })
 
+it('summarizes every applied data filter without letting a later draft edit replace it', async () => {
+  state.api.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
+  const w = mount(Usage, { global: { stubs: { RouterLink: true } } }); await flushPromises()
+  const filters = w.findComponent(UsageFilters)
+  await filters.vm.$emit('apply', {
+    start: '2026-09-14T16:30:00.000Z', end: '2026-09-15T17:45:00.000Z', timezone: 'Asia/Shanghai', organizationId: 'org', accountId: 'account', groupScope: 'UNGROUPED', keyScope: 'NO_KEY', credentialType: 'API_KEY', model: 'legacy-model', channelId: 'channel', channelModelScope: 'UNASSOCIATED', priceKey: 'a'.repeat(32), requestState: 'FAILED', billingState: 'UNKNOWN', allocation: 'UNALLOCATED', requestId: 'request', sessionId: 'session', projectId: 'project'
+  }); await flushPromises()
+  for (const text of ['开始：2026-09-14T16:30:00.000Z', '时区：Asia/Shanghai', '组织：org', '员工：account', '历史未归组', '设备凭据', '凭据：员工 API Key', '兼容模型：legacy-model', '渠道：channel', '未关联渠道模型', '价格快照：', '请求状态：失败', '计费状态：待核对', '未分配到渠道的核算差额', '请求 ID：request', '会话：session', '项目：project']) expect(w.text()).toContain(text)
+  await filters.vm.$emit('update:modelValue', { requestId: 'draft-only' }); await flushPromises()
+  expect(w.text()).toContain('请求 ID：request'); expect(w.text()).not.toContain('请求 ID：draft-only')
+  w.unmount()
+})
+
 it('keeps draft fields out of the page request, then applies them to URL and ignores an older response', async () => {
   const pending: Array<(value: any) => void> = []
   state.api.mockImplementation((path: string) => {
