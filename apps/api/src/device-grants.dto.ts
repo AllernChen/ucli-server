@@ -1,5 +1,5 @@
 import { Transform, Type } from 'class-transformer'
-import { Allow, IsDateString, IsEmail, IsEnum, IsOptional, IsString, Length, ValidateIf } from 'class-validator'
+import { Allow, IsBoolean, IsDateString, IsEmail, IsEnum, IsOptional, IsString, IsUUID, Length, ValidateIf } from 'class-validator'
 import { Role } from '@prisma/client'
 import { PageQueryDto } from './catalog.dto.js'
 
@@ -20,11 +20,21 @@ export class UpdateManagedUserRoleDto {
 }
 
 export class CreateDeviceGrantDto {
+  @ValidateIf((_, value) => value !== undefined) @IsUUID() groupId?: string
   @IsOptional() @ValidateIf((_, value) => value !== null)
   @IsDateString({ strict: true }) expiresAt?: string | null
 
   @IsOptional() @ValidateIf((_, value) => value !== null)
   @IsDateString({ strict: true }) linkExpiresAt?: string | null
+}
+
+export class AssignDeviceGroupDto {
+  @IsUUID() groupId!: string
+  @IsUUID() accountId!: string
+}
+
+export class DeviceGroupRequirementDto {
+  @IsBoolean() required!: boolean
 }
 
 export class CreateDeviceGrantLinkDto {

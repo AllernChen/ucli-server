@@ -26,6 +26,9 @@ const grantOpen = ref(false)
 const grantPending = ref(false)
 const createdSecret = ref<{ connectionUrl: string } | null>(null)
 const grantForm = reactive({ permanent: true, expiresAt: '' })
+const grantGroupId = ref(''), grantGroups = ref<Array<{ id: string; name: string }>>([]), groupRequired = ref(false), groupLoading = ref(false)
+const groupReady = ref(false)
+let groupRequest = 0
 const linkExpiryForm = reactive<LinkExpiryForm>({ mode: '7d', customExpiresAt: '' })
 const canCreateGrant = computed(() => user.value?.status === 'ACTIVE')
 const grantGate = createExclusiveAsyncRequestGate(pending => { grantPending.value = pending })
@@ -95,23 +98,34 @@ async function load() {
   }
 }
 
-function openGrant() {
+async function openGrant() {
   if (!canCreateGrant.value || grantPending.value) return
   grantError.value = ''
   grantForm.permanent = true
   grantForm.expiresAt = ''
   resetLinkExpiryForm()
   grantOpen.value = true
+  grantGroupId.value = ''; grantGroups.value = []; groupLoading.value = true; groupReady.value = false
+  const request = ++groupRequest
+  const current = currentRouteGeneration; const requestedUserId = userId.value
+  try {
+    const [groups, migration] = await Promise.all([api(`/api/v1/admin/users/${requestedUserId}/usage-groups`), api('/api/v1/admin/device-grants/ungrouped?limit=1')])
+    if (request !== groupRequest || !isCurrentRoute(current, requestedUserId)) return
+    grantGroups.value = groups; groupRequired.value = migration.requireDeviceGroup; groupReady.value = true
+  } catch (e: any) { if (request === groupRequest && isCurrentRoute(current, requestedUserId)) grantError.value = e.message }
+  finally { if (request === groupRequest && isCurrentRoute(current, requestedUserId)) groupLoading.value = false }
 }
 
 function closeGrant() {
   if (grantPending.value) return
+  groupRequest++; groupReady.value = false
   grantOpen.value = false
   grantError.value = ''
 }
 
 async function createGrant() {
-  if (grantPending.value || !canCreateGrant.value) return
+  if (grantPending.value || !groupReady.value || !canCreateGrant.value) return
+  if (groupRequired.value && !grantGroupId.value) { grantError.value = '当前组织要求设备归组，请选择员工所属组'; return }
   const requestedUserId = userId.value
   const routeGeneration = currentRouteGeneration
   let operation = 0
@@ -124,7 +138,7 @@ async function createGrant() {
       operation = requestOperation
       return api<{ connectionUrl: string }>(
         `/api/v1/admin/users/${requestedUserId}/device-grants`,
-        { method: 'POST', body: JSON.stringify({ expiresAt, linkExpiresAt }) }
+        { method: 'POST', body: JSON.stringify({ expiresAt, linkExpiresAt, ...(grantGroupId.value ? { groupId: grantGroupId.value } : {}) }) }
       )
     })
     if (!created || !grantGate.isCurrent(operation) || !isCurrentRoute(routeGeneration, requestedUserId)) return
@@ -175,6 +189,6 @@ onUnmounted(() => {
     <EmployeeKeysPanel :key="userId" :account-id="userId" />
   </template>
 
-  <Drawer :open="grantOpen" title="创建设备授权" description="创建后会显示完整连接链接，请及时复制并安全发送给用户。关闭只会清除当前页面中的副本，之后仍可在授权列表再次查看。" :close-disabled="grantPending" @close="closeGrant"><form id="grant-form" class="stack-form" @submit.prevent="createGrant"><label class="check-row"><input v-model="grantForm.permanent" type="checkbox">永久有效</label><label>有效期<input v-model="grantForm.expiresAt" type="datetime-local" :disabled="grantForm.permanent" :required="!grantForm.permanent"></label><LinkExpiryFields :model-value="linkExpiryForm" @update:model-value="updateLinkExpiryForm" /><p v-if="grantError" class="state error">{{ grantError }}</p></form><template #footer><button type="button" :disabled="grantPending" @click="closeGrant">取消</button><button type="submit" form="grant-form" class="primary" :disabled="grantPending">{{ grantPending ? '正在创建…' : '创建授权' }}</button></template></Drawer>
+  <Drawer :open="grantOpen" title="创建设备授权" description="创建后会显示完整连接链接，请及时复制并安全发送给用户。关闭只会清除当前页面中的副本，之后仍可在授权列表再次查看。" :close-disabled="grantPending" @close="closeGrant"><form id="grant-form" class="stack-form" @submit.prevent="createGrant"><label class="check-row"><input v-model="grantForm.permanent" type="checkbox">永久有效</label><label>有效期<input v-model="grantForm.expiresAt" type="datetime-local" :disabled="grantForm.permanent" :required="!grantForm.permanent"></label><label>用量组<select v-model="grantGroupId" aria-label="设备所属组" :required="groupRequired" :disabled="groupLoading || grantPending"><option value="">{{ groupRequired ? '请选择员工所属组（必选）' : '暂不归组（兼容旧设备）' }}</option><option v-for="g in grantGroups" :key="g.id" :value="g.id">{{ g.name }}</option></select></label><LinkExpiryFields :model-value="linkExpiryForm" @update:model-value="updateLinkExpiryForm" /><p v-if="grantError" class="state error">{{ grantError }}</p></form><template #footer><button type="button" :disabled="grantPending" @click="closeGrant">取消</button><button type="submit" form="grant-form" class="primary" :disabled="grantPending || !groupReady">{{ grantPending ? '正在创建…' : '创建授权' }}</button></template></Drawer>
   <Drawer :open="Boolean(createdSecret)" title="授权创建成功" description="关闭只会清除当前页面中的副本；以后仍可在授权列表中查看当前 URL" @close="clearSecret"><label>连接链接<textarea readonly :value="createdSecret?.connectionUrl || ''" aria-label="完整连接链接"></textarea></label><p v-if="copyError" class="state error">{{ copyError }}</p><template #footer><button type="button" @click="copyConnectionUrl">复制连接链接</button><button type="button" class="primary" @click="clearSecret">关闭</button></template></Drawer>
 </template>

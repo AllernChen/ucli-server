@@ -2,7 +2,8 @@ import { Body, Controller, Delete, Get, Header, Param, Patch, Post, Query, Req, 
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { UuidPipe } from '../../../packages/http/src/uuid.pipe.js'
 import { AuthGuard, Roles } from '../../../packages/security/src/auth.js'
-import { CreateDeviceGrantDto, CreateDeviceGrantLinkDto, DeviceGrantPageQueryDto, UpdateDeviceGrantDto } from './device-grants.dto.js'
+import { AssignDeviceGroupDto, CreateDeviceGrantDto, CreateDeviceGrantLinkDto, DeviceGrantPageQueryDto, DeviceGroupRequirementDto, UpdateDeviceGrantDto } from './device-grants.dto.js'
+import { PageQueryDto } from './catalog.dto.js'
 import { DeviceGrantLinksService } from './device-grant-links.service.js'
 import { DeviceGrantsService } from './device-grants.service.js'
 
@@ -10,6 +11,13 @@ import { DeviceGrantsService } from './device-grants.service.js'
 @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Controller('api/v1/admin')
 export class DeviceGrantsController {
   constructor(private readonly grants: DeviceGrantsService, private readonly links: DeviceGrantLinksService) {}
+
+  @Get('device-grants/ungrouped')
+  ungrouped(@Req() req: any, @Query() query: PageQueryDto) { return this.grants.ungrouped(req.principal.organizationId, query) }
+  @Patch('device-grants/group-requirement')
+  requirement(@Req() req: any, @Body() body: DeviceGroupRequirementDto) { return this.grants.setGroupRequirement(req.principal.organizationId, req.principal.sub, body.required) }
+  @Patch('device-grants/:id/group')
+  assign(@Req() req: any, @Param('id', UuidPipe) id: string, @Body() body: AssignDeviceGroupDto) { return this.grants.assignGroups(req.principal.organizationId, req.principal.sub, [{ grantId: id, ...body }]) }
 
   @Post('users/:userId/device-grants')
   create(@Req() req: any, @Param('userId', UuidPipe) userId: string, @Body() body: CreateDeviceGrantDto) {

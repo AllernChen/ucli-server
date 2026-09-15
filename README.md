@@ -48,6 +48,14 @@ Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/v1/auth/setup `
 
 服务端模型目录通过 `protocols` 声明每个模型可调用的 Gateway 协议。UCLI 必须按 `openai_responses`、`openai_chat` 或 `anthropic_messages` 能力选择模型和端点，不能假设列表首个模型支持 Responses；`GEMINI` 是服务端内部上游/转换协议，仅贡献 `openai_chat`，不是 UCLI 可选择的原生 Gateway 协议。
 
+### 员工 Key 与组预算（未发布）
+
+员工不安装 UCLI 也可持平台 Key 访问网关。每个 Key 固定归属一个员工和一个用量组；组维护成员、模型白名单和人民币采购成本预算，零额度禁止使用，不限额必须显式设置。管理入口为“用量组”“用户详情 → 员工 API Key”“我的接入”，成本分析支持组/员工/Key 等维度。设备归组与强制开关位于“设备授权”和“组织”页面。
+
+公开入口：`/gateway/v1/chat/completions`（Chat）、`/gateway/v1/responses`（Responses）、`/gateway/anthropic/v1/messages`（Messages）；目录为 `/gateway/v1/models` 和 `/gateway/anthropic/v1/models`。三种协议不自动互转，Gemini 仅内部 Chat 文本转换。目录成功不等于具体 CLI 的 `/model`、工具调用全部兼容。
+
+`EMPLOYEE_API_KEYS_ENABLED` 默认关闭，本次没有部署或开启生产入口。配置、迁移与限制见[员工接入](docs/employee-api-access.md)，本地证据和发布前检查见[网关验收记录](docs/employee-gateway-acceptance.md)。
+
 ### 渠道模型运营
 
 - 渠道详情集中维护上游模型映射、Key 和模型级健康记录；采购成本摘要可深链到独立的“采购成本”工作台。
@@ -94,5 +102,5 @@ docker compose up -d --build
 
 - 上游 Key 和连接 URL 使用 AES-256-GCM 加密，主密钥仅由环境注入。
 - 请求正文只在网关内存中转发，不进入使用日志和应用日志。
-- 使用日志只记录组织、账号、设备、匿名会话/项目、模型、Token、费用、延迟、状态和路由信息。
+- 使用日志只记录组织、员工/组/Key 身份及名称快照、设备、匿名会话/项目、模型、Token、费用、延迟、状态和路由信息，不记录凭据明文或请求正文。
 - New API 不属于依赖或分发物，详情见 [ADR-0001](docs/adr/0001-independent-gateway.md)。

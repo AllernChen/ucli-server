@@ -6,7 +6,7 @@ import DeviceGrants from '../../apps/admin/src/views/DeviceGrants.vue'
 import type { DeviceGrantSummary, DeviceGrantUserGroup, Page } from '../../apps/admin/src/device-grants.js'
 
 const state = vi.hoisted(() => ({ api: vi.fn(), push: vi.fn(), toast: vi.fn() }))
-vi.mock('../../apps/admin/src/api.js', () => ({ api: state.api }))
+vi.mock('../../apps/admin/src/api.js', () => ({ api: (path: string, ...args: unknown[]) => path.includes('/device-grants/ungrouped') ? Promise.resolve({ items: [], total: 0, requireDeviceGroup: false }) : state.api(path, ...args) }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: state.push }) }))
 vi.mock('../../apps/admin/src/toast.js', () => ({ toast: state.toast }))
 

@@ -6,9 +6,10 @@ import Drawer from '../../apps/admin/src/components/Drawer.vue'
 import ConfirmDialog from '../../apps/admin/src/components/ConfirmDialog.vue'
 import LinkExpiryFields from '../../apps/admin/src/components/LinkExpiryFields.vue'
 
-const state = vi.hoisted(() => ({ route: null as any, api: vi.fn(), push: vi.fn(), toast: vi.fn() }))
+const state = vi.hoisted(() => ({ route: null as any, api: vi.fn(), groups: vi.fn(), push: vi.fn(), toast: vi.fn() }))
 vi.mock('../../apps/admin/src/api.js', () => ({ api: (path: string, ...args: unknown[]) => {
-  if (path.endsWith('/usage-groups')) return Promise.resolve([])
+  if (path.endsWith('/usage-groups')) return state.groups()
+  if (path.includes('/device-grants/ungrouped')) return Promise.resolve({ items: [], total: 0, requireDeviceGroup: false })
   if (path.includes('/api-keys?')) return Promise.resolve({ items: [], total: 0, offset: 0, limit: 20 })
   return state.api(path, ...args)
 } }))
@@ -112,10 +113,27 @@ describe('UserDetail mounted async behavior', () => {
   beforeEach(() => {
     state.route = reactive({ params: reactive({ id: 'user-1' }) })
     state.api.mockReset()
+    state.groups.mockReset().mockResolvedValue([])
     state.push.mockReset()
     state.toast.mockReset()
   })
   afterEach(() => { document.body.innerHTML = '' })
+
+  it('does not create a device grant when group options fail to load', async () => {
+    state.api.mockResolvedValue(user('user-1'))
+    state.groups.mockRejectedValue(new Error('组列表加载失败'))
+    const wrapper = mount(UserDetail, { attachTo: document.body })
+    await settle()
+    await wrapper.get('header .actions button.primary').trigger('click')
+    await settle()
+    expect(document.body.textContent).toContain('组列表加载失败')
+    const submit = document.querySelector('button[form="grant-form"]') as HTMLButtonElement
+    expect(submit.disabled).toBe(true)
+    document.querySelector('#grant-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await settle()
+    expect(state.api.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false)
+    wrapper.unmount()
+  })
 
   it('creates grants for every active membership role with permanent authorization and the default URL expiry', async () => {
     vi.useFakeTimers()

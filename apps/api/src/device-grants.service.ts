@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { Prisma, Role, type Membership } from '@prisma/client'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import { deriveDeviceGrantStatus, deviceGrantFailure } from '../../../packages/security/src/device-grants.js'
@@ -9,10 +9,13 @@ import { requirePublicUrl } from '../../../packages/security/src/public-url.js'
 import type { CreateDeviceGrantDto, DeviceGrantPageQueryDto, RedeemDeviceGrantDto, UpdateDeviceGrantDto } from './device-grants.dto.js'
 import { DeviceGrantFilter } from './device-grants.dto.js'
 import { DeviceGrantLinksService, type CreatedDeviceGrantLink } from './device-grant-links.service.js'
+import { assertActiveGroupMember, assertDeviceGroup, lockUsageGroup } from '../../../packages/security/src/group-access.js'
 
 type GrantRecord = {
   id: string
   accountId: string
+  groupId?: string | null
+  group?: { name: string } | null
   expiresAt: Date | null
   disabledAt: Date | null
   deletedAt: Date | null
@@ -94,6 +97,7 @@ function serializeGrant(grant: GrantRecord, now: Date) {
   return {
     id: grant.id,
     accountId: grant.accountId,
+    groupId: grant.groupId ?? null, groupName: grant.group?.name ?? null,
     expiresAt: grant.expiresAt,
     disabledAt: grant.disabledAt,
     deletedAt: grant.deletedAt,
@@ -150,11 +154,69 @@ const retryGrantLifecycleMutation = Symbol('retryGrantLifecycleMutation')
 export class DeviceGrantsService {
   constructor(private readonly prisma: PrismaService, private readonly links?: DeviceGrantLinksService) {}
 
+  private async lockOrganization(db: Prisma.TransactionClient, id: string) {
+    const rows = await db.$queryRaw<Array<{ id: string; requireDeviceGroup: boolean }>>(Prisma.sql`
+      SELECT id, require_device_group AS "requireDeviceGroup" FROM organizations WHERE id = ${id}::uuid FOR NO KEY UPDATE
+    `)
+    if (!rows[0]) throw new NotFoundException('Organization not found')
+    return rows[0]
+  }
+
+  private ungroupedWhere(organizationId: string): Prisma.DeviceGrantWhereInput {
+    return { organizationId, groupId: null, deletedAt: null, disabledAt: null, OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] }
+  }
+
+  async ungrouped(organizationId: string, query: { offset: number; limit: number }) {
+    const organization = await this.prisma.organization.findUniqueOrThrow({ where: { id: organizationId } })
+    const where = this.ungroupedWhere(organizationId)
+    const [total, items] = await Promise.all([this.prisma.deviceGrant.count({ where }), this.prisma.deviceGrant.findMany({ where,
+      skip: query.offset, take: query.limit, orderBy: { id: 'asc' }, select: { id: true, accountId: true, deviceId: true, expiresAt: true,
+        account: { select: { displayName: true, email: true } }, device: { select: { name: true } } } })])
+    return { items, total, ...query, requireDeviceGroup: organization.requireDeviceGroup }
+  }
+
+  async setGroupRequirement(organizationId: string, actorId: string, required: boolean) {
+    if (typeof required !== 'boolean') throw new BadRequestException('required must be boolean')
+    return this.prisma.$transaction(async db => {
+      const before = await this.lockOrganization(db, organizationId)
+      if (required && await db.deviceGrant.count({ where: this.ungroupedWhere(organizationId) })) {
+        throw new ConflictException('仍有未归组的有效设备授权（含待绑定）；请先归组或撤销')
+      }
+      await db.organization.update({ where: { id: organizationId }, data: { requireDeviceGroup: required } })
+      await db.auditLog.create({ data: { organizationId, actorAccountId: actorId, action: 'organization.device_group_requirement',
+        resourceType: 'organization', resourceId: organizationId, metadata: { before: before.requireDeviceGroup, after: required } } })
+      return { requireDeviceGroup: required }
+    })
+  }
+
+  async assignGroups(organizationId: string, actorId: string, mappings: Array<{ grantId: string; accountId: string; groupId: string }>, dryRun = false) {
+    if (!mappings.length || mappings.length > 1000 || new Set(mappings.map(m => m.grantId)).size !== mappings.length) throw new BadRequestException('Use 1–1000 distinct grants')
+    return this.prisma.$transaction(async db => {
+      await this.lockOrganization(db, organizationId)
+      for (const groupId of [...new Set(mappings.map(m => m.groupId))].sort()) await lockUsageGroup(db, organizationId, groupId)
+      for (const item of [...mappings].sort((a, b) => a.grantId.localeCompare(b.grantId))) {
+        const grant = await db.deviceGrant.findFirst({ where: { id: item.grantId, organizationId, accountId: item.accountId, deletedAt: null } })
+        if (!grant) throw new NotFoundException('Device grant ownership does not match')
+        if (grant.groupId) throw new ConflictException('已归组授权不可改组，请重新签发')
+        await assertActiveGroupMember(db, { organizationId, accountId: item.accountId, groupId: item.groupId })
+        if (!dryRun) {
+          const updated = await db.deviceGrant.updateMany({ where: { id: grant.id, organizationId, accountId: item.accountId, groupId: null, deletedAt: null }, data: { groupId: item.groupId } })
+          if (updated.count !== 1) throw new ConflictException('Device grant changed; reload before assigning')
+          await this.writeAudit(db, actorId, organizationId, grant.id, 'assign_group', { accountId: item.accountId, before: null, after: item.groupId })
+        }
+      }
+      return { dryRun, count: mappings.length, mappings }
+    }, { timeout: 30_000 })
+  }
+
   async create(organizationId: string, actorId: string, accountId: string, input: CreateDeviceGrantDto) {
     const expiresAt = parseExpiry(input.expiresAt, false)
     const links = this.links ?? new DeviceGrantLinksService()
     const credential = links.prepareCredential()
     const grant = await this.prisma.$transaction(async transaction => {
+      const organization = await this.lockOrganization(transaction, organizationId)
+      if (input.groupId) await lockUsageGroup(transaction, organizationId, input.groupId)
+      await assertDeviceGroup(transaction, { organizationId, accountId, groupId: input.groupId }, organization.requireDeviceGroup)
       const eligibility = await transaction.$queryRaw<Array<{
         membershipStatus: string
         accountStatus: string
@@ -169,7 +231,7 @@ export class DeviceGrantsService {
         JOIN "organizations" o ON o."id" = m."organization_id"
         WHERE m."organization_id" = ${organizationId}::uuid
           AND m."account_id" = ${accountId}::uuid
-        FOR UPDATE OF m, a, o
+        FOR NO KEY UPDATE OF m, a, o
       `)
       const target = eligibility[0]
       if (!target) throw new NotFoundException('Managed user not found')
@@ -179,13 +241,13 @@ export class DeviceGrantsService {
       const linkExpiresAt = parseLinkExpiry(input.linkExpiresAt, new Date())
       const origin = requirePublicUrl()
       const created = await transaction.deviceGrant.create({ data: {
-        organizationId, accountId, createdById: actorId, expiresAt
+        organizationId, accountId, createdById: actorId, expiresAt, groupId: input.groupId
       }, select: { id: true, expiresAt: true } })
       const link = await links.createInTransaction(transaction, {
         organizationId, actorId, grantId: created.id, expiresAt: linkExpiresAt, action: 'create', credential
       })
       await this.writeAudit(transaction, actorId, organizationId, created.id, 'create', {
-        outcome: 'success', secretHint: link.secretHint, expiresAt: created.expiresAt
+        outcome: 'success', secretHint: link.secretHint, expiresAt: created.expiresAt, groupId: input.groupId ?? null
       })
       return { created, link, origin }
     })
@@ -212,6 +274,7 @@ export class DeviceGrantsService {
       where: { organizationId_accountId: { organizationId: grant.organizationId, accountId: grant.accountId } }
     })
     this.assertEligibleGrant(grant, membership)
+    await assertDeviceGroup(this.prisma, grant, grant.organization.requireDeviceGroup)
     return {
       account: { id: grant.account.id, displayName: grant.account.displayName },
       organization: { id: grant.organization.id, name: grant.organization.name },
@@ -252,6 +315,7 @@ export class DeviceGrantsService {
         })
         if (!grant) throw grantException('invalid_link')
         knownGrant = grant
+        await assertDeviceGroup(transaction, grant, grant.organization.requireDeviceGroup)
         const now = new Date()
         const linkFailure = deviceGrantLinkFailure(link, now)
         if (linkFailure && linkFailure !== 'link_consumed') throw grantException(linkFailure)
@@ -359,7 +423,7 @@ export class DeviceGrantsService {
     const grants = accountIds.length ? await this.prisma.deviceGrant.findMany({
       where: { ...grantWhere, accountId: { in: accountIds } }, orderBy: { createdAt: 'desc' },
       select: {
-        id: true, accountId: true, expiresAt: true, disabledAt: true, deletedAt: true,
+        id: true, accountId: true, groupId: true, group: { select: { name: true } }, expiresAt: true, disabledAt: true, deletedAt: true,
         boundAt: true, deviceId: true, createdById: true, createdAt: true, updatedAt: true,
         links: { orderBy: { issuanceOrder: 'desc' }, take: 1, select: {
           id: true, secretHint: true, expiresAt: true, revokedAt: true, consumedAt: true, createdAt: true, issuanceOrder: true
@@ -470,11 +534,13 @@ export class DeviceGrantsService {
 
   private async auditLifecycle(organizationId: string, actorId: string, grantId: string, action: string, data: Record<string, unknown>, metadata: Record<string, unknown>) {
     await this.prisma.$transaction(async transaction => {
+      const organization = await this.lockOrganization(transaction, organizationId)
       const grant = await transaction.deviceGrant.findFirst({ where: { id: grantId, organizationId, deletedAt: null }, select: {
-        id: true,
+        id: true, accountId: true, groupId: true,
         links: { orderBy: { issuanceOrder: 'desc' }, take: 1, select: { secretHint: true } }
       } })
       if (!grant) throw new NotFoundException('Device grant not found')
+      await assertDeviceGroup(transaction, { organizationId, accountId: grant.accountId, groupId: grant.groupId }, organization.requireDeviceGroup)
       const updated = await transaction.deviceGrant.updateMany({ where: { id: grantId, organizationId, deletedAt: null }, data })
       if (updated.count !== 1) throw new NotFoundException('Device grant not found')
       await this.writeAudit(transaction, actorId, organizationId, grantId, action, { outcome: 'success', secretHint: grant.links[0]?.secretHint ?? null, ...metadata })

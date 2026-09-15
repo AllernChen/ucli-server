@@ -60,6 +60,7 @@ function makeHarness(overrides: { prisma?: Record<string, any>; quota?: Record<s
     channel: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     account: { findUniqueOrThrow: vi.fn().mockResolvedValue({ displayName: 'Employee' }) },
     usageGroup: { findUniqueOrThrow: vi.fn().mockResolvedValue({ name: 'Group' }) },
+    employeeApiKey: { findUniqueOrThrow: vi.fn().mockResolvedValue({ name: 'CLI key', secretHint: 'ucli…test' }) },
     ...overrides.prisma
   }
   const quota = {
@@ -93,6 +94,7 @@ describe('gateway service orchestration', () => {
     else await expect(call).rejects.toMatchObject({ status: 503 })
     const data = (success ? budget.settle : budget.hold).mock.calls[0][1].usage
     expect(data).toMatchObject({ credentialType: 'API_KEY', apiKeyId: 'employee-key', groupId: 'group-1', deviceId: null, accountId: 'acct1' })
+    expect(data.actorSnapshot).toMatchObject({ keyName: 'CLI key', keyHint: 'ucli…test' })
   })
 
   it('denies manually requested models outside the group before routing upstream', async () => {

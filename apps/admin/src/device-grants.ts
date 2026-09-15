@@ -91,6 +91,8 @@ export interface ManagedDevice {
 }
 
 export interface DeviceGrantSummary {
+  groupId?: string | null
+  groupName?: string | null
   id: string
   accountId: string
   currentLink: DeviceGrantLinkSummary | null

@@ -34,7 +34,7 @@ export function prepareBudgetRequest(protocol: GatewayProtocol, input: Record<st
   const textOnly = (value: any): boolean => {
     if (value == null || typeof value !== 'object') return true
     if (Array.isArray(value)) return value.every(textOnly)
-    if (value.type && !['text', 'input_text', 'output_text', 'message', 'tool_use', 'tool_result', 'function_call', 'function_call_output', 'thinking', 'redacted_thinking'].includes(value.type)) return false
+    if (value.type && !['text', 'input_text', 'output_text', 'message', 'tool_use', 'tool_result', 'function', 'function_call', 'function_call_output', 'thinking', 'redacted_thinking'].includes(value.type)) return false
     return Object.entries(value).every(([key, child]) => !['image_url', 'audio', 'file_id', 'cache_control', 'attachments'].includes(key) && (['input', 'arguments'].includes(key) ? true : textOnly(child)))
   }
   if (!textOnly(content) || !textOnly(body.system) || body.previous_response_id || body.conversation || body.audio || body.modalities?.some((v: string) => v !== 'text') ||

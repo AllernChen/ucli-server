@@ -2,6 +2,8 @@
 import { onMounted, ref } from 'vue'
 import { api } from '../api'
 import { toast } from '../toast'
+import DeviceGroupMigration from '../components/DeviceGroupMigration.vue'
+const migrationOrg = ref('')
 
 const loading = ref(true)
 const error = ref('')
@@ -34,6 +36,8 @@ onMounted(load)
   <p v-if="loading" class="state">正在加载…</p>
   <p v-else-if="error" class="state error">{{ error }}</p>
   <template v-else>
+    <section class="panel"><label>设备归组要求<select v-model="migrationOrg"><option value="">请选择组织</option><option v-for="org in orgs" :key="org.id" :value="org.id">{{ org.name }}</option></select></label></section>
+    <DeviceGroupMigration v-if="migrationOrg" :organization-id="migrationOrg" />
     <section class="panel form-panel">
       <h2>新建组织</h2>
       <div class="form-row">

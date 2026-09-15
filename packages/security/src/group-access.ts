@@ -3,6 +3,11 @@ import { Prisma } from '@prisma/client'
 
 export interface GroupIdentity { organizationId: string; accountId: string; groupId: string }
 
+export async function assertDeviceGroup(db: Prisma.TransactionClient, identity: Omit<GroupIdentity, 'groupId'> & { groupId?: string | null }, required: boolean) {
+  if (identity.groupId) return assertActiveGroupMember(db, { ...identity, groupId: identity.groupId })
+  if (required) throw new ForbiddenException({ code: 'group_required', message: 'Device must be assigned to a usage group' })
+}
+
 export async function assertActiveGroupMember(db: Prisma.TransactionClient, identity: GroupIdentity) {
   const member = await db.groupMember.findFirst({ where: {
     organizationId: identity.organizationId, accountId: identity.accountId, groupId: identity.groupId, removedAt: null,

@@ -6,6 +6,7 @@ import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import { hashOpaqueToken } from '../../../packages/security/src/tokens.js'
 import { authorizationFailure, signAccessToken, type AuthPrincipal } from '../../../packages/security/src/auth.js'
 import { deviceGrantFailure } from '../../../packages/security/src/device-grants.js'
+import { assertDeviceGroup } from '../../../packages/security/src/group-access.js'
 
 @Injectable()
 export class AuthService {
@@ -80,6 +81,7 @@ export class AuthService {
       if (!device.organization.enabled) throw authorizationFailure('organization_inactive')
       const membership = device.account.memberships.find(item => item.organizationId === device.organizationId)
       if (!membership || membership.status !== 'ACTIVE') throw authorizationFailure('account_inactive')
+      await assertDeviceGroup(transaction, { organizationId: device.organizationId, accountId: device.accountId, groupId: device.grant.groupId }, device.organization.requireDeviceGroup)
       const nextRefreshToken = randomBytes(32).toString('base64url')
       const rotated = await transaction.device.updateMany({ where: { id: device.id, refreshTokenHash: oldRefreshTokenHash }, data: {
         refreshTokenHash: hashOpaqueToken(nextRefreshToken), lastSeenAt: now

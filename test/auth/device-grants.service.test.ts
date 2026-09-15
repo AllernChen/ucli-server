@@ -149,7 +149,8 @@ function makeGrantHarness(options: { bound?: boolean; membershipStatus?: string;
     },
     $queryRaw: async (query: any) => {
       const sql = query.strings?.join('') || ''
-      if (sql.includes('memberships') && sql.includes('FOR UPDATE OF m, a, o')) {
+      if (sql.includes('FROM organizations WHERE')) return [{ ...state.organization, requireDeviceGroup: false }]
+      if (sql.includes('memberships') && sql.includes('FOR NO KEY UPDATE OF m, a, o')) {
         calls.eligibilityLocks.push(query.values)
         if (options.eligibilityLockTime) vi.setSystemTime(options.eligibilityLockTime)
         const [organizationId, accountId] = query.values
