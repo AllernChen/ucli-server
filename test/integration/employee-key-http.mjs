@@ -43,11 +43,13 @@ process.env.REDIS_URL = redisUrl.href
 const redis = new Redis(redisUrl.href)
 const received = []
 let upstreamDelay = 0
+let cliUpstream
 const upstream = createServer(async (req, res) => {
   const chunks = []
   for await (const chunk of req) chunks.push(chunk)
   const body = JSON.parse(Buffer.concat(chunks).toString())
   received.push({ headers: req.headers, body })
+  if (cliUpstream) return cliUpstream(req, res, body)
   if (upstreamDelay) await delay(upstreamDelay)
   if (body.stream) {
     res.setHeader('content-type', 'text/event-stream')
@@ -72,6 +74,14 @@ Module({ controllers: [AuthController, DeviceGrantsController, UsageGroupsContro
   EmployeeKeysService, UsageGroupsService, ModelCatalogService, GatewayService, GroupBudgetService, { provide: PrismaService, useValue: db },
   RedisQuotaService] })(KeyTestModule)
 const app = await NestFactory.create(KeyTestModule, { logger: false })
+const cliRequests = []
+app.use((req, res, next) => {
+  res.once('finish', () => {
+    if (cliUpstream) cliRequests.push({ method: req.method, path: req.path, status: res.statusCode,
+      requestId: res.getHeader('x-ucli-request-id'), bodyKeys: Object.keys(req.body || {}) })
+  })
+  next()
+})
 app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
 app.useGlobalInterceptors(new JsonSafeInterceptor())
 try {
@@ -218,6 +228,12 @@ try {
   await app.get(GroupBudgetService).adjust(a.actor, otherGroup.id, { operationId: randomUUID(), scope: 'CURRENT', limitCny: '0.00000700', unlimited: false, reason: 'Exhausted budget' })
   assert.equal((await request('/v1/chat/completions', 'POST', validChat, otherKey.secret)).status, 429)
   assert.equal(await redis.get(`concurrency:${a.organization.id}:${employee.id}:*`), '0')
+  if (process.env.UCLI_TEST_REAL_CLI === '1') {
+    const { runCliAcceptance } = await import('./employee-cli.mjs')
+    await runCliAcceptance({ base, db, key, models, groupId: group.id, requests: cliRequests,
+      setUpstream: handler => { cliUpstream = handler } })
+    cliUpstream = undefined
+  }
   await request(`/api/v1/admin/employee-api-keys/${key.id}/disable`, 'POST')
   assert.equal((await request('/v1/models', 'GET', undefined, key.secret)).status, 401)
   await request(`/api/v1/admin/employee-api-keys/${key.id}/enable`, 'POST')

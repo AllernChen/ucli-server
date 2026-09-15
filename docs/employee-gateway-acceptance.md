@@ -1,6 +1,6 @@
 # 员工网关与组预算验收记录
 
-日期：2026-09-15。分支：`codex/group-access`。本轮完成 Tasks 8–10 的源码和本地自动验收；未合并、推送、部署、连接公司中间件或调用付费上游。真实客户端与部署验收仍待执行。
+日期：2026-09-15。分支：`codex/group-access`。已完成 Tasks 8–10 的源码、本地自动验收和真实 CLI 的本地模拟上游验收；未合并、推送、部署、连接公司中间件或调用付费上游。真实采购渠道与部署验收仍待执行。
 
 ## 本地结果
 
@@ -56,13 +56,48 @@ npm run verify
 
 ## 实际 CLI 状态
 
-| 客户端 | 本机版本 | 待验证协议 | 状态 / 请求 ID |
+| 客户端 | 本机版本 | 已测协议 | 状态 |
 | --- | --- | --- | --- |
-| Claude Code | 2.1.268（仅执行 `--version`） | Anthropic Messages | 未实测；无 CLI 请求 ID |
-| OpenCode | 1.18.23（仅执行 `--version`） | 选定 provider 的 OpenAI Chat | 未实测；无 CLI 请求 ID |
+| Claude Code | 2.1.268 | Anthropic Messages | 非交互 `/model` 发起目录请求并成功；缓存关闭后文本流、Read 工具结果往返通过 |
+| OpenCode | 1.18.23 | `@ai-sdk/openai-compatible` / Chat | `models ucli` 列出配置模型；文本流、read 工具结果往返通过 |
 | UCLI 客户端 | 未启动客户端 | 依模型声明选择 | 设备 JWT 的 HTTP 回归通过，客户端界面未实测 |
 
-下一轮使用明确的 CLI 版本、测试模型和测试 Key，记录 `/model`、普通/流式、工具调用/结果回传、usage/cost 和每次 request ID；目录发现不能替代对话验收。只有明确授权才运行真实渠道付费测试。接入配置和协议限制见[员工接入](employee-api-access.md)。
+### 真实 CLI 本地验收补充
+
+复用 HTTP E2E 的编译产物、实际员工 Key、真实 PG/Redis 和本地模拟上游，增加可选 `employee-cli.mjs`，默认测试及 CI 不启动 CLI。每轮使用新临时目录，隔离 Claude 配置和 OpenCode 的 XDG 配置/数据/缓存，不读取日常 API Key、插件或项目；不启用权限绕过，只让工具读取本轮临时 `probe.txt`。模拟上游请求读文件后，必须收到文件内随机标记才返回 `UCLI_TOOL_OK`，避免仅凭工具调用事件判断成功。
+
+Claude 用 `--bare` 做对话测试，用 `--safe-mode --setting-sources ""` 执行非交互 `/model`。后者确实请求 `/anthropic/v1/models`（200），未验证交互式 picker 画面或磁盘缓存；短时非交互命令没有留下官方文档所述缓存文件，不能据此认定过滤后的 picker 已验收。模型使用明确标记的 `claude-ucli-local-*` 合成测试条目，未重命名任何真实供应商模型。
+
+真实调用证据（本轮每笔服务端采购成本 ¥0.00000700）：
+
+| 客户端场景 | 请求 ID |
+| --- | --- |
+| Claude 文本流 | `fba4c1c4-97a5-40ad-9b73-3a0f5dc8d109` |
+| Claude 工具调用 / 结果回传 | `2f9a064a-90d5-48a6-a780-24ac90316801` / `e440c80e-546e-4f60-b9fd-a5f51649fe44` |
+| OpenCode 文本流（含额外辅助请求） | `187dbde1-2fb4-4d96-922e-bc35ca6c499e` / `07f38703-6b69-4c0f-8b18-803f8a9c1ebb` |
+| OpenCode 工具（辅助 / 调用 / 回传） | `b4826a98-7181-4a67-80eb-f11ecb8dce56` / `d32d4487-4be6-43a0-af09-ccdf669030dd` / `fc5e81ca-420e-4696-a187-c2a1e986b2ef` |
+
+共 8 条成功日志，组预算新增 ¥0.00005600，与日志合计一致。各日志断言了真实员工 Key/组归属和采购成本；客户端显示的金额不是该账本依据。原始脱敏输出保存在本地忽略目录 `data/employee-cli-acceptance.json`（后续复跑覆盖）。
+
+明确边界：
+
+- Claude 默认提示缓存请求返回 400 `unsupported_budget_estimation`，请求 ID `35e9e95a-7a11-4389-9b49-ac7040027b12`，未形成收费日志。设置 `DISABLE_PROMPT_CACHING=1` 关闭客户端提示缓存后成功。没有扩展缓存写入价格模型，也未删除网关校验。
+- 验收使用 `CLAUDE_CODE_MAX_OUTPUT_TOKENS=1024` 和 `MAX_THINKING_TOKENS=0`；文本与文件读取工具通过，不代表图像、所有内建工具、缓存写入或全部扩展支持。两款 CLI 均实际发送流式请求，非流式 HTTP 已在前述 E2E 覆盖。
+- Claude 的 `HEAD /api/hello` 预热 404 未影响对话；目录请求没有网关推理 request ID。OpenCode 的 `models ucli` 只读自身 provider 配置，未调用网关目录，不应称为自动发现。
+- 本地失败首轮的 Key 已显式撤销；修正清理字段后最终轮通过并由父 E2E 撤销 Key。首轮临时目录 `ucli-cli-acceptance-I0WEl4` 的手动删除被工具策略阻止，保留于系统 Temp；最终轮自己的临时配置已清理。
+- 本轮仅修改测试及接入/验收文档，未改变生产功能；类型检查、脚本语法检查和 12 项协议/预算定向回归通过，完整 HTTP 加真实 CLI 验收脚本退出码为 0。上文 652 项覆盖率是上一轮完整记录。
+
+复跑方式（先配置本地 TEST_DATABASE_URL / TEST_REDIS_URL 并构建）：
+
+```powershell
+$env:UCLI_TEST_REAL_CLI = '1'
+$env:UCLI_TEST_CLAUDE_EXE = '<本机 claude 可执行文件绝对路径>'
+$env:UCLI_TEST_OPENCODE_EXE = '<本机 opencode 可执行文件绝对路径>'
+node --import tsx test/integration/employee-key-http.mjs
+Remove-Item Env:UCLI_TEST_REAL_CLI
+```
+
+发现/配置合同参考：[Claude 网关协议](https://code.claude.com/docs/en/llm-gateway-protocol#model-discovery)、[Claude 环境变量](https://code.claude.com/docs/en/env-vars)、[OpenCode 配置](https://opencode.ai/docs/config/#enabled-providers)（2026-09-15 核对）。后续仍需交互 picker、真实渠道和 Docker 部署链路验收；付费调用须单独授权。接入配置见[员工接入](employee-api-access.md)。
 
 ## 设备归组演练与发布顺序
 

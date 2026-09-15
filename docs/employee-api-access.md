@@ -54,12 +54,18 @@ Invoke-RestMethod -Method Post -Uri "$base/gateway/v1/chat/completions" `
 $env:ANTHROPIC_BASE_URL = 'https://ucli.company.example/gateway/anthropic'
 $env:ANTHROPIC_API_KEY = $env:UCLI_API_KEY
 $env:CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = '1'
+# 当前组预算尚不支持缓存写入计价，必须关闭客户端提示缓存
+$env:DISABLE_PROMPT_CACHING = '1'
+# 首次验收使用小输出上限，之后按模型上下文和组预算调整
+$env:CLAUDE_CODE_MAX_OUTPUT_TOKENS = '1024'
 claude
 ```
 
 清理旧的、不同值的 `ANTHROPIC_AUTH_TOKEN`，避免与新 Key 冲突。当前官方文档说明：发现请求使用 `/v1/models?limit=1000`，超时为 3 秒；客户端筛选包含 `claude` 或 `anthropic` 的 ID。因此 DeepSeek 目录正常，不代表一定自动出现在 Claude Code 的 `/model` 中。不要修改厂商名称或伪造模型 ID 绕过筛选。发现行为还受客户端版本及受管配置影响。[Claude Code 官方网关协议说明](https://code.claude.com/docs/en/llm-gateway-protocol#model-discovery)（2026-09-14 核对）。
 
-服务端保留请求体，并向 Messages 上游透传 `anthropic-version`、`anthropic-beta`；认证头始终替换成采购渠道凭据。本次没有实现所有 Claude 扩展接口或任意 `anthropic-*` 头透传，不能宣称完整 Claude Code 兼容。具体 CLI 版本、工具调用和工具结果回传尚未实测。
+服务端保留请求体，并向 Messages 上游透传 `anthropic-version`、`anthropic-beta`；认证头始终替换成采购渠道凭据。本次没有实现所有 Claude 扩展接口或任意 `anthropic-*` 头透传，不能宣称完整 Claude Code 兼容。
+
+2026-09-15 已用真实 Claude Code 2.1.268 连接本地网关/模拟上游验证：关闭提示缓存后的文本流与 Read 工具往返成功，非交互 `/model` 触发真实目录请求并返回 200。未验收交互模型选择器画面。默认缓存请求实际返回 400 `unsupported_budget_estimation`；不能把缓存读费率当作缓存写入费率，也不在网关偷偷删除 `cache_control`。`DISABLE_PROMPT_CACHING=1` 是官方客户端开关，见[环境变量说明](https://code.claude.com/docs/en/env-vars)（2026-09-15 核对）。验收时另用 `MAX_THINKING_TOKENS=0` 关闭推理，未覆盖全部推理/缓存扩展。
 
 ## OpenCode
 
@@ -84,7 +90,9 @@ Chat 模型可配置自定义 provider；将 `your-platform-model-id` 换成目�
 }
 ```
 
-OpenCode 自定义 provider 的模型列表需要配置，不能假定只填地址就会自动导入所有模型。Responses 模型需使用对应适配器，不能使用 Chat 适配器代替。[OpenCode 官方自定义 Provider 说明](https://opencode.ai/docs/providers/#custom-provider)（2026-09-14 核对）。当前未运行真实 OpenCode 客户端验收。
+OpenCode 自定义 provider 的模型列表需要配置，不能假定只填地址就会自动导入所有模型。Responses 模型需使用对应适配器，不能使用 Chat 适配器代替。[OpenCode 官方自定义 Provider 说明](https://opencode.ai/docs/providers/#custom-provider)（2026-09-14 核对）。2026-09-15 已用 OpenCode 1.18.23 验证 `models ucli`、Chat 文本流与 read 工具往返；本地模拟上游通过，未测试真实付费模型或该客户端的 Responses 适配器。
+
+CLI 可能自行估算美元费用，或因为自定义 provider 没有价格而显示零；这些不是平台采购成本。本次 Claude 显示其默认美元估价、OpenCode 显示零，但服务端每笔均按测试采购价计 ¥0.00000700。组预算和公司统计只使用服务端人民币账本，切勿以 CLI 本地金额对账。
 
 ## 管理接口与故障
 

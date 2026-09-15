@@ -580,3 +580,10 @@ await expect(guard.canActivate(context)).rejects.toMatchObject({
 - 新增 docs/employee-gateway-acceptance.md 保存准确证据、HTTP request ID、迁移与灰度步骤。Claude Code 2.1.268、OpenCode 1.18.23 仅检查版本，真实客户端 /model、工具调用和公司付费渠道未实测；Vue 挂载交互验证不替代真人浏览器视觉验收。保留默认生产入口关闭，不自动合并/推送/部署。
 
 当前阶段一至四源码与本地自动测试已实现；部署链路和外部 CLI 验收仍待执行。源码完成不代表生产发布，验证结果与未完成边界见各阶段执行记录及验收文档。
+
+### 真实 CLI 本地验收续记（2026-09-15）
+
+- Claude Code 2.1.268 与 OpenCode 1.18.23 已通过真实客户端 → 本地网关 → 模拟上游的文本流和读取文件工具往返。复用 HTTP E2E，增加显式启用的 employee-cli.mjs；隔离配置，不读取日常 Key，不调用公司渠道。8 笔日志成本与预算增量均为 ¥0.00005600。
+- Claude 非交互 /model 确实请求目录且返回 200；OpenCode models ucli 列出配置模型。未验证交互 picker UI 或 Claude 磁盘缓存，不把目录成功扩大为全功能兼容。
+- 默认 Claude 缓存请求因未支持缓存写入估价被 400 拒绝，设置 DISABLE_PROMPT_CACHING=1 后成功，文档已补配置与输出限制。CLI 自带美元/零成本显示不是平台人民币采购账本；没有为验收放宽权限或计费检查。
+- 本轮只修改测试和文档，类型检查、脚本语法、12 项定向回归及包含真实 CLI 的完整 HTTP 脚本通过。实际采购模型、UCLI 客户端 UI 和 Docker 发布验证仍待完成，不合并、推送或部署。
