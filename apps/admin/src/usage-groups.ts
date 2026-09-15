@@ -3,6 +3,7 @@ export interface UsageGroup {
   id: string; name: string; description?: string; type: 'PROJECT' | 'DEPARTMENT'; enabled: boolean; archivedAt: string | null
   budgetMode: 'TOTAL' | 'MONTHLY'; budgetTimezone: string; unlimited: boolean; defaultLimitCny: string
   _count?: { members: number; models: number }
+  budget: GroupBudget; activeMembers: number; activeKeys: number
 }
 export interface GroupBudget {
   groupId: string; periodId: string | null; periodKey: string; budgetMode: 'TOTAL' | 'MONTHLY'; budgetTimezone: string

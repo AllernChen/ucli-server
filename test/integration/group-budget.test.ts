@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { PrismaClient } from '@prisma/client'
 import { GroupBudgetService } from '../../packages/quota/src/group-budget.service.js'
+import { readGroupBudgets } from '../../packages/quota/src/group-budget-read.js'
 import { PrismaService } from '../../packages/database/src/prisma.service.js'
 import { createOrganization, withTestDatabase } from './database.js'
 
@@ -24,6 +25,21 @@ async function fixture(db: PrismaClient, limit = '1', mode: 'TOTAL' | 'MONTHLY' 
 }
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('persistent group budget (PostgreSQL)', () => {
+  it('batch reads original reserve, hold and settle accounting without writing', () => withTestDatabase(async db => {
+    const f = await fixture(db, '2')
+    const held = await f.reserve('1'); await f.reserve('0.25')
+    await f.service.hold(held, { actualCny: '0.2', unresolvedCny: '0.5', usage: f.usage(held.requestId, '0.2'), reason: 'Timed out' })
+    const read = async () => (await readGroupBudgets(db, f.actor.organizationId, [f.group.id])).get(f.group.id)
+    const entries = await db.groupBudgetEntry.count({ where: { groupId: f.group.id } })
+    expect(await read()).toMatchObject({ spentCny: '0.20000000', reservedCny: '0.75000000', uncertainCny: '0.50000000', availableCny: '1.05000000' })
+    expect(await f.service.summary(f.actor, f.group.id)).toEqual(await read())
+    expect(await db.groupBudgetEntry.count({ where: { groupId: f.group.id } })).toBe(entries)
+    await f.service.settle(held, { actualCny: '2.1', usage: f.usage(held.requestId, '2.1') })
+    expect(await read()).toMatchObject({ spentCny: '2.10000000', reservedCny: '0.25000000', uncertainCny: '0.00000000', availableCny: '-0.35000000' })
+    const other = await createOrganization(db)
+    await expect(f.service.summary(other.actor, f.group.id)).rejects.toMatchObject({ status: 404 })
+    await expect(f.service.summary({ ...f.actor, role: 'MEMBER' }, f.group.id)).rejects.toMatchObject({ status: 403 })
+  }))
   it('serializes competing reservations and keeps zero distinct from unlimited', () => withTestDatabase(async db => {
     const f = await fixture(db)
     const results = await Promise.allSettled([f.reserve(), f.reserve()])

@@ -6,10 +6,138 @@ import { createOrganization, withTestDatabase } from './database.js'
 import { DeviceGrantsService } from '../../apps/api/src/device-grants.service.js'
 import { DeviceGrantLinksService } from '../../apps/api/src/device-grant-links.service.js'
 import { createDeviceGrantLinkCredential } from '../../packages/security/src/device-grant-links.js'
+import { UsageGroupPageQueryDto } from '../../apps/api/src/usage-groups.dto.js'
+import { plainToInstance } from 'class-transformer'
+import { validateSync } from 'class-validator'
 
-afterEach(() => vi.unstubAllEnvs())
+afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers() })
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('group management (PostgreSQL)', () => {
+  it('validates risk filters', () => {
+    expect(validateSync(plainToInstance(UsageGroupPageQueryDto, { budgetRisk: 'typo' }))).not.toEqual([])
+    for (const budgetRisk of ['NEAR_LIMIT', 'EXHAUSTED', 'UNSETTLED', 'ATTENTION']) {
+      expect(validateSync(plainToInstance(UsageGroupPageQueryDto, { budgetRisk }))).toEqual([])
+    }
+  })
+
+  it('filters risk before pagination with true totals and severity, name, id ordering', () => withTestDatabase(async db => {
+    const { actor } = await createOrganization(db); const other = await createOrganization(db)
+    const service = new UsageGroupsService(db as PrismaService)
+    const create = async (name: string, limit: string, spent = '0', reserved = '0', uncertain = '0', unlimited = false) => {
+      const group = await db.usageGroup.create({ data: { organizationId: actor.organizationId, type: 'PROJECT', name, defaultLimitCny: '99', unlimited: !unlimited } })
+      const period = await db.groupBudgetPeriod.create({ data: { organizationId: actor.organizationId, groupId: group.id,
+        periodKey: 'TOTAL', timezone: 'Asia/Shanghai', limitCny: limit, spentCny: spent, reservedCny: reserved, unlimited } })
+      if (uncertain !== '0') await db.groupBudgetEntry.create({ data: { organizationId: actor.organizationId, groupId: group.id, periodId: period.id,
+        operationId: randomUUID(), requestId: randomUUID(), accountId: actor.sub, credentialType: 'DEVICE', credentialId: randomUUID(),
+        kind: 'REQUEST', status: 'RECONCILIATION_REQUIRED', reservedCny: uncertain, snapshot: {} } })
+      return group
+    }
+    const near = await create('A Near', '1', '0.79999999', '0.00000001')
+    const exhausted = await create('Z Exhausted', '1', '0.9', '0.1', '0.1')
+    const zero = await db.usageGroup.create({ data: { organizationId: actor.organizationId, name: 'A Zero', type: 'DEPARTMENT' } })
+    const unsettled = await create('B Unsettled', '1', '0', '0.1', '0.1')
+    const unlimited = await create('C Unlimited unsettled', '0', '9', '1', '1', true)
+    const tie = await create('A Near', '1', '0.99999999')
+    await create('Healthy', '1', '0.79999999')
+    await create('Unlimited healthy', '0', '9', '0', '0', true)
+    // At this scale Number rounds the occupied amount up to the limit.
+    const precise = await create('Precision Near', '999999999999.99999999', '999999999999.99999998')
+    const disabled = await create('Disabled', '0'); await db.usageGroup.update({ where: { id: disabled.id }, data: { enabled: false } })
+    const archived = await create('Archived', '0'); await db.usageGroup.update({ where: { id: archived.id }, data: { archivedAt: new Date(), enabled: false } })
+    await db.usageGroup.create({ data: { organizationId: other.actor.organizationId, name: 'Foreign', type: 'PROJECT' } })
+    const list = (input: Partial<UsageGroupPageQueryDto>) => service.list(actor.organizationId, Object.assign(new UsageGroupPageQueryDto(), input))
+    const attention = await list({ budgetRisk: 'ATTENTION', limit: 2 })
+    expect(attention.total).toBe(7)
+    expect(attention.items.map(g => g.id)).toEqual([zero.id, exhausted.id])
+    expect((await list({ budgetRisk: 'ATTENTION', offset: 2, limit: 2 })).items.map(g => g.id)).toEqual([unsettled.id, unlimited.id])
+    expect((await list({ budgetRisk: 'ATTENTION', offset: 4 })).items.map(g => g.id)).toEqual([...[near.id, tie.id].sort(), precise.id])
+    expect(await list({ budgetRisk: 'ATTENTION', offset: 99 })).toMatchObject({ items: [], total: 7 })
+    expect((await list({ budgetRisk: 'NEAR_LIMIT' })).items.map(g => g.id)).toEqual([...[near.id, tie.id].sort(), precise.id])
+    expect((await list({ budgetRisk: 'EXHAUSTED' })).items.map(g => g.id)).toEqual([zero.id, exhausted.id])
+    expect((await list({ budgetRisk: 'UNSETTLED' })).items.map(g => g.id)).toEqual([exhausted.id, unsettled.id, unlimited.id])
+    expect(await list({ budgetRisk: 'ATTENTION', status: 'disabled' })).toMatchObject({ total: 1, items: [{ id: disabled.id }] })
+    expect(await list({ budgetRisk: 'ATTENTION', status: 'archived' })).toMatchObject({ total: 1, items: [{ id: archived.id }] })
+    expect(await list({ budgetRisk: 'ATTENTION', status: 'all' })).toMatchObject({ total: 9 })
+    expect(await list({ budgetRisk: 'ATTENTION', type: 'DEPARTMENT' })).toMatchObject({ total: 1, items: [{ id: zero.id }] })
+    expect(await list({ budgetRisk: 'ATTENTION', q: 'a nEAr' })).toMatchObject({ total: 2 })
+    expect(await list({ budgetRisk: 'ATTENTION', q: "' OR 1=1 --" })).toMatchObject({ total: 0 })
+    const ordinary = await list({})
+    expect(ordinary.total).toBe(9)
+    expect(ordinary.items.map(g => g.id)).toEqual((await db.usageGroup.findMany({ where: { organizationId: actor.organizationId, archivedAt: null, enabled: true },
+      orderBy: [{ createdAt: 'desc' }, { id: 'asc' }] })).map(g => g.id))
+    expect(attention.items[1]).toMatchObject({ budget: { limitCny: '1.00000000', defaultLimitCny: '99.00000000', unlimited: false,
+      spentCny: '0.90000000', reservedCny: '0.10000000', uncertainCny: '0.10000000', availableCny: '0.00000000' }, activeMembers: 0, activeKeys: 0 })
+  }))
+
+  it.each([
+    ['Asia/Shanghai', '2026-09-30T16:30:00Z', '2026-10'],
+    ['America/New_York', '2026-09-30T16:30:00Z', '2026-09'],
+    ['+08:00', '2026-09-30T16:30:00Z', '2026-10'],
+    ['+08', '2026-09-30T16:30:00Z', '2026-10'],
+    ['+0800', '2026-09-30T16:30:00Z', '2026-10'],
+    ['-05:30', '2026-10-01T02:00:00Z', '2026-09']
+  ])('matches current monthly risk and summary for %s', (budgetTimezone, time, periodKey) => withTestDatabase(async db => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(time))
+    const { actor } = await createOrganization(db)
+    const group = await db.usageGroup.create({ data: { organizationId: actor.organizationId, name: 'Month boundary', type: 'DEPARTMENT',
+      budgetMode: 'MONTHLY', budgetTimezone, defaultLimitCny: '10' } })
+    const period = await db.groupBudgetPeriod.create({ data: { organizationId: actor.organizationId, groupId: group.id,
+      periodKey, timezone: budgetTimezone, limitCny: '1', spentCny: '1' } })
+    await db.groupBudgetPeriod.create({ data: { organizationId: actor.organizationId, groupId: group.id,
+      periodKey: periodKey === '2026-10' ? '2026-09' : '2026-10', timezone: budgetTimezone, limitCny: '10' } })
+    const result = await new UsageGroupsService(db as PrismaService).list(actor.organizationId,
+      Object.assign(new UsageGroupPageQueryDto(), { budgetRisk: 'EXHAUSTED' }))
+    expect(result).toMatchObject({ total: 1, items: [{ id: group.id, budget: { periodId: period.id, periodKey, availableCny: '0.00000000' } }] })
+  }))
+
+  it('keeps the same month when the clock crosses a boundary between risk and summary queries', () => withTestDatabase(async db => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-09-30T15:59:59Z'))
+    const { actor } = await createOrganization(db)
+    const group = await db.usageGroup.create({ data: { organizationId: actor.organizationId, type: 'DEPARTMENT', name: 'Boundary',
+      budgetMode: 'MONTHLY', defaultLimitCny: '2' } })
+    await db.groupBudgetPeriod.create({ data: { organizationId: actor.organizationId, groupId: group.id,
+      periodKey: '2026-09', timezone: 'Asia/Shanghai', limitCny: '1', spentCny: '1' } })
+    const movingClock = db.$extends({ query: { usageGroup: { async findMany({ args, query }) {
+      const result = await query(args)
+      vi.setSystemTime(new Date('2026-09-30T16:00:00Z'))
+      return result
+    } } } })
+    const result = await new UsageGroupsService(movingClock as unknown as PrismaService).list(actor.organizationId,
+      Object.assign(new UsageGroupPageQueryDto(), { budgetRisk: 'EXHAUSTED' }))
+    expect(result).toMatchObject({ total: 1, items: [{ id: group.id, budget: { periodKey: '2026-09', availableCny: '0.00000000' } }] })
+    expect(await db.groupBudgetPeriod.count({ where: { groupId: group.id } })).toBe(1)
+  }))
+
+  it('counts active members using access relations and keys using revocation, disable and expiration', () => withTestDatabase(async db => {
+    vi.useFakeTimers({ toFake: ['Date'] }); const now = new Date('2026-09-15T12:00:00Z'); vi.setSystemTime(now)
+    const { actor } = await createOrganization(db)
+    const service = new UsageGroupsService(db as PrismaService)
+    const group = await service.create(actor, { name: 'Counts', type: 'PROJECT' })
+    await service.addMember(actor, group.id, actor.sub)
+    for (const state of ['removed', 'membershipDisabled', 'accountDisabled']) {
+      const account = await db.account.create({ data: { email: `${randomUUID()}@example.invalid`, displayName: state,
+        status: state === 'accountDisabled' ? 'DISABLED' : 'ACTIVE' } })
+      await db.membership.create({ data: { organizationId: actor.organizationId, accountId: account.id, role: 'MEMBER',
+        status: state === 'membershipDisabled' ? 'DISABLED' : 'ACTIVE' } })
+      await db.groupMember.create({ data: { organizationId: actor.organizationId, groupId: group.id, accountId: account.id,
+        removedAt: state === 'removed' ? now : null } })
+    }
+    for (const data of [{}, { expiresAt: new Date(now.getTime() + 1) }, { expiresAt: now }, { revokedAt: now }, { disabledAt: now }, { deletedAt: now }]) {
+      await db.employeeApiKey.create({ data: { organizationId: actor.organizationId, groupId: group.id, accountId: actor.sub,
+        createdById: actor.sub, name: 'Key', secretHash: randomUUID(), secretHint: 'test', ...data } })
+    }
+    const read = async () => (await service.list(actor.organizationId, Object.assign(new UsageGroupPageQueryDto(), { status: 'all' }))).items[0]
+    expect(await read()).toMatchObject({ activeMembers: 1, activeKeys: 2, _count: { members: 3, models: 0 }, budget: { periodId: null } })
+    await db.organization.update({ where: { id: actor.organizationId }, data: { enabled: false } })
+    expect(await read()).toMatchObject({ activeMembers: 0 })
+    await db.organization.update({ where: { id: actor.organizationId }, data: { enabled: true } })
+    await db.usageGroup.update({ where: { id: group.id }, data: { enabled: false } })
+    expect(await read()).toMatchObject({ activeMembers: 0 })
+    await db.usageGroup.update({ where: { id: group.id }, data: { enabled: true, archivedAt: now } })
+    expect(await read()).toMatchObject({ activeMembers: 0 })
+    expect(await db.groupBudgetPeriod.count({ where: { groupId: group.id } })).toBe(0)
+  }))
+
   it('scopes all operations and prevents archived groups from being reactivated', async () => {
     await withTestDatabase(async db => {
       const a = await createOrganization(db); const b = await createOrganization(db)

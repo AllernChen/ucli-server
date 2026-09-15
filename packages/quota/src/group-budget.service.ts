@@ -8,6 +8,7 @@ import type { GatewayIdentity } from '../../security/src/gateway-auth.js'
 import type { AuthPrincipal } from '../../security/src/auth.js'
 import { availableCny, budgetPeriodKey, cny } from './group-budget.js'
 import type { RedisQuotaService } from './redis-quota.js'
+import { readGroupBudgets } from './group-budget-read.js'
 
 export type BudgetReservation = { id: string; requestId: string; periodId: string; groupId: string; reservedCny: string }
 type Db = Prisma.TransactionClient
@@ -32,17 +33,9 @@ export class GroupBudgetService {
 
   async summary(actor: AuthPrincipal, groupId: string) {
     this.assertAdmin(actor)
-    const group = await this.prisma.usageGroup.findFirst({ where: { id: groupId, organizationId: actor.organizationId } })
-    if (!group) throw new NotFoundException('Usage group not found')
-    const periodKey = budgetPeriodKey(group.budgetMode, group.budgetTimezone, new Date())
-    const period = await this.prisma.groupBudgetPeriod.findUnique({ where: { groupId_periodKey: { groupId, periodKey } } })
-    const uncertain = period ? await this.prisma.groupBudgetEntry.aggregate({ where: { periodId: period.id, kind: 'REQUEST', status: 'RECONCILIATION_REQUIRED' }, _sum: { reservedCny: true } }) : null
-    const limitCny = (period?.limitCny ?? group.defaultLimitCny).toFixed(8)
-    const spentCny = period?.spentCny.toFixed(8) ?? '0.00000000'; const reservedCny = period?.reservedCny.toFixed(8) ?? '0.00000000'
-    return { groupId, periodId: period?.id ?? null, periodKey, budgetMode: group.budgetMode, budgetTimezone: group.budgetTimezone,
-      unlimited: period?.unlimited ?? group.unlimited, defaultUnlimited: group.unlimited, defaultLimitCny: group.defaultLimitCny.toFixed(8),
-      limitCny, spentCny, reservedCny, uncertainCny: uncertain?._sum.reservedCny?.toFixed(8) ?? '0.00000000',
-      availableCny: (period?.unlimited ?? group.unlimited) ? null : availableCny(limitCny, spentCny, reservedCny) }
+    const summary = (await readGroupBudgets(this.prisma, actor.organizationId, [groupId])).get(groupId)
+    if (!summary) throw new NotFoundException('Usage group not found')
+    return summary
   }
 
   async entries(actor: AuthPrincipal, groupId: string, query: { offset: number; limit: number }) {

@@ -21,6 +21,7 @@ export class UsageGroupPageQueryDto extends PageQueryDto {
   @IsOptional() @IsEnum(UsageGroupType) type?: UsageGroupType
   @IsIn(['active', 'disabled', 'archived', 'all']) status: 'active' | 'disabled' | 'archived' | 'all' = 'active'
   @IsOptional() @IsString() @Length(1, 200) q?: string
+  @IsOptional() @IsIn(['NEAR_LIMIT', 'EXHAUSTED', 'UNSETTLED', 'ATTENTION']) budgetRisk?: 'NEAR_LIMIT' | 'EXHAUSTED' | 'UNSETTLED' | 'ATTENTION'
 }
 
 export class AddGroupMemberDto {

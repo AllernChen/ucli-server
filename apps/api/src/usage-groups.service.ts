@@ -6,6 +6,7 @@ import { lockUsageGroup } from '../../../packages/security/src/group-access.js'
 import { canAccessModel } from '../../../packages/gateway-core/src/access-policy.js'
 import { modelCapabilitiesSelect } from '../../../packages/gateway-core/src/model-catalog.service.js'
 import { configuredClientProtocols } from '../../../packages/gateway-core/src/model-capabilities.js'
+import { readGroupBudgets } from '../../../packages/quota/src/group-budget-read.js'
 import { PageQueryDto } from './catalog.dto.js'
 import { UsageGroupPageQueryDto, type CreateUsageGroupDto, type UpdateUsageGroupDto } from './usage-groups.dto.js'
 
@@ -57,16 +58,71 @@ export class UsageGroupsService {
   }
 
   async list(organizationId: string, query = new UsageGroupPageQueryDto()) {
+    const now = new Date()
+    const risk = query.budgetRisk ? await this.riskPage(organizationId, query, now) : null
     const where: Prisma.UsageGroupWhereInput = { organizationId, type: query.type,
+      ...(risk ? { id: { in: risk.ids } } : {}),
       ...(query.status === 'archived' ? { archivedAt: { not: null } } : query.status === 'all' ? {} :
         { archivedAt: null, enabled: query.status === 'active' }),
       ...(query.q ? { name: { contains: query.q, mode: 'insensitive' } } : {}) }
     const [items, total] = await Promise.all([
-      this.prisma.usageGroup.findMany({ where, skip: query.offset, take: query.limit, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+      this.prisma.usageGroup.findMany({ where, skip: risk ? 0 : query.offset, take: query.limit, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
         include: { _count: { select: { members: { where: { removedAt: null } }, models: true } } } }),
-      this.prisma.usageGroup.count({ where })
+      risk ? Promise.resolve(risk.total) : this.prisma.usageGroup.count({ where })
     ])
-    return { items, total, limit: query.limit, offset: query.offset }
+    if (risk) {
+      const order = new Map(risk.ids.map((id, index) => [id, index]))
+      items.sort((a, b) => order.get(a.id)! - order.get(b.id)!)
+    }
+    const groupId = { in: items.map(group => group.id) }
+    const [budgets, members, keys] = await Promise.all([
+      readGroupBudgets(this.prisma, organizationId, groupId.in, now),
+      this.prisma.groupMember.groupBy({ by: ['groupId'], where: { organizationId, groupId, removedAt: null,
+        group: { enabled: true, archivedAt: null, organization: { enabled: true } },
+        membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } } }, _count: true }),
+      this.prisma.employeeApiKey.groupBy({ by: ['groupId'], where: { organizationId, groupId, revokedAt: null, disabledAt: null, deletedAt: null,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] }, _count: true })
+    ])
+    const memberCounts = new Map(members.map(row => [row.groupId, row._count]))
+    const keyCounts = new Map(keys.map(row => [row.groupId, row._count]))
+    return { items: items.map(group => ({ ...group, budget: budgets.get(group.id)!, activeMembers: memberCounts.get(group.id) ?? 0,
+      activeKeys: keyCounts.get(group.id) ?? 0 })), total, limit: query.limit, offset: query.offset }
+  }
+
+  private async riskPage(organizationId: string, query: UsageGroupPageQueryDto, now: Date) {
+    const status = query.status === 'archived' ? Prisma.sql`g.archived_at IS NOT NULL` : query.status === 'all' ? Prisma.sql`TRUE` :
+      Prisma.sql`g.archived_at IS NULL AND g.enabled = ${query.status === 'active'}`
+    // Interval offsets use Intl's ISO sign; PostgreSQL text offsets use the opposite POSIX sign.
+    const month = Prisma.sql`to_char(CASE WHEN g.budget_timezone ~ '^[+-][0-9]{2}(:?[0-9]{2})?$'
+      THEN ${now}::timestamptz AT TIME ZONE
+        (substring(g.budget_timezone, 1, 3) || ':' || CASE WHEN length(g.budget_timezone) = 3 THEN '00' ELSE right(g.budget_timezone, 2) END)::interval
+      ELSE ${now}::timestamptz AT TIME ZONE g.budget_timezone END, 'YYYY-MM')`
+    const budgets = Prisma.sql`WITH budgets AS (
+      SELECT g.id, g.name, COALESCE(p.unlimited, g.unlimited) AS unlimited,
+        COALESCE(p.limit_cny, g.default_limit_cny) AS limit_cny,
+        COALESCE(p.spent_cny, 0) + COALESCE(p.reserved_cny, 0) AS occupied,
+        COALESCE((SELECT SUM(e.reserved_cny) FROM group_budget_entries e
+          WHERE e.organization_id = g.organization_id AND e.group_id = g.id AND e.period_id = p.id
+            AND e.kind = 'REQUEST' AND e.status = 'RECONCILIATION_REQUIRED'), 0) AS uncertain
+      FROM usage_groups g LEFT JOIN group_budget_periods p ON p.organization_id = g.organization_id AND p.group_id = g.id
+        AND p.period_key = CASE WHEN g.budget_mode = 'TOTAL' THEN 'TOTAL' ELSE ${month} END
+      WHERE g.organization_id = ${organizationId}::uuid AND ${status}
+        ${query.type ? Prisma.sql`AND g.type = ${query.type}::"UsageGroupType"` : Prisma.empty}
+        ${query.q ? Prisma.sql`AND g.name ILIKE ${`%${query.q}%`}` : Prisma.empty}
+    ), risks AS (
+      SELECT id, name, NOT unlimited AND (limit_cny <= 0 OR occupied >= limit_cny) AS exhausted,
+        uncertain > 0 AS unsettled,
+        NOT unlimited AND limit_cny > 0 AND occupied >= limit_cny * 0.8 AND occupied < limit_cny AS near_limit
+      FROM budgets
+    )`
+    const filter = query.budgetRisk === 'EXHAUSTED' ? Prisma.sql`exhausted` : query.budgetRisk === 'UNSETTLED' ? Prisma.sql`unsettled` :
+      query.budgetRisk === 'NEAR_LIMIT' ? Prisma.sql`near_limit` : Prisma.sql`(exhausted OR unsettled OR near_limit)`
+    const [rows, counts] = await Promise.all([
+      this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`${budgets} SELECT id FROM risks WHERE ${filter}
+        ORDER BY CASE WHEN exhausted THEN 0 WHEN unsettled THEN 1 ELSE 2 END, name, id LIMIT ${query.limit} OFFSET ${query.offset}`),
+      this.prisma.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`${budgets} SELECT COUNT(*) AS total FROM risks WHERE ${filter}`)
+    ])
+    return { ids: rows.map(row => row.id), total: Number(counts[0].total) }
   }
 
   async detail(organizationId: string, id: string) {
