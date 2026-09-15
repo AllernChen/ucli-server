@@ -67,7 +67,7 @@ describe('catalog runtime isolation', () => {
         aggregate: vi.fn().mockResolvedValue({ _avg: { durationMs: null, firstTokenMs: null } })
       }
     }
-    const controller = new MonitoringController(prisma)
+    const controller = new MonitoringController(prisma, {} as any)
 
     await controller.health()
 
