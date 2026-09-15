@@ -1,4 +1,4 @@
-import { Body, Controller, Header, Headers, Post, Req, UseGuards } from '@nestjs/common'
+import { Body, Controller, Get, Header, Headers, Post, Req, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiHeader, ApiTags } from '@nestjs/swagger'
 import { AuthGuard } from '../../../packages/security/src/auth.js'
 import { AuthService } from './auth.service.js'
@@ -12,6 +12,8 @@ export class AuthController {
   @ApiHeader({ name: 'X-UCLI-Setup-Secret', required: true })
   @Post('setup') setup(@Body() body: any, @Headers('x-ucli-setup-secret') secret?: string) { return this.auth.setup(body, secret) }
   @Post('login') login(@Body() body: any) { return this.auth.login(body) }
+  @ApiBearerAuth() @UseGuards(AuthGuard) @Header('Cache-Control', 'no-store') @Get('me')
+  me(@Req() request: any) { return this.auth.me(request.principal) }
   @Header('Cache-Control', 'no-store') @Post('device-grants/preview')
   preview(@Body() body: PreviewDeviceGrantDto) { return this.grants.preview(body.link) }
   @Header('Cache-Control', 'no-store') @Post('device-grants/redeem')

@@ -3,6 +3,9 @@ import { Prisma, type UsageGroup } from '@prisma/client'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import type { AuthPrincipal } from '../../../packages/security/src/auth.js'
 import { lockUsageGroup } from '../../../packages/security/src/group-access.js'
+import { canAccessModel } from '../../../packages/gateway-core/src/access-policy.js'
+import { modelCapabilitiesSelect } from '../../../packages/gateway-core/src/model-catalog.service.js'
+import { configuredClientProtocols } from '../../../packages/gateway-core/src/model-capabilities.js'
 import { PageQueryDto } from './catalog.dto.js'
 import { UsageGroupPageQueryDto, type CreateUsageGroupDto, type UpdateUsageGroupDto } from './usage-groups.dto.js'
 
@@ -126,6 +129,30 @@ export class UsageGroupsService {
     await this.detail(organizationId, id)
     return this.prisma.groupModelAccess.findMany({ where: { organizationId, groupId: id }, orderBy: { publicModelId: 'asc' },
       include: { publicModel: { select: { id: true, displayName: true, enabled: true, deletedAt: true } } } })
+  }
+
+  async modelOptions(organizationId: string, id: string, accountId?: string) {
+    const group = await this.detail(organizationId, id)
+    const member = accountId ? await this.prisma.groupMember.findFirst({ where: { organizationId, groupId: id, accountId, removedAt: null },
+      include: { membership: { include: { account: { select: { status: true } } } } } }) : null
+    if (accountId && !member) throw new ForbiddenException('Group member required')
+    const selected = new Set((await this.models(organizationId, id)).map(m => m.publicModelId))
+    const models = await this.prisma.publicModel.findMany({ where: { OR: [{ deletedAt: null }, { id: { in: [...selected] } }] },
+      include: { policies: true, channelModels: { select: modelCapabilitiesSelect } }, orderBy: { id: 'asc' } })
+    return models.map(model => {
+      const protocols = configuredClientProtocols(model.channelModels)
+      const reasons: string[] = []
+      if (!group.enabled || group.archivedAt) reasons.push('用量组已停用或归档')
+      if (!model.enabled || model.deletedAt || !model.contextSize) reasons.push('模型未发布或上下文未配置')
+      if (!protocols.length) reasons.push('没有已配置的可用协议')
+      if (member) {
+        if (member.membership.status !== 'ACTIVE' || member.membership.account.status !== 'ACTIVE') reasons.push('员工已停用')
+        if (!canAccessModel(model.policies, { organizationId, accountId: member.accountId, role: member.membership.role })) reasons.push('现有模型策略不允许该员工使用')
+        if (!selected.has(model.id)) reasons.push('组未允许此模型')
+      }
+      return { id: model.id, displayName: model.displayName, protocols, selected: selected.has(model.id),
+        archived: Boolean(model.deletedAt), allowed: member ? reasons.length === 0 : null, reasons }
+    })
   }
 
   replaceModels(actor: AuthPrincipal, id: string, publicModelIds: string[]) {

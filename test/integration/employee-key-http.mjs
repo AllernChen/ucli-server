@@ -18,6 +18,10 @@ import { JsonSafeInterceptor } from '../../dist/packages/http/src/json.intercept
 import { EmployeeKeysController } from '../../dist/apps/api/src/employee-keys.controller.js'
 import { EmployeeKeysService } from '../../dist/apps/api/src/employee-keys.service.js'
 import { UsageGroupsService } from '../../dist/apps/api/src/usage-groups.service.js'
+import { AuthController } from '../../dist/apps/api/src/auth.controller.js'
+import { AuthService } from '../../dist/apps/api/src/auth.service.js'
+import { DeviceGrantsService } from '../../dist/apps/api/src/device-grants.service.js'
+import { DeviceGrantLinksService } from '../../dist/apps/api/src/device-grant-links.service.js'
 import { GatewayController } from '../../dist/apps/gateway/src/gateway.controller.js'
 import { GatewayService } from '../../dist/apps/gateway/src/gateway.service.js'
 
@@ -45,7 +49,7 @@ const upstream = createServer(async (req, res) => {
   }
 })
 class KeyTestModule {}
-Module({ controllers: [EmployeeKeysController, GatewayController], providers: [AuthGuard, GatewayAuthGuard,
+Module({ controllers: [AuthController, EmployeeKeysController, GatewayController], providers: [AuthService, DeviceGrantsService, DeviceGrantLinksService, AuthGuard, GatewayAuthGuard,
   EmployeeKeysService, UsageGroupsService, ModelCatalogService, GatewayService, GroupBudgetService, { provide: PrismaService, useValue: db },
   { provide: RedisQuotaService, useValue: { reserve() { throw new Error('This fixture has no Redis quota policies') } } }] })(KeyTestModule)
 const app = await NestFactory.create(KeyTestModule, { logger: false })
@@ -87,6 +91,13 @@ try {
   assert.equal(created.status, 201)
   assert.equal(created.headers.get('cache-control'), 'no-store')
   const key = created.body
+  const me = await request('/api/v1/auth/me', 'GET', undefined, employeeToken)
+  assert.equal(me.status, 200)
+  assert.equal(me.headers.get('cache-control'), 'no-store')
+  assert.deepEqual(me.body, { id: employee.id, displayName: 'Employee', organizationId: a.organization.id, role: 'MEMBER' })
+  assert.equal((await request('/api/v1/auth/me', 'GET', undefined, key.secret)).status, 401)
+  assert.deepEqual((await request('/api/v1/me/usage-groups', 'GET', undefined, employeeToken)).body.map(g => g.id).sort(), [group.id, otherGroup.id].sort())
+  assert.equal((await request(`/api/v1/admin/users/${a.account.id}/usage-groups`, 'GET', undefined, employeeToken)).status, 401)
   assert.match(key.secret, /^ucli_sk_/)
   assert.equal((await request('/v1/models', 'GET', undefined, key.secret)).status, 403) // default off
   process.env.EMPLOYEE_API_KEYS_ENABLED = 'true'

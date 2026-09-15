@@ -27,6 +27,10 @@ export class AddGroupMemberDto {
   @IsUUID() accountId!: string
 }
 
+export class GroupModelOptionsDto {
+  @IsOptional() @IsUUID() accountId?: string
+}
+
 export class ReplaceGroupModelsDto {
   @IsArray() @ArrayUnique() @ArrayMaxSize(1000)
   @IsString({ each: true }) @Length(1, 200, { each: true }) publicModelIds!: string[]

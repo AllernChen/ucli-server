@@ -1,15 +1,21 @@
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common'
+import { BadRequestException, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common'
 import { Role } from '@prisma/client'
 import argon2 from 'argon2'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import { hashOpaqueToken } from '../../../packages/security/src/tokens.js'
-import { authorizationFailure, signAccessToken } from '../../../packages/security/src/auth.js'
+import { authorizationFailure, signAccessToken, type AuthPrincipal } from '../../../packages/security/src/auth.js'
 import { deviceGrantFailure } from '../../../packages/security/src/device-grants.js'
 
 @Injectable()
 export class AuthService {
   constructor(private readonly prisma: PrismaService) {}
+
+  async me(actor: AuthPrincipal) {
+    if (actor.deviceId) throw new ForbiddenException('Web login required')
+    const account = await this.prisma.account.findUniqueOrThrow({ where: { id: actor.sub }, select: { id: true, displayName: true } })
+    return { ...account, organizationId: actor.organizationId, role: actor.role }
+  }
 
   async setup(input: { email: string; password: string; displayName: string; organizationName: string }, presentedSecret?: string) {
     const expectedSecret = process.env.SETUP_SECRET

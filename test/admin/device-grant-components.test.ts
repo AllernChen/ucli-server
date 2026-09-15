@@ -7,7 +7,11 @@ import ConfirmDialog from '../../apps/admin/src/components/ConfirmDialog.vue'
 import LinkExpiryFields from '../../apps/admin/src/components/LinkExpiryFields.vue'
 
 const state = vi.hoisted(() => ({ route: null as any, api: vi.fn(), push: vi.fn(), toast: vi.fn() }))
-vi.mock('../../apps/admin/src/api.js', () => ({ api: state.api }))
+vi.mock('../../apps/admin/src/api.js', () => ({ api: (path: string, ...args: unknown[]) => {
+  if (path.endsWith('/usage-groups')) return Promise.resolve([])
+  if (path.includes('/api-keys?')) return Promise.resolve({ items: [], total: 0, offset: 0, limit: 20 })
+  return state.api(path, ...args)
+} }))
 vi.mock('vue-router', () => ({ useRoute: () => state.route, useRouter: () => ({ push: state.push }) }))
 vi.mock('../../apps/admin/src/toast.js', () => ({ toast: state.toast }))
 

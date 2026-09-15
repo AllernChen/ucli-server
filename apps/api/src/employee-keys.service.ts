@@ -23,6 +23,15 @@ function expiry(value: string | null | undefined): Date | null | undefined {
 export class EmployeeKeysService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async groups(actor: AuthPrincipal, accountId?: string) {
+    if (accountId !== undefined) this.assertAdmin(actor)
+    else this.assertWebSession(actor)
+    return this.prisma.usageGroup.findMany({ where: { organizationId: actor.organizationId, enabled: true, archivedAt: null,
+      members: { some: { accountId: accountId ?? actor.sub, removedAt: null,
+        membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } } } } },
+      select: { id: true, name: true, type: true }, orderBy: { name: 'asc' } })
+  }
+
   private assertAdmin(actor: AuthPrincipal) {
     if (!['PLATFORM_ADMIN', 'ORG_ADMIN'].includes(actor.role)) throw new ForbiddenException('Administrator required')
   }

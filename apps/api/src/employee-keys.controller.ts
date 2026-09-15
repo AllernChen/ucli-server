@@ -11,6 +11,10 @@ type AuthRequest = { principal: AuthPrincipal }
 @ApiTags('employee-api-keys') @ApiBearerAuth() @UseGuards(AuthGuard) @Controller('api/v1')
 export class EmployeeKeysController {
   constructor(private readonly keys: EmployeeKeysService) {}
+  @Get('admin/users/:accountId/usage-groups') @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Header('Cache-Control', 'no-store')
+  groups(@Req() req: AuthRequest, @Param('accountId', UuidPipe) accountId: string) { return this.keys.groups(req.principal, accountId) }
+  @Get('me/usage-groups') @Header('Cache-Control', 'no-store')
+  myGroups(@Req() req: AuthRequest) { return this.keys.groups(req.principal) }
   @Get('admin/users/:accountId/api-keys') @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Header('Cache-Control', 'no-store')
   list(@Req() req: AuthRequest, @Param('accountId', UuidPipe) accountId: string, @Query() query: PageQueryDto) { return this.keys.list(req.principal, accountId, query) }
   @Post('admin/users/:accountId/api-keys') @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Header('Cache-Control', 'no-store')

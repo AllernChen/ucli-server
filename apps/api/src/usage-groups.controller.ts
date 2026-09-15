@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { AuthGuard, Roles, type AuthPrincipal } from '../../../packages/security/src/auth.js'
 import { UuidPipe } from '../../../packages/http/src/uuid.pipe.js'
 import { PageQueryDto } from './catalog.dto.js'
-import { AddGroupMemberDto, BudgetAdjustmentDto, BudgetConfigDto, BudgetReconcileDto, CreateUsageGroupDto, ReplaceGroupModelsDto, UpdateUsageGroupDto, UsageGroupPageQueryDto } from './usage-groups.dto.js'
+import { AddGroupMemberDto, BudgetAdjustmentDto, BudgetConfigDto, BudgetReconcileDto, CreateUsageGroupDto, GroupModelOptionsDto, ReplaceGroupModelsDto, UpdateUsageGroupDto, UsageGroupPageQueryDto } from './usage-groups.dto.js'
 import { UsageGroupsService } from './usage-groups.service.js'
 import { GroupBudgetService } from '../../../packages/quota/src/group-budget.service.js'
 
@@ -24,6 +24,7 @@ export class UsageGroupsController {
   @Post(':id/members') addMember(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Body() body: AddGroupMemberDto) { return this.groups.addMember(req.principal, id, body.accountId) }
   @Delete(':id/members/:accountId') removeMember(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Param('accountId', UuidPipe) accountId: string) { return this.groups.removeMember(req.principal, id, accountId) }
   @Get(':id/models') models(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string) { return this.groups.models(req.principal.organizationId, id) }
+  @Get(':id/model-options') modelOptions(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Query() query: GroupModelOptionsDto) { return this.groups.modelOptions(req.principal.organizationId, id, query.accountId) }
   @Put(':id/models') replaceModels(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Body() body: ReplaceGroupModelsDto) { return this.groups.replaceModels(req.principal, id, body.publicModelIds) }
   @Get(':id/budget') budgetSummary(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string) { return this.budget.summary(req.principal, id) }
   @Patch(':id/budget-config') budgetConfig(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Body() body: BudgetConfigDto) { return this.budget.configure(req.principal, id, body) }

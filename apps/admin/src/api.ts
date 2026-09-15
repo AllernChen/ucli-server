@@ -14,7 +14,7 @@ export async function api<T = any>(path: string, init: RequestInit = {}): Promis
       window.location.reload()
     }
     const body = await response.json().catch(() => null)
-    throw new Error(typeof body?.message === 'string' ? body.message : typeof body?.code === 'string' ? body.code : `HTTP ${response.status}`)
+    throw new Error(typeof body?.message === 'string' ? body.message : Array.isArray(body?.message) ? body.message.join('；') : typeof body?.code === 'string' ? body.code : `HTTP ${response.status}`)
   }
   return response.json() as Promise<T>
 }
