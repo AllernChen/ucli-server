@@ -1,7 +1,3 @@
-.shell {
-  grid-template-columns: 238px minmax(0, 1fr);
-}
-
 .content,
 .cost-workspace,
 .cost-workspace-detail,

@@ -41,6 +41,14 @@ it('shows an invalid edited date range without applying it and recovers after co
   wrapper.unmount()
 })
 
+it('keeps filter actions together with a primary apply action and secondary clear action', () => {
+  const wrapper = mount(UsageFilters, { props: { modelValue: companyDateRange('2026-09-15', '2026-09-16'), role: '' } })
+  const actions = wrapper.get('.usage-filter-actions')
+  expect(actions.findAll('button').map(button => button.text())).toEqual(['应用筛选', '清空筛选'])
+  expect(actions.find('button.primary').text()).toBe('应用筛选')
+  wrapper.unmount()
+})
+
 it('removes an externally deleted channel from the control and the next applied query', async () => {
   const range = companyDateRange('2026-09-15', '2026-09-16')
   const wrapper = mount(UsageFilters, { props: { modelValue: { ...range, channelId: 'old-channel' }, role: '', mode: 'logs' } })

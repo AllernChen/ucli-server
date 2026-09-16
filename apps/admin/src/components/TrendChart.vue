@@ -16,8 +16,8 @@ function render() {
     ? Number(item.inputTokens) + Number(item.outputTokens) : item.costCny === undefined ? Number(item.costUsd) : item.costCny === null ? null : Number(item.costCny))
   const names = { requests: '请求数', tokens: 'Token', cost: '采购成本 CNY' }
   const option: EChartsOption = {
-    animationDuration: 300, backgroundColor: 'transparent', tooltip: { trigger: 'axis' }, legend: { textStyle: { color: '#8fa1b8' } },
-    grid: { left: 52, right: 52, top: 42, bottom: 34 }, xAxis: { type: 'category', data: labels, axisLabel: { color: '#728199' }, axisLine: { lineStyle: { color: '#26384e' } } },
+    animationDuration: 300, backgroundColor: 'transparent', tooltip: { trigger: 'axis' }, legend: { top: 8, left: 'center', textStyle: { color: '#8fa1b8' } },
+    grid: { left: 52, right: 52, top: 56, bottom: 48, containLabel: true }, xAxis: { type: 'category', data: labels, axisLabel: { color: '#728199', hideOverlap: true }, axisLine: { lineStyle: { color: '#26384e' } } },
     yAxis: [{ type: 'value', axisLabel: { color: '#728199' }, splitLine: { lineStyle: { color: '#17263a' } } },
       { type: 'value', min: 0, max: 100, axisLabel: { color: '#728199', formatter: '{value}%' }, splitLine: { show: false } }],
     series: [{ name: names[props.metric], type: props.metric === 'cost' ? 'bar' : 'line', smooth: true, data: values,

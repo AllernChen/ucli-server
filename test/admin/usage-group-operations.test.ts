@@ -46,6 +46,13 @@ it('renders inline budgets without N+1 reads and counts unknown holds only withi
   expect(w.text()).not.toContain('不可用')
 })
 
+it('marks the group table for horizontal scrolling and the drawer submit as primary', async () => {
+  const w = render(UsageGroups); await flushPromises()
+  expect(w.find('table.usage-groups-table').exists()).toBe(true)
+  await w.get('header.page-header button').trigger('click')
+  expect(w.get('button[form="create-group-form"]').classes()).toContain('primary')
+})
+
 it('restores and applies all list filters including budget risk on route changes', async () => {
   state.route.query = { q: '研发', type: 'DEPARTMENT', status: 'all', budgetRisk: 'NEAR_LIMIT' }
   const w = render(UsageGroups); await flushPromises()
