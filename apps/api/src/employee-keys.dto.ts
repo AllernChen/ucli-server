@@ -1,5 +1,14 @@
 import { Transform } from 'class-transformer'
-import { IsDateString, IsString, IsUUID, Length, ValidateIf } from 'class-validator'
+import { IsDateString, IsIn, IsOptional, IsString, IsUUID, Length, ValidateIf } from 'class-validator'
+import { PageQueryDto } from './catalog.dto.js'
+
+export class EmployeeKeyQueryDto extends PageQueryDto {
+  @IsOptional() @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @Length(1, 120) q?: string
+  @IsOptional() @IsUUID() accountId?: string
+  @IsOptional() @IsUUID() groupId?: string
+  @IsOptional() @IsIn(['active', 'disabled', 'expired', 'revoked']) status?: 'active' | 'disabled' | 'expired' | 'revoked'
+}
 
 export class CreateEmployeeKeyDto {
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)

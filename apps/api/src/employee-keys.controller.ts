@@ -2,8 +2,7 @@ import { Body, Controller, Delete, Get, Header, Param, Patch, Post, Query, Req, 
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { AuthGuard, Roles, type AuthPrincipal } from '../../../packages/security/src/auth.js'
 import { UuidPipe } from '../../../packages/http/src/uuid.pipe.js'
-import { PageQueryDto } from './catalog.dto.js'
-import { CreateEmployeeKeyDto, UpdateEmployeeKeyDto } from './employee-keys.dto.js'
+import { CreateEmployeeKeyDto, EmployeeKeyQueryDto, UpdateEmployeeKeyDto } from './employee-keys.dto.js'
 import { EmployeeKeysService } from './employee-keys.service.js'
 
 type AuthRequest = { principal: AuthPrincipal }
@@ -16,7 +15,9 @@ export class EmployeeKeysController {
   @Get('me/usage-groups') @Header('Cache-Control', 'no-store')
   myGroups(@Req() req: AuthRequest) { return this.keys.groups(req.principal) }
   @Get('admin/users/:accountId/api-keys') @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Header('Cache-Control', 'no-store')
-  list(@Req() req: AuthRequest, @Param('accountId', UuidPipe) accountId: string, @Query() query: PageQueryDto) { return this.keys.list(req.principal, accountId, query) }
+  list(@Req() req: AuthRequest, @Param('accountId', UuidPipe) accountId: string, @Query() query: EmployeeKeyQueryDto) { return this.keys.list(req.principal, accountId, query) }
+  @Get('admin/employee-api-keys') @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Header('Cache-Control', 'no-store')
+  listManaged(@Req() req: AuthRequest, @Query() query: EmployeeKeyQueryDto) { return this.keys.listManaged(req.principal, query) }
   @Post('admin/users/:accountId/api-keys') @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Header('Cache-Control', 'no-store')
   create(@Req() req: AuthRequest, @Param('accountId', UuidPipe) accountId: string, @Body() body: CreateEmployeeKeyDto) { return this.keys.create(req.principal, accountId, body) }
   @Patch('admin/employee-api-keys/:id') @Roles('PLATFORM_ADMIN', 'ORG_ADMIN')
@@ -30,7 +31,7 @@ export class EmployeeKeysController {
   @Post('admin/employee-api-keys/:id/revoke') @Roles('PLATFORM_ADMIN', 'ORG_ADMIN')
   revoke(@Req() req: AuthRequest, @Param('id', UuidPipe) id: string) { return this.keys.revoke(req.principal, id) }
   @Get('me/api-keys') @Header('Cache-Control', 'no-store')
-  mine(@Req() req: AuthRequest, @Query() query: PageQueryDto) { return this.keys.listMine(req.principal, query) }
+  mine(@Req() req: AuthRequest, @Query() query: EmployeeKeyQueryDto) { return this.keys.listMine(req.principal, query) }
   @Post('me/api-keys/:id/revoke')
   revokeMine(@Req() req: AuthRequest, @Param('id', UuidPipe) id: string) { return this.keys.revoke(req.principal, id, true) }
 }

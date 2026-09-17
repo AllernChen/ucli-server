@@ -11,7 +11,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('management view identity and op
   it('only exposes verified web identity and the selected employee’s active groups', async () => withTestDatabase(async db => {
     const a = await createOrganization(db); const b = await createOrganization(db)
     const auth = new AuthService(db as PrismaService)
-    expect(await auth.me(a.actor)).toEqual({ id: a.account.id, displayName: 'Test employee', organizationId: a.organization.id, role: 'ORG_ADMIN' })
+    expect(await auth.me(a.actor)).toEqual({ id: a.account.id, displayName: 'Test employee', email: a.account.email, status: a.account.status,
+      organizationId: a.organization.id, organizationName: a.organization.name, role: 'ORG_ADMIN' })
     await expect(auth.me({ ...a.actor, deviceId: randomUUID() })).rejects.toMatchObject({ status: 403 })
     const groups = new UsageGroupsService(db as PrismaService)
     const group = await groups.create(a.actor, { name: 'A', type: 'PROJECT' })

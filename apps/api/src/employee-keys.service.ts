@@ -5,11 +5,18 @@ import type { AuthPrincipal } from '../../../packages/security/src/auth.js'
 import { assertActiveGroupMember, lockUsageGroup } from '../../../packages/security/src/group-access.js'
 import { createOpaqueToken, hashOpaqueToken, opaqueTokenHint } from '../../../packages/security/src/tokens.js'
 import { PageQueryDto } from './catalog.dto.js'
-import type { CreateEmployeeKeyDto, UpdateEmployeeKeyDto } from './employee-keys.dto.js'
+import { EmployeeKeyQueryDto, type CreateEmployeeKeyDto, type UpdateEmployeeKeyDto } from './employee-keys.dto.js'
 
 const keySummary = Prisma.validator<Prisma.EmployeeApiKeySelect>()({
   id: true, organizationId: true, accountId: true, groupId: true, name: true, secretHint: true,
   createdAt: true, createdById: true, expiresAt: true, disabledAt: true, revokedAt: true, deletedAt: true, lastUsedAt: true
+})
+
+const keyListSummary = Prisma.validator<Prisma.EmployeeApiKeySelect>()({
+  ...keySummary,
+  membership: { select: { account: { select: { id: true, displayName: true, email: true } } } },
+  group: { select: { id: true, name: true } },
+  createdBy: { select: { id: true, displayName: true } }
 })
 
 function expiry(value: string | null | undefined): Date | null | undefined {
@@ -62,25 +69,57 @@ export class EmployeeKeysService {
     return { ...key, secret }
   }
 
-  async list(actor: AuthPrincipal, accountId: string, query = new PageQueryDto()) {
+  async list(actor: AuthPrincipal, accountId: string, query: PageQueryDto = new PageQueryDto()) {
     this.assertAdmin(actor)
     const member = await this.prisma.membership.findUnique({ where: { organizationId_accountId: { organizationId: actor.organizationId, accountId } } })
     if (!member) throw new NotFoundException('User not found')
-    return this.listFor(actor.organizationId, accountId, query)
+    return this.listFor(actor.organizationId, accountId, query as EmployeeKeyQueryDto, false)
   }
 
-  listMine(actor: AuthPrincipal, query = new PageQueryDto()) {
+  async listMine(actor: AuthPrincipal, query: PageQueryDto = new PageQueryDto()) {
     this.assertWebSession(actor)
-    return this.listFor(actor.organizationId, actor.sub, query)
+    const keyQuery = query as EmployeeKeyQueryDto
+    if (keyQuery.accountId && keyQuery.accountId !== actor.sub) throw new ForbiddenException('Personal keys belong to the authenticated account')
+    return this.listFor(actor.organizationId, actor.sub, keyQuery, false)
   }
 
-  private async listFor(organizationId: string, accountId: string, query: PageQueryDto) {
-    const where = { organizationId, accountId, deletedAt: null }
-    const [items, total] = await Promise.all([
-      this.prisma.employeeApiKey.findMany({ where, select: keySummary, skip: query.offset, take: query.limit, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }] }),
-      this.prisma.employeeApiKey.count({ where })
+  listManaged(actor: AuthPrincipal, query: EmployeeKeyQueryDto = new EmployeeKeyQueryDto()) {
+    this.assertAdmin(actor)
+    return this.listFor(actor.organizationId, query.accountId, query, true)
+  }
+
+  private async listFor(organizationId: string, accountId: string | undefined, query: EmployeeKeyQueryDto, managed: boolean) {
+    const where = this.listWhere(organizationId, accountId, query, managed, new Date())
+    const [items, total, filterGroups] = await Promise.all([
+      this.prisma.employeeApiKey.findMany({ where, select: keyListSummary, skip: query.offset, take: query.limit, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }] }),
+      this.prisma.employeeApiKey.count({ where }),
+      !managed && accountId ? this.prisma.usageGroup.findMany({ where: { organizationId, keys: { some: { organizationId, accountId, deletedAt: null } } },
+        select: { id: true, name: true }, orderBy: { name: 'asc' } }) : Promise.resolve([])
     ])
-    return { items, total, offset: query.offset, limit: query.limit }
+    return { items: items.map(item => {
+      const { membership, group, createdBy, ...key } = item
+      return { ...key, account: membership.account, group, createdBy }
+    }), total, offset: query.offset, limit: query.limit, ...(!managed ? { filterGroups } : {}) }
+  }
+
+  private listWhere(organizationId: string, accountId: string | undefined, query: EmployeeKeyQueryDto, managed: boolean, now: Date): Prisma.EmployeeApiKeyWhereInput {
+    const filters: Prisma.EmployeeApiKeyWhereInput[] = [{ organizationId, deletedAt: null }]
+    if (accountId) filters.push({ accountId })
+    if (query.groupId) filters.push({ groupId: query.groupId })
+    if (query.status) filters.push({
+      revoked: { revokedAt: { not: null } },
+      disabled: { revokedAt: null, disabledAt: { not: null } },
+      expired: { revokedAt: null, disabledAt: null, expiresAt: { lte: now } },
+      active: { revokedAt: null, disabledAt: null, OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] }
+    }[query.status])
+    if (query.q) {
+      const contains = { contains: query.q, mode: 'insensitive' as const }
+      filters.push({ OR: [
+        { name: contains }, { secretHint: contains },
+        ...(managed ? [{ membership: { account: { OR: [{ displayName: contains }, { email: contains }] } } }] : [])
+      ] })
+    }
+    return filters.length === 1 ? filters[0] : { AND: filters }
   }
 
   private async mutate(actor: AuthPrincipal, id: string, action: string,

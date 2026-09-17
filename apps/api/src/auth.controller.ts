@@ -1,9 +1,10 @@
-import { Body, Controller, Get, Header, Headers, Post, Req, UseGuards } from '@nestjs/common'
+import { Body, Controller, Get, Header, Headers, Patch, Post, Req, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiHeader, ApiTags } from '@nestjs/swagger'
 import { AuthGuard } from '../../../packages/security/src/auth.js'
 import { AuthService } from './auth.service.js'
 import { DeviceGrantsService } from './device-grants.service.js'
 import { PreviewDeviceGrantDto, RedeemDeviceGrantDto } from './device-grants.dto.js'
+import { UpdateProfileDto } from './profile.dto.js'
 
 @ApiTags('auth')
 @Controller('api/v1/auth')
@@ -14,6 +15,8 @@ export class AuthController {
   @Post('login') login(@Body() body: any) { return this.auth.login(body) }
   @ApiBearerAuth() @UseGuards(AuthGuard) @Header('Cache-Control', 'no-store') @Get('me')
   me(@Req() request: any) { return this.auth.me(request.principal) }
+  @ApiBearerAuth() @UseGuards(AuthGuard) @Header('Cache-Control', 'no-store') @Patch('me')
+  updateProfile(@Req() request: any, @Body() body: UpdateProfileDto) { return this.auth.updateProfile(request.principal, body) }
   @Header('Cache-Control', 'no-store') @Post('device-grants/preview')
   preview(@Body() body: PreviewDeviceGrantDto) { return this.grants.preview(body.link) }
   @Header('Cache-Control', 'no-store') @Post('device-grants/redeem')

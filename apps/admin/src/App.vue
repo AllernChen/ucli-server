@@ -10,20 +10,20 @@ const email = ref('')
 const password = ref('')
 const error = ref('')
 const loggedIn = ref(Boolean(localStorage.getItem('ucli.accessToken')))
-const principal = ref<{ id: string; displayName: string; organizationId: string; role: string } | null>(null)
+const principal = ref<{ id: string; displayName: string; email: string; status: string; organizationId: string; organizationName: string; role: string } | null>(null)
 const checking = ref(loggedIn.value)
 const allNavigation = [
   ['overview', '服务总览'], ['channels', '渠道管理'], ['models', '模型目录'], ['procurement-costs', '采购成本'], ['model-test', '模型测试'],
   ['usage', '使用日志'], ['skills', '技能超市'], ['reports', '运营报告'],
   ['analytics', '统计分析'],
-  ['usage-groups', '用量组'], ['my-access', '我的接入'], ['users', '用户管理'], ['device-grants', '授权令牌'],
+  ['usage-groups', '用量组'], ['users', '用户管理'], ['device-grants', '授权令牌'],
   ['governance', '治理'], ['organizations', '组织']
 ]
 const navigation = computed(() => principal.value?.role === 'PLATFORM_ADMIN' ? allNavigation : allNavigation.filter(([name]) =>
-  (principal.value?.role === 'ORG_ADMIN' ? ['usage-groups', 'my-access', 'usage', 'analytics', 'users', 'device-grants'] : ['my-access', 'usage', 'analytics']).includes(name)))
-const routeAllowed = computed(() => principal.value && navigation.value.some(([name]) => route.name === name ||
+  (principal.value?.role === 'ORG_ADMIN' ? ['usage-groups', 'usage', 'analytics', 'users', 'device-grants'] : ['usage', 'analytics']).includes(name)))
+const routeAllowed = computed(() => principal.value && (['profile', 'my-access'].includes(String(route.name)) || navigation.value.some(([name]) => route.name === name ||
   (name === 'usage-groups' && route.name === 'usage-group-detail') || (name === 'users' && route.name === 'user-detail') ||
-  (name === 'channels' && route.name === 'channel-detail') || (name === 'models' && route.name === 'model-detail')))
+  (name === 'channels' && route.name === 'channel-detail') || (name === 'models' && route.name === 'model-detail'))))
 let sessionGeneration = 0
 async function loadIdentity() {
   const current = ++sessionGeneration; checking.value = true; principal.value = null; error.value = ''
@@ -31,18 +31,13 @@ async function loadIdentity() {
     const identity = await api('/api/v1/auth/me')
     if (current === sessionGeneration) {
       principal.value = identity
-      if (identity.role !== 'PLATFORM_ADMIN' && route.name === 'overview') router.push('/my-access')
+      if (identity.role !== 'PLATFORM_ADMIN' && route.name === 'overview') router.push('/profile')
     }
   } catch (value: any) { if (current === sessionGeneration) error.value = value.message }
   finally { if (current === sessionGeneration) checking.value = false }
 }
 onMounted(() => { if (loggedIn.value) loadIdentity() })
 
-const showPasswordModal = ref(false)
-const currentPassword = ref('')
-const newPassword = ref('')
-const confirmPassword = ref('')
-const passwordError = ref('')
 const passwordChanged = ref(false)
 
 async function login() {
@@ -54,23 +49,7 @@ async function login() {
   } catch (value: any) { error.value = value.message }
 }
 function logout() { sessionGeneration++; localStorage.removeItem('ucli.accessToken'); loggedIn.value = false; principal.value = null; checking.value = false; password.value = '' }
-function openPasswordModal() {
-  currentPassword.value = ''; newPassword.value = ''; confirmPassword.value = ''
-  passwordError.value = ''
-  showPasswordModal.value = true
-}
-async function changePassword() {
-  passwordError.value = ''
-  if (!currentPassword.value || !newPassword.value || !confirmPassword.value) return passwordError.value = '请填写完整'
-  if (newPassword.value !== confirmPassword.value) return passwordError.value = '两次新密码不一致'
-  if (newPassword.value.length < 8) return passwordError.value = '新密码至少 8 位'
-  try {
-    await api('/api/v1/auth/password', { method: 'POST', body: JSON.stringify({ currentPassword: currentPassword.value, newPassword: newPassword.value }) })
-    logout()
-    showPasswordModal.value = false
-    passwordChanged.value = true
-  } catch (value: any) { passwordError.value = value.message }
-}
+function onPasswordChanged() { logout(); passwordChanged.value = true }
 </script>
 
 <template>
@@ -94,24 +73,10 @@ async function changePassword() {
   <div v-else class="shell">
     <aside><header><div class="brand-mark">U</div><div><strong>UCLI</strong><small>Server Console</small></div></header>
       <nav><button v-for="item in navigation" :key="item[0]" :class="{active: route.name === item[0] || (item[0] !== 'model-test' && String(route.name || '').startsWith(`${item[0].replace(/s$/, '')}-`))}" @click="router.push(item[0] === 'overview' ? '/' : `/${item[0]}`)">{{ item[1] }}</button></nav>
-      <button class="logout" @click="openPasswordModal">修改密码</button>
+      <button class="logout" :aria-current="route.name === 'profile' ? 'page' : undefined" @click="router.push('/profile')">个人中心 · {{ principal.displayName }}</button>
       <button class="logout" @click="logout">退出登录</button>
     </aside>
-    <section class="content"><RouterView v-if="routeAllowed" /><section v-else class="panel"><h1>当前账号无权访问此页面</h1><button @click="router.push('/my-access')">前往我的接入</button></section></section>
-
-    <div v-if="showPasswordModal" class="modal-backdrop" @click.self="showPasswordModal = false">
-      <div class="modal">
-        <h2>修改密码</h2>
-        <input v-model="currentPassword" type="password" placeholder="当前密码">
-        <input v-model="newPassword" type="password" placeholder="新密码（至少 8 位）">
-        <input v-model="confirmPassword" type="password" placeholder="确认新密码">
-        <p v-if="passwordError" class="state error">{{ passwordError }}</p>
-        <div class="modal-actions">
-          <button class="primary" @click="changePassword">确认修改</button>
-          <button @click="showPasswordModal = false">取消</button>
-        </div>
-      </div>
-    </div>
+    <section class="content"><RouterView v-if="routeAllowed" v-slot="{ Component }"><component :is="Component" v-if="route.name === 'profile'" :principal="principal" @profile-updated="loadIdentity" @password-changed="onPasswordChanged" @logout="logout" /><component :is="Component" v-else /></RouterView><section v-else class="panel"><h1>当前账号无权访问此页面</h1><button @click="router.push('/profile')">前往个人中心</button></section></section>
   </div>
   <div class="toasts" aria-live="polite"><div v-for="t in toasts" :key="t.id" class="toast">{{ t.message }}</div></div>
 </template>

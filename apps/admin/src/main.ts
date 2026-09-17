@@ -27,6 +27,7 @@ import UserDetail from './views/UserDetail.vue'
 import DeviceGrants from './views/DeviceGrants.vue'
 
 const routes = [
+  { path: '/profile', name: 'profile', component: () => import('./views/Profile.vue') },
   { path: '/', name: 'overview', component: Dashboard },
   { path: '/usage', name: 'usage', component: Usage },
   { path: '/channels', name: 'channels', component: Channels },

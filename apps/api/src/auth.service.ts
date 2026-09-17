@@ -13,9 +13,33 @@ export class AuthService {
   constructor(private readonly prisma: PrismaService) {}
 
   async me(actor: AuthPrincipal) {
+    this.assertWebSession(actor)
+    const [account, organization] = await Promise.all([
+      this.prisma.account.findUniqueOrThrow({ where: { id: actor.sub }, select: { id: true, displayName: true, email: true, status: true } }),
+      this.prisma.organization.findUniqueOrThrow({ where: { id: actor.organizationId }, select: { name: true } })
+    ])
+    return this.profile(actor, account, organization.name)
+  }
+
+  async updateProfile(actor: AuthPrincipal, input: { displayName: string }) {
+    this.assertWebSession(actor)
+    return this.prisma.$transaction(async db => {
+      const account = await db.account.update({ where: { id: actor.sub }, data: { displayName: input.displayName },
+        select: { id: true, displayName: true, email: true, status: true } })
+      await db.auditLog.create({ data: { actorAccountId: actor.sub, organizationId: actor.organizationId,
+        action: 'account.profile.update', resourceType: 'account', resourceId: actor.sub, metadata: { displayName: input.displayName } } })
+      const organization = await db.organization.findUniqueOrThrow({ where: { id: actor.organizationId }, select: { name: true } })
+      return this.profile(actor, account, organization.name)
+    })
+  }
+
+  private assertWebSession(actor: AuthPrincipal) {
     if (actor.deviceId) throw new ForbiddenException('Web login required')
-    const account = await this.prisma.account.findUniqueOrThrow({ where: { id: actor.sub }, select: { id: true, displayName: true } })
-    return { ...account, organizationId: actor.organizationId, role: actor.role }
+  }
+
+  private profile(actor: AuthPrincipal, account: { id: string; displayName: string; email: string; status: string }, organizationName: string) {
+    return { id: account.id, displayName: account.displayName, email: account.email, status: account.status,
+      organizationId: actor.organizationId, organizationName, role: actor.role }
   }
 
   async setup(input: { email: string; password: string; displayName: string; organizationName: string }, presentedSecret?: string) {
