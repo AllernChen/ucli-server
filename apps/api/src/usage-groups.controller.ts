@@ -23,6 +23,8 @@ export class UsageGroupsController {
   @Get(':id/members') members(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Query() query: PageQueryDto) { return this.groups.members(req.principal.organizationId, id, query) }
   @Post(':id/members') addMember(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Body() body: AddGroupMemberDto) { return this.groups.addMember(req.principal, id, body.accountId) }
   @Delete(':id/members/:accountId') removeMember(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Param('accountId', UuidPipe) accountId: string) { return this.groups.removeMember(req.principal, id, accountId) }
+  @Post(':id/members/:accountId/leader') setLeader(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Param('accountId', UuidPipe) accountId: string) { return this.groups.setLeader(req.principal, id, accountId, true) }
+  @Delete(':id/members/:accountId/leader') unsetLeader(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Param('accountId', UuidPipe) accountId: string) { return this.groups.setLeader(req.principal, id, accountId, false) }
   @Get(':id/models') models(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string) { return this.groups.models(req.principal.organizationId, id) }
   @Get(':id/model-options') modelOptions(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Query() query: GroupModelOptionsDto) { return this.groups.modelOptions(req.principal.organizationId, id, query.accountId) }
   @Put(':id/models') replaceModels(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Body() body: ReplaceGroupModelsDto) { return this.groups.replaceModels(req.principal, id, body.publicModelIds) }

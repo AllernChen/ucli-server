@@ -185,6 +185,36 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('group management (PostgreSQL)',
     })
   })
 
+  it('appoints and dismisses group leaders with scoping, idempotency and audit', async () => {
+    await withTestDatabase(async db => {
+      const a = await createOrganization(db)
+      const service = new UsageGroupsService(db as PrismaService)
+      const group = await service.create(a.actor, { name: 'Led', type: 'PROJECT' })
+      const member = await db.account.create({ data: { email: `${randomUUID()}@example.invalid`, displayName: 'Member' } })
+      const plain = await db.account.create({ data: { email: `${randomUUID()}@example.invalid`, displayName: 'Plain' } })
+      for (const account of [member, plain]) {
+        await db.membership.create({ data: { organizationId: a.actor.organizationId, accountId: account.id, role: 'MEMBER' } })
+        await service.addMember(a.actor, group.id, account.id)
+      }
+      const memberRow = () => service.members(a.actor.organizationId, group.id).then(page => page.items.find(item => item.accountId === member.id)!)
+
+      await expect(service.setLeader(a.actor, group.id, member.id, true)).resolves.toEqual({ accountId: member.id, role: 'LEADER' })
+      await expect(service.setLeader(a.actor, group.id, member.id, true)).resolves.toEqual({ accountId: member.id, role: 'LEADER' })
+      expect((await memberRow()).role).toBe('LEADER')
+      await expect(service.setLeader(a.actor, group.id, member.id, false)).resolves.toEqual({ accountId: member.id, role: 'MEMBER' })
+      expect((await memberRow()).role).toBe('MEMBER')
+
+      const stranger = await createOrganization(db)
+      await expect(service.setLeader(a.actor, group.id, stranger.account.id, true)).rejects.toMatchObject({ status: 404 })
+      await expect(service.setLeader({ organizationId: a.actor.organizationId, sub: plain.id, role: 'MEMBER', tokenVersion: 1 }, group.id, member.id, true))
+        .rejects.toMatchObject({ status: 403 })
+
+      await service.removeMember(a.actor, group.id, member.id)
+      await expect(service.setLeader(a.actor, group.id, member.id, true)).rejects.toMatchObject({ status: 404 })
+      expect(await db.auditLog.count({ where: { organizationId: a.actor.organizationId, action: 'usage_group.set_leader', resourceId: group.id } })).toBeGreaterThanOrEqual(2)
+    })
+  })
+
   it('does not leave live credentials when removal races redemption and regeneration', async () => {
     vi.stubEnv('JWT_SECRET', 'local-integration-only')
     vi.stubEnv('MASTER_KEY', Buffer.alloc(32, 9).toString('base64'))

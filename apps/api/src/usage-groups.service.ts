@@ -181,6 +181,15 @@ export class UsageGroupsService {
     }, { accountId })
   }
 
+  setLeader(actor: AuthPrincipal, id: string, accountId: string, leader: boolean) {
+    return this.mutate(actor, id, leader ? 'set_leader' : 'unset_leader', async db => {
+      const result = await db.groupMember.updateMany({ where: { organizationId: actor.organizationId, groupId: id, accountId, removedAt: null },
+        data: { role: leader ? 'LEADER' : 'MEMBER' } })
+      if (!result.count) throw new NotFoundException('Group member not found')
+      return { accountId, role: leader ? 'LEADER' as const : 'MEMBER' as const }
+    }, { accountId, leader })
+  }
+
   async models(organizationId: string, id: string) {
     await this.detail(organizationId, id)
     return this.prisma.groupModelAccess.findMany({ where: { organizationId, groupId: id }, orderBy: { publicModelId: 'asc' },
