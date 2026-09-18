@@ -397,6 +397,8 @@ describe('managed users', () => {
     const passwordless = await service.create('org-1', { email: 'plain@example.com', displayName: 'Plain' })
     expect(passwordless).not.toHaveProperty('initialPassword')
     expect(state.accounts[2].passwordHash).toBeNull()
+    expect(state.accounts[1].pendingCredentialChange).toBe(true)
+    expect(state.accounts[2].pendingCredentialChange).toBe(false)
   })
 
   it('validates the initial and reset password length bounds', async () => {
@@ -425,6 +427,7 @@ describe('managed users', () => {
     expect(result).toEqual({ initialPassword: 'brand-new-pass' })
     expect(state.accounts[0].passwordHash).toEqual(expect.any(String))
     expect(state.accounts[0].tokenVersion).toBe(2)
+    expect(state.accounts[0].pendingCredentialChange).toBe(true)
     expect(state.audits).toEqual([expect.objectContaining({
       organizationId: 'org-1', actorAccountId: 'admin-1',
       action: 'user.password_reset', resourceType: 'account', resourceId: 'account-1'

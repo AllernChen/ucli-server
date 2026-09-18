@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiHeader, ApiTags } from '@nestjs/swagger'
 import { AuthGuard } from '../../../packages/security/src/auth.js'
 import { AuthService } from './auth.service.js'
 import { DeviceGrantsService } from './device-grants.service.js'
+import { InitialCredentialsDto } from './profile.dto.js'
 import { PreviewDeviceGrantDto, RedeemDeviceGrantDto } from './device-grants.dto.js'
 import { UpdateProfileDto } from './profile.dto.js'
 
@@ -27,6 +28,12 @@ export class AuthController {
   changePassword(@Body() body: any, @Req() request: any) {
     return this.auth.changePassword(request.principal.sub, {
       currentPassword: String(body.currentPassword || ''), newPassword: String(body.newPassword || '')
+    })
+  }
+  @ApiBearerAuth() @UseGuards(AuthGuard) @Post('initial-credentials') @Header('Cache-Control', 'no-store')
+  initialCredentials(@Body() body: InitialCredentialsDto, @Req() request: any) {
+    return this.auth.updateInitialCredentials(request.principal, {
+      currentPassword: body.currentPassword, newPassword: body.newPassword, newEmail: body.newEmail
     })
   }
 }

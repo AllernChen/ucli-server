@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common'
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common'
 import { Role } from '@prisma/client'
 import argon2 from 'argon2'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
@@ -15,7 +15,7 @@ export class AuthService {
   async me(actor: AuthPrincipal) {
     this.assertWebSession(actor)
     const [account, organization] = await Promise.all([
-      this.prisma.account.findUniqueOrThrow({ where: { id: actor.sub }, select: { id: true, displayName: true, email: true, status: true } }),
+      this.prisma.account.findUniqueOrThrow({ where: { id: actor.sub }, select: { id: true, displayName: true, email: true, status: true, pendingCredentialChange: true } }),
       this.prisma.organization.findUniqueOrThrow({ where: { id: actor.organizationId }, select: { name: true } })
     ])
     return this.profile(actor, account, organization.name)
@@ -37,9 +37,38 @@ export class AuthService {
     if (actor.deviceId) throw new ForbiddenException('Web login required')
   }
 
-  private profile(actor: AuthPrincipal, account: { id: string; displayName: string; email: string; status: string }, organizationName: string) {
+  private profile(actor: AuthPrincipal, account: { id: string; displayName: string; email: string; status: string; pendingCredentialChange?: boolean }, organizationName: string) {
     return { id: account.id, displayName: account.displayName, email: account.email, status: account.status,
+      pendingCredentialChange: Boolean(account.pendingCredentialChange),
       organizationId: actor.organizationId, organizationName, role: actor.role }
+  }
+
+  async updateInitialCredentials(actor: AuthPrincipal, input: { currentPassword: string; newPassword: string; newEmail?: string }) {
+    this.assertWebSession(actor)
+    if (input.newPassword.length < 8) throw new BadRequestException('New password must be at least 8 characters')
+    const account = await this.prisma.account.findUnique({ where: { id: actor.sub } })
+    if (!account || account.status !== 'ACTIVE' || !account.pendingCredentialChange || !account.passwordHash ||
+        !await argon2.verify(account.passwordHash, input.currentPassword)) {
+      throw new UnauthorizedException('Invalid credentials')
+    }
+    const passwordHash = await argon2.hash(input.newPassword)
+    let email: string | null = input.newEmail ? String(input.newEmail).trim().toLowerCase() : null
+    if (email === account.email) email = null
+    try {
+      await this.prisma.$transaction(async db => {
+        await db.account.update({ where: { id: actor.sub }, data: {
+          passwordHash, tokenVersion: { increment: 1 }, pendingCredentialChange: false, ...(email ? { email } : {}) } })
+        await db.auditLog.create({ data: { organizationId: actor.organizationId, actorAccountId: actor.sub,
+          action: 'account.initial_credentials_updated', resourceType: 'account', resourceId: actor.sub,
+          metadata: { emailChanged: Boolean(email) } } })
+      })
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002') {
+        throw new ConflictException('Account email already exists')
+      }
+      throw error
+    }
+    return { email: email || account.email }
   }
 
   async setup(input: { email: string; password: string; displayName: string; organizationName: string }, presentedSecret?: string) {

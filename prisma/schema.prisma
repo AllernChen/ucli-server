@@ -157,6 +157,7 @@ model Account {
   email               String                @unique
   displayName         String                @map("display_name")
   passwordHash String? @map("password_hash")
+  pendingCredentialChange Boolean @default(false) @map("pending_credential_change")
   status              AccountStatus         @default(ACTIVE)
   tokenVersion        Int                   @default(1) @map("token_version")
   createdAt           DateTime              @default(now()) @map("created_at")

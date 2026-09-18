@@ -109,7 +109,7 @@ export class UsersService {
     const passwordHash = input.initialPassword ? await argon2.hash(input.initialPassword) : null
     try {
       return await this.prisma.$transaction(async transaction => {
-        const account = await transaction.account.create({ data: { ...normalized, passwordHash } })
+        const account = await transaction.account.create({ data: { ...normalized, passwordHash, pendingCredentialChange: Boolean(input.initialPassword) } })
         const membership = await transaction.membership.create({ data: {
           organizationId, accountId: account.id, role: Role.MEMBER, status: AccountStatus.ACTIVE
         } })
@@ -140,7 +140,7 @@ export class UsersService {
     if (!membership) throw new NotFoundException('Managed user not found')
     const passwordHash = await argon2.hash(newPassword)
     await this.prisma.$transaction(async transaction => {
-      await transaction.account.update({ where: { id: accountId }, data: { passwordHash, tokenVersion: { increment: 1 } } })
+      await transaction.account.update({ where: { id: accountId }, data: { passwordHash, tokenVersion: { increment: 1 }, pendingCredentialChange: true } })
       await transaction.auditLog.create({ data: {
         organizationId: actor.organizationId, actorAccountId: actor.sub,
         action: 'user.password_reset', resourceType: 'account', resourceId: accountId, metadata: {}

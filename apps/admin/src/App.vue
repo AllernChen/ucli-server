@@ -10,7 +10,7 @@ const email = ref('')
 const password = ref('')
 const error = ref('')
 const loggedIn = ref(Boolean(localStorage.getItem('ucli.accessToken')))
-const principal = ref<{ id: string; displayName: string; email: string; status: string; organizationId: string; organizationName: string; role: string } | null>(null)
+const principal = ref<{ id: string; displayName: string; email: string; status: string; pendingCredentialChange: boolean; organizationId: string; organizationName: string; role: string } | null>(null)
 const checking = ref(loggedIn.value)
 const allNavigation = [
   ['overview', '服务总览'], ['channels', '渠道管理'], ['models', '模型目录'], ['procurement-costs', '采购成本'], ['model-test', '模型测试'],
@@ -31,6 +31,7 @@ async function loadIdentity() {
     const identity = await api('/api/v1/auth/me')
     if (current === sessionGeneration) {
       principal.value = identity
+      if (identity.pendingCredentialChange) initialGate.value = true
       if (identity.role !== 'PLATFORM_ADMIN' && route.name === 'overview') router.push('/profile')
     }
   } catch (value: any) { if (current === sessionGeneration) error.value = value.message }
@@ -39,6 +40,28 @@ async function loadIdentity() {
 onMounted(() => { if (loggedIn.value) loadIdentity() })
 
 const passwordChanged = ref(false)
+const initialGate = ref(false)
+const credentialsUpdated = ref<string | null>(null)
+const gateCurrentPassword = ref(''), gateNewEmail = ref(''), gateNewPassword = ref(''), gateConfirm = ref('')
+const gateError = ref(''), gatePending = ref(false)
+
+async function submitInitialCredentials() {
+  if (gatePending.value) return
+  gateError.value = ''
+  if (gateNewPassword.value.length < 8) { gateError.value = '新密码至少 8 位'; return }
+  if (gateNewPassword.value !== gateConfirm.value) { gateError.value = '两次新密码不一致'; return }
+  gatePending.value = true
+  try {
+    const result = await api<{ email: string }>('/api/v1/auth/initial-credentials', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword: gateCurrentPassword.value, newPassword: gateNewPassword.value,
+        ...(gateNewEmail.value.trim() ? { newEmail: gateNewEmail.value.trim() } : {}) })
+    })
+    logout(); initialGate.value = false; credentialsUpdated.value = result.email
+    gateCurrentPassword.value = ''; gateNewEmail.value = ''; gateNewPassword.value = ''; gateConfirm.value = ''
+  } catch (value: any) { gateError.value = value.message }
+  finally { gatePending.value = false }
+}
 
 async function login() {
   try {
@@ -58,6 +81,25 @@ function onPasswordChanged() { logout(); passwordChanged.value = true }
       <div class="brand-mark">U</div><h1>密码修改成功</h1>
       <p>密码已更新，旧会话已失效，请使用新密码重新登录。</p>
       <button @click="passwordChanged = false">去登录</button>
+    </div>
+  </main>
+  <main v-else-if="initialGate && principal" class="login-shell">
+    <form class="login-card" style="text-align:left" @submit.prevent="submitInitialCredentials">
+      <div class="brand-mark" style="margin:auto">U</div><h1 style="text-align:center">首次登录</h1>
+      <p style="text-align:center">管理员为你创建了初始账号（{{ principal.email }}）。请设置自己的新密码；如需更换登录邮箱可一并填写，留空则保留当前邮箱。</p>
+      <input v-model="gateCurrentPassword" type="password" placeholder="当前密码（初始密码）" autocomplete="current-password" required>
+      <input v-model="gateNewEmail" type="email" placeholder="新邮箱（选填，留空保留当前）" autocomplete="email">
+      <input v-model="gateNewPassword" type="password" placeholder="新密码（至少 8 位）" autocomplete="new-password" minlength="8" required>
+      <input v-model="gateConfirm" type="password" placeholder="确认新密码" autocomplete="new-password" minlength="8" required>
+      <button :disabled="gatePending">{{ gatePending ? '正在保存…' : '完成并重新登录' }}</button>
+      <small v-if="gateError" class="error">{{ gateError }}</small>
+    </form>
+  </main>
+  <main v-else-if="credentialsUpdated" class="login-shell">
+    <div class="login-card">
+      <div class="brand-mark">U</div><h1>初始凭据已更新</h1>
+      <p>登录账号：{{ credentialsUpdated }}。旧会话已失效，请使用新邮箱和新密码重新登录。</p>
+      <button @click="credentialsUpdated = null">去登录</button>
     </div>
   </main>
   <main v-else-if="route.meta.public === true"><RouterView /></main>
