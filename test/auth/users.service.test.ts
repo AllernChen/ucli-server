@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { plainToInstance } from 'class-transformer'
 import { validate } from 'class-validator'
 import { UsersService } from '../../apps/api/src/users.service.js'
-import { CreateManagedUserDto, ResetUserPasswordDto, UpdateManagedUserRoleDto } from '../../apps/api/src/device-grants.dto.js'
+import { CreateManagedUserDto, ResetUserPasswordDto, UpdateManagedUserRoleDto, UpdateUserEmailDto } from '../../apps/api/src/device-grants.dto.js'
 
 const schema = readFileSync('prisma/schema.prisma', 'utf8')
 const migration = readFileSync('prisma/migrations/202608260001_device_grants/migration.sql', 'utf8')
@@ -80,6 +80,11 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
       },
       update: async ({ where, data }: any) => {
         const account = accountFor(where.id)
+        if (data.email && state.accounts.some((item: any) => item.email === data.email && item.id !== where.id)) {
+          const error: any = new Error('Unique constraint')
+          error.code = 'P2002'
+          throw error
+        }
         const { tokenVersion, ...fields } = data
         Object.assign(account, fields)
         if (data.tokenVersion?.increment) account.tokenVersion += data.tokenVersion.increment
@@ -404,6 +409,11 @@ describe('managed users', () => {
     expect(await validate(blankReset)).not.toEqual([])
     const okReset = plainToInstance(ResetUserPasswordDto, { newPassword: 'long-enough-8' })
     expect(await validate(okReset)).toEqual([])
+
+    expect(await validate(plainToInstance(UpdateUserEmailDto, { email: 'not-an-email' }))).not.toEqual([])
+    const normalizedEmail = plainToInstance(UpdateUserEmailDto, { email: ' USER@Example.COM ' })
+    expect(await validate(normalizedEmail)).toEqual([])
+    expect(normalizedEmail.email).toBe('user@example.com')
   })
 
   it('resets a password, invalidates sessions and audits without leaking the secret', async () => {
@@ -420,6 +430,47 @@ describe('managed users', () => {
       action: 'user.password_reset', resourceType: 'account', resourceId: 'account-1'
     })])
     expect(JSON.stringify(state.audits)).not.toContain('brand-new-pass')
+  })
+
+  it('changes a managed user email with audit and without session invalidation', async () => {
+    const { service, state } = makeUsersHarness()
+    await expect(service.updateEmail(
+      { sub: 'admin-1', organizationId: 'org-1', role: 'ORG_ADMIN' },
+      'account-1', ' Real.Name@Example.COM '
+    )).resolves.toEqual({ email: 'real.name@example.com' })
+    expect(state.accounts[0].email).toBe('real.name@example.com')
+    expect(state.accounts[0].tokenVersion).toBe(1)
+    expect(state.audits).toEqual([expect.objectContaining({
+      action: 'user.email_update', resourceType: 'account', resourceId: 'account-1',
+      metadata: { before: 'existing@example.com', after: 'real.name@example.com' }
+    })])
+
+    const unchanged = await service.updateEmail(
+      { sub: 'admin-1', organizationId: 'org-1', role: 'ORG_ADMIN' },
+      'account-1', 'real.name@example.com'
+    )
+    expect(unchanged).toEqual({ email: 'real.name@example.com' })
+    expect(state.audits).toHaveLength(1)
+  })
+
+  it('rejects email changes that are duplicate, foreign, self or non-admin', async () => {
+    const admin = { sub: 'admin-1', organizationId: 'org-1', role: 'ORG_ADMIN' as const }
+    const duplicate = makeUsersHarness({ secondOrganization: true })
+    await expect(duplicate.service.updateEmail(admin, 'account-1', 'other@example.com')).rejects.toMatchObject({ status: 409 })
+    expect(duplicate.state.accounts[0].email).toBe('existing@example.com')
+
+    const foreign = makeUsersHarness({ secondOrganization: true })
+    await expect(foreign.service.updateEmail(admin, 'account-2', 'fresh@example.com')).rejects.toMatchObject({ status: 404 })
+
+    const self = makeUsersHarness()
+    await expect(self.service.updateEmail(admin, 'admin-1', 'fresh@example.com')).rejects.toMatchObject({ status: 403 })
+
+    const member = makeUsersHarness()
+    await expect(member.service.updateEmail(
+      { sub: 'member-2', organizationId: 'org-1', role: 'MEMBER' }, 'account-1', 'fresh@example.com'
+    )).rejects.toMatchObject({ status: 403 })
+    expect(member.state.accounts[0].email).toBe('existing@example.com')
+    expect(member.state.audits).toEqual([])
   })
 
   it('rejects password resets from non-administrators or across organizations', async () => {

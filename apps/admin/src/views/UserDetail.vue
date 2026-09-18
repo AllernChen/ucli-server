@@ -38,6 +38,44 @@ const passwordError = ref('')
 const passwordCopyError = ref('')
 const createdPassword = ref('')
 const passwordForm = reactive({ newPassword: '' })
+const emailOpen = ref(false)
+const emailPending = ref(false)
+const emailError = ref('')
+const emailForm = reactive({ email: '' })
+
+function openEmail() {
+  emailError.value = ''
+  emailForm.email = user.value?.email || ''
+  emailOpen.value = true
+}
+
+function closeEmail() {
+  if (emailPending.value) return
+  emailOpen.value = false
+  emailError.value = ''
+}
+
+async function submitEmail() {
+  if (emailPending.value) return
+  const requestedUserId = userId.value
+  const routeGeneration = currentRouteGeneration
+  emailError.value = ''
+  emailPending.value = true
+  try {
+    await api(`/api/v1/admin/users/${requestedUserId}/email`, {
+      method: 'PATCH', body: JSON.stringify({ email: emailForm.email.trim() })
+    })
+    if (!isCurrentRoute(routeGeneration, requestedUserId)) return
+    emailOpen.value = false
+    toast('登录邮箱已更新')
+    await load()
+  } catch (value: unknown) {
+    if (!isCurrentRoute(routeGeneration, requestedUserId)) return
+    emailError.value = errorMessage(value, '修改邮箱失败')
+  } finally {
+    if (isCurrentRoute(routeGeneration, requestedUserId)) emailPending.value = false
+  }
+}
 
 function errorMessage(value: unknown, fallback: string) {
   return deviceGrantErrorMessage(value, fallback)
@@ -136,6 +174,9 @@ function resetForUser() {
   passwordPending.value = false
   passwordError.value = ''
   clearCreatedPassword()
+  emailOpen.value = false
+  emailPending.value = false
+  emailError.value = ''
 }
 
 async function load() {
@@ -241,7 +282,7 @@ onUnmounted(() => {
 
 <template>
   <header class="page-header"><div><button type="button" class="back-link" @click="router.push('/users')">← 返回用户管理</button><p>USER ACCESS</p><h1>{{ user?.displayName || userId }}</h1><span class="subtitle">{{ user?.email }}</span></div>
-    <div class="actions"><button type="button" @click="load">刷新</button><button type="button" @click="openPassword">{{ user?.hasPassword ? '重置密码' : '设置密码' }}</button><button type="button" class="primary" :disabled="!canCreateGrant || grantPending" @click="openGrant">创建授权</button></div></header>
+    <div class="actions"><button type="button" @click="load">刷新</button><button type="button" @click="openPassword">{{ user?.hasPassword ? '重置密码' : '设置密码' }}</button><button type="button" @click="openEmail">修改邮箱</button><button type="button" class="primary" :disabled="!canCreateGrant || grantPending" @click="openGrant">创建授权</button></div></header>
   <p v-if="user && !canCreateGrant" class="state">仅可为已启用的用户创建授权；请先启用该用户。</p>
   <p v-if="loading && !hasLoaded" class="state">正在加载用户…</p><p v-else-if="error && !hasLoaded" class="state error">{{ error }}</p>
   <template v-else-if="user"><p v-if="error" class="state error">{{ error }}</p><div class="detail-grid"><article class="panel metric-block"><span>当前组织成员状态</span><strong class="small-strong">{{ user.status === 'ACTIVE' ? '正常' : '已禁用' }}</strong></article><article class="panel metric-block"><span>角色</span><strong class="small-strong">{{ user.role }}</strong></article><article class="panel metric-block"><span>设备</span><strong>{{ user.deviceCount }}</strong></article><article class="panel metric-block"><span>授权</span><strong>{{ user.deviceGrantCount }}</strong></article><article class="panel metric-block"><span>登录密码</span><strong class="small-strong">{{ user.hasPassword ? '已设置' : '未设置（仅 Key 访问）' }}</strong></article></div>
@@ -254,4 +295,5 @@ onUnmounted(() => {
   <Drawer :open="Boolean(createdSecret)" title="授权创建成功" description="关闭只会清除当前页面中的副本；以后仍可在授权列表中查看当前 URL" @close="clearSecret"><label>连接链接<textarea readonly :value="createdSecret?.connectionUrl || ''" aria-label="完整连接链接"></textarea></label><p v-if="copyError" class="state error">{{ copyError }}</p><template #footer><button type="button" @click="copyConnectionUrl">复制连接链接</button><button type="button" class="primary" @click="clearSecret">关闭</button></template></Drawer>
   <Drawer :open="passwordOpen" :title="user?.hasPassword ? '重置登录密码' : '设置登录密码'" description="设置后员工可使用邮箱和密码登录平台访问个人中心；重置会使该账号已登录的网页会话全部失效。密码仅在提交成功后显示一次。" :close-disabled="passwordPending" @close="closePassword"><form id="password-form" class="stack-form" @submit.prevent="submitPassword"><label>新密码（至少 8 位）<input v-model="passwordForm.newPassword" type="text" autocomplete="off" minlength="8" maxlength="128" required></label><p v-if="passwordError" class="state error">{{ passwordError }}</p></form><template #footer><button type="button" :disabled="passwordPending" @click="closePassword">取消</button><button type="submit" form="password-form" class="primary" :disabled="passwordPending">{{ passwordPending ? '正在设置…' : '确认设置' }}</button></template></Drawer>
   <Drawer :open="Boolean(createdPassword)" title="密码已设置" description="关闭只会清除当前页面中的副本；员工忘记密码时，管理员可随时重置。" @close="clearCreatedPassword"><label>登录密码<textarea readonly :value="createdPassword" aria-label="登录密码"></textarea></label><p v-if="passwordCopyError" class="state error">{{ passwordCopyError }}</p><template #footer><button type="button" @click="copyCreatedPassword">复制密码</button><button type="button" class="primary" @click="clearCreatedPassword">关闭</button></template></Drawer>
+  <Drawer :open="emailOpen" title="修改登录邮箱" description="邮箱是员工登录平台的账号。修改后立即生效，已登录会话不受影响；不能修改自己的邮箱。" :close-disabled="emailPending" @close="closeEmail"><form id="email-form" class="stack-form" @submit.prevent="submitEmail"><label>新邮箱<input v-model="emailForm.email" type="email" autocomplete="off" maxlength="320" required></label><p v-if="emailError" class="state error">{{ emailError }}</p></form><template #footer><button type="button" :disabled="emailPending" @click="closeEmail">取消</button><button type="submit" form="email-form" class="primary" :disabled="emailPending">{{ emailPending ? '正在保存…' : '确认修改' }}</button></template></Drawer>
 </template>

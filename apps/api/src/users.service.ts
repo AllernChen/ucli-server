@@ -149,6 +149,38 @@ export class UsersService {
     return { initialPassword: newPassword }
   }
 
+  async updateEmail(
+    actor: Pick<AuthPrincipal, 'sub' | 'organizationId' | 'role'>,
+    accountId: string,
+    email: string
+  ): Promise<{ email: string }> {
+    if (actor.role !== Role.PLATFORM_ADMIN && actor.role !== Role.ORG_ADMIN) {
+      throw new ForbiddenException('Administrator role required')
+    }
+    if (actor.sub === accountId) throw new ForbiddenException('Administrators cannot change their own email')
+    const normalized = String(email).trim().toLowerCase()
+    const membership = await this.prisma.membership.findUnique({
+      where: { organizationId_accountId: { organizationId: actor.organizationId, accountId } },
+      select: { account: { select: { email: true } } }
+    })
+    if (!membership) throw new NotFoundException('Managed user not found')
+    if (membership.account.email === normalized) return { email: normalized }
+    try {
+      await this.prisma.$transaction(async transaction => {
+        await transaction.account.update({ where: { id: accountId }, data: { email: normalized } })
+        await transaction.auditLog.create({ data: {
+          organizationId: actor.organizationId, actorAccountId: actor.sub,
+          action: 'user.email_update', resourceType: 'account', resourceId: accountId,
+          metadata: { before: membership.account.email, after: normalized }
+        } })
+      })
+    } catch (error) {
+      if (isUniqueConstraint(error)) throw new ConflictException('Account email already exists')
+      throw error
+    }
+    return { email: normalized }
+  }
+
   async list(organizationId: string, query: ManagedUserPageQueryDto): Promise<{ items: ManagedUser[]; total: number; limit: number; offset: number }> {
     const q = query.q?.trim()
     const where = {

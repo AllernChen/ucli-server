@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { UuidPipe } from '../../../packages/http/src/uuid.pipe.js'
 import { AuthGuard, Roles } from '../../../packages/security/src/auth.js'
-import { CreateManagedUserDto, ManagedUserPageQueryDto, ResetUserPasswordDto, UpdateManagedUserRoleDto } from './device-grants.dto.js'
+import { CreateManagedUserDto, ManagedUserPageQueryDto, ResetUserPasswordDto, UpdateManagedUserRoleDto, UpdateUserEmailDto } from './device-grants.dto.js'
 import { UsersService } from './users.service.js'
 
 @ApiTags('admin/users') @ApiBearerAuth() @UseGuards(AuthGuard)
@@ -20,5 +20,8 @@ export class UsersController {
   }
   @Post(':id/reset-password') resetPassword(@Req() req: any, @Param('id', UuidPipe) id: string, @Body() body: ResetUserPasswordDto) {
     return this.users.resetPassword(req.principal, id, body.newPassword)
+  }
+  @Patch(':id/email') updateEmail(@Req() req: any, @Param('id', UuidPipe) id: string, @Body() body: UpdateUserEmailDto) {
+    return this.users.updateEmail(req.principal, id, body.email)
   }
 }

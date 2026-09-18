@@ -17,6 +17,11 @@ export class ResetUserPasswordDto {
   @IsString() @Length(8, 128) newPassword!: string
 }
 
+export class UpdateUserEmailDto {
+  @Transform(({ value }) => typeof value === 'string' ? value.trim().toLowerCase() : value)
+  @IsEmail() @Length(3, 320) email!: string
+}
+
 export class ManagedUserPageQueryDto extends PageQueryDto {
   @IsOptional() @Transform(({ value }) => typeof value === 'string' ? value.trim() : value) @IsString() @Length(1, 200) q?: string
 }
