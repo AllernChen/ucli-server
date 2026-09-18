@@ -16,9 +16,9 @@ async function render(tab = 'basic', role = 'MEMBER') {
   const w = mount(Profile, { props: { principal: { ...principal, role } }, global: { plugins: [router], stubs: { EmployeeKeysPanel: { props: ['managed', 'accountId'], template: '<div data-key-panel>{{ managed ? "组织模式" : "本人模式" }}</div>' }, KeyConnectionHelp: true, teleport: true } } })
   wrappers.push(w); await flushPromises(); return { w, router }
 }
-it('shows five tabs and only updates the display name, notifying the parent', async () => {
+it('shows six tabs and only updates the display name, notifying the parent', async () => {
   const { w } = await render()
-  expect(w.findAll('[aria-label="个人中心导航"] a')).toHaveLength(5)
+  expect(w.findAll('[aria-label="个人中心导航"] a')).toHaveLength(6)
   await w.get('[aria-label="显示名称"]').setValue('新名字')
   await w.get('[data-profile-form]').trigger('submit'); await flushPromises()
   expect(state.api).toHaveBeenCalledWith('/api/v1/auth/me', { method: 'PATCH', body: JSON.stringify({ displayName: '新名字' }) })
@@ -58,6 +58,35 @@ it('validates passwords, keeps API errors visible, and only emits success after 
   await w.get('[data-password-form]').trigger('submit'); await flushPromises()
   expect(w.emitted('password-changed')).toHaveLength(1)
 })
+it('shows led groups with budget cards, drills into usage, and submits applications', async () => {
+  const budget = { groupId: 'g1', periodId: 'p', periodKey: 'TOTAL', budgetMode: 'TOTAL', budgetTimezone: 'Asia/Shanghai',
+    unlimited: false, defaultUnlimited: false, defaultLimitCny: '5000', limitCny: '5000', spentCny: '1200', reservedCny: '0', uncertainCny: '0', availableCny: '3800' }
+  const metric = { requests: 10, successes: 9, inputTokens: 100, outputTokens: 20, costCny: '1.50000000', avgDurationMs: 100, p95DurationMs: 200 }
+  state.api.mockImplementation(async (url: string, init?: any) => {
+    if (init?.method === 'POST') return {}
+    if (url === '/api/v1/me/led-groups') return [{ id: 'g1', name: '省厅项目', type: 'PROJECT', description: '', enabled: true, archivedAt: null, joinedAt: '2026-09-01T00:00:00Z', budget }]
+    if (url.includes('/usage?')) return { range: { start: '', end: '' }, overview: metric, byAccount: [{ id: 'a', name: '张三', ...metric }], byModel: [], items: [], total: 0, limit: 20, offset: 0 }
+    if (url.includes('/budget-applications')) return { items: [{ id: 'app', createdAt: '2026-09-17T00:00:00Z', requestedCny: '2000', status: 'REGISTERED', approvedCny: null, reason: '首期' }], total: 1, offset: 0, limit: 20 }
+    return []
+  })
+  const { w } = await render('led-groups')
+  expect(w.text()).toContain('省厅项目')
+  await w.get('[data-open-led]').trigger('click'); await flushPromises()
+  expect(w.text()).toContain('张三')
+  expect(w.text()).toContain('待批复')
+  expect(state.api.mock.calls.some(([url]) => String(url).includes('/api/v1/me/led-groups/g1/usage'))).toBe(true)
+  const inputs = w.findAll('[data-led-application] input')
+  await inputs[0].setValue('3000'); await inputs[1].setValue('追加预算')
+  await w.get('[data-led-application]').trigger('submit'); await flushPromises()
+  expect(state.api).toHaveBeenCalledWith('/api/v1/me/led-groups/g1/budget-applications', { method: 'POST', body: JSON.stringify({ requestedCny: '3000', reason: '追加预算' }) })
+})
+
+it('tells members without leadership that the led-groups tab is empty', async () => {
+  const { w } = await render('led-groups')
+  expect(state.api).toHaveBeenCalledWith('/api/v1/me/led-groups')
+  expect(w.text()).toContain('您还不是任何用量组的负责人')
+})
+
 it('keeps group errors distinct from an empty list and previews models only on demand', async () => {
   state.api.mockRejectedValueOnce(new Error('无法连接'))
   const { w } = await render('groups')
