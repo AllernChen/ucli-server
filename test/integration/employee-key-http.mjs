@@ -91,7 +91,8 @@ try {
   process.env.PUBLIC_URL = base
   const a = await createOrganization(db)
   const adminToken = signAccessToken(a.actor)
-  const employee = (await request('/api/v1/admin/users', 'POST', { email: `${randomUUID()}@example.invalid`, displayName: 'Employee' })).body
+  const employeeEmail = `${randomUUID()}@example.invalid`
+  const employee = (await request('/api/v1/admin/users', 'POST', { email: employeeEmail, displayName: 'Employee' })).body
   assert.ok(employee.id)
   const employeeToken = signAccessToken({ ...a.actor, sub: employee.id, role: 'MEMBER', tokenVersion: 1 })
   const groups = app.get(UsageGroupsService)
@@ -125,7 +126,8 @@ try {
   const me = await request('/api/v1/auth/me', 'GET', undefined, employeeToken)
   assert.equal(me.status, 200)
   assert.equal(me.headers.get('cache-control'), 'no-store')
-  assert.deepEqual(me.body, { id: employee.id, displayName: 'Employee', organizationId: a.organization.id, role: 'MEMBER' })
+  assert.deepEqual(me.body, { id: employee.id, displayName: 'Employee', email: employeeEmail, status: 'ACTIVE',
+    organizationId: a.organization.id, organizationName: a.organization.name, role: 'MEMBER' })
   assert.equal((await request('/api/v1/auth/me', 'GET', undefined, key.secret)).status, 401)
   assert.deepEqual((await request('/api/v1/me/usage-groups', 'GET', undefined, employeeToken)).body.map(g => g.id).sort(), [group.id, otherGroup.id].sort())
   assert.equal((await request(`/api/v1/admin/users/${a.account.id}/usage-groups`, 'GET', undefined, employeeToken)).status, 401)
