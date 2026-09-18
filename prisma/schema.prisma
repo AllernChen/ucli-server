@@ -28,6 +28,17 @@ enum GroupBudgetMode {
   MONTHLY
 }
 
+enum GroupMemberRole {
+  LEADER
+  MEMBER
+}
+
+enum BudgetApplicationStatus {
+  REGISTERED
+  LINKED
+  REJECTED
+}
+
 enum CredentialType {
   DEVICE
   API_KEY
@@ -141,6 +152,7 @@ model Organization {
 model Account {
   createdEmployeeKeys EmployeeApiKey[] @relation("EmployeeKeyCreator")
   budgetAdjustments GroupBudgetEntry[] @relation("BudgetActor")
+  decidedApplications GroupBudgetApplication[] @relation("ApplicationDecider")
   id                  String                @id @default(uuid()) @db.Uuid
   email               String                @unique
   displayName         String                @map("display_name")
@@ -164,6 +176,7 @@ model Membership {
   groupMemberships GroupMember[]
   employeeKeys EmployeeApiKey[]
   budgetEntries GroupBudgetEntry[]
+  budgetApplications GroupBudgetApplication[]
   organizationId String       @map("organization_id") @db.Uuid
   accountId      String       @map("account_id") @db.Uuid
   role           Role
@@ -652,6 +665,7 @@ model UsageGroup {
   grants DeviceGrant[]
   logs UsageLog[]
   periods GroupBudgetPeriod[]
+  applications GroupBudgetApplication[]
   @@unique([id, organizationId])
   @@index([organizationId, archivedAt, enabled])
   @@map("usage_groups")
@@ -661,6 +675,7 @@ model GroupMember {
   organizationId String @map("organization_id") @db.Uuid
   groupId String @map("group_id") @db.Uuid
   accountId String @map("account_id") @db.Uuid
+  role GroupMemberRole @default(MEMBER)
   joinedAt DateTime @default(now()) @map("joined_at")
   removedAt DateTime? @map("removed_at")
   group UsageGroup @relation(fields: [groupId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
@@ -749,4 +764,26 @@ model GroupBudgetEntry {
   @@index([status, leaseUntil])
   @@index([organizationId, groupId, startedAt])
   @@map("group_budget_entries")
+}
+
+model GroupBudgetApplication {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  groupId String @map("group_id") @db.Uuid
+  applicantAccountId String @map("applicant_account_id") @db.Uuid
+  requestedCny Decimal @map("requested_cny") @db.Decimal(20, 8)
+  reason String
+  status BudgetApplicationStatus @default(REGISTERED)
+  approvedCny Decimal? @map("approved_cny") @db.Decimal(20, 8)
+  decidedById String? @map("decided_by_id") @db.Uuid
+  decidedAt DateTime? @map("decided_at")
+  decisionNote String? @map("decision_note")
+  linkedEntryId String? @map("linked_entry_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+  group UsageGroup @relation(fields: [groupId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  applicant Membership @relation(fields: [organizationId, applicantAccountId], references: [organizationId, accountId], onDelete: Restrict, onUpdate: Restrict)
+  decidedBy Account? @relation("ApplicationDecider", fields: [decidedById], references: [id], onDelete: Restrict)
+  @@index([organizationId, groupId, createdAt])
+  @@index([organizationId, groupId, status])
+  @@map("group_budget_applications")
 }
