@@ -53,6 +53,19 @@ export class BudgetAdjustmentDto extends BudgetOperationDto {
   @ValidateIf((_, value) => value !== undefined) @IsUUID() periodId?: string
   @IsString() @Matches(/^(0|[1-9]\d{0,11})(\.\d{1,8})?$/) limitCny!: string
   @IsBoolean() unlimited!: boolean
+  @IsOptional() @IsUUID() applicationId?: string
+}
+
+export class CreateBudgetApplicationDto {
+  @IsString() @Matches(/^(0|[1-9]\d{0,11})(\.\d{1,8})?$/) requestedCny!: string
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @Length(1, 2000) reason!: string
+  @IsOptional() @IsUUID() applicantAccountId?: string
+}
+
+export class BudgetApplicationDecisionDto {
+  @IsOptional() @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @Length(0, 2000) note?: string
 }
 
 class RouteCostDto {

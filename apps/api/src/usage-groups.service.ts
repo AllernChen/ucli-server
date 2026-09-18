@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { Prisma, type UsageGroup } from '@prisma/client'
+import Decimal from 'decimal.js'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import type { AuthPrincipal } from '../../../packages/security/src/auth.js'
 import { lockUsageGroup } from '../../../packages/security/src/group-access.js'
@@ -7,6 +8,7 @@ import { canAccessModel } from '../../../packages/gateway-core/src/access-policy
 import { modelCapabilitiesSelect } from '../../../packages/gateway-core/src/model-catalog.service.js'
 import { configuredClientProtocols } from '../../../packages/gateway-core/src/model-capabilities.js'
 import { readGroupBudgets } from '../../../packages/quota/src/group-budget-read.js'
+import { cny } from '../../../packages/quota/src/group-budget.js'
 import { PageQueryDto } from './catalog.dto.js'
 import { UsageGroupPageQueryDto, type CreateUsageGroupDto, type UpdateUsageGroupDto } from './usage-groups.dto.js'
 
@@ -188,6 +190,42 @@ export class UsageGroupsService {
       if (!result.count) throw new NotFoundException('Group member not found')
       return { accountId, role: leader ? 'LEADER' as const : 'MEMBER' as const }
     }, { accountId, leader })
+  }
+
+  async applications(organizationId: string, id: string, query = new PageQueryDto()) {
+    await this.detail(organizationId, id)
+    const where = { organizationId, groupId: id }
+    const [items, total] = await Promise.all([
+      this.prisma.groupBudgetApplication.findMany({ where, skip: query.offset, take: query.limit, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+        include: { applicant: { select: { account: { select: { displayName: true } } } } } }),
+      this.prisma.groupBudgetApplication.count({ where })
+    ])
+    return { items, total, limit: query.limit, offset: query.offset }
+  }
+
+  createApplication(actor: AuthPrincipal, id: string, input: { requestedCny: string; reason: string; applicantAccountId?: string }) {
+    return this.mutate(actor, id, 'application_register', async db => {
+      const amount = cny(input.requestedCny)
+      if (new Decimal(amount).lte(0)) throw new BadRequestException('Requested amount must be greater than zero')
+      const applicantAccountId = input.applicantAccountId || actor.sub
+      const applicant = await db.membership.findFirst({ where: { organizationId: actor.organizationId, accountId: applicantAccountId, status: 'ACTIVE' } })
+      if (!applicant) throw new ForbiddenException('Active organization member required')
+      return db.groupBudgetApplication.create({ data: { organizationId: actor.organizationId, groupId: id,
+        applicantAccountId, requestedCny: amount, reason: input.reason } })
+    }, { requestedCny: input.requestedCny, reason: input.reason })
+  }
+
+  rejectApplication(actor: AuthPrincipal, id: string, applicationId: string, note?: string) {
+    return this.mutate(actor, id, 'application_reject', async db => {
+      const result = await db.groupBudgetApplication.updateMany({ where: { organizationId: actor.organizationId, groupId: id, id: applicationId, status: 'REGISTERED' },
+        data: { status: 'REJECTED', decidedById: actor.sub, decidedAt: new Date(), ...(note ? { decisionNote: note } : {}) } })
+      if (!result.count) {
+        const application = await db.groupBudgetApplication.findFirst({ where: { organizationId: actor.organizationId, groupId: id, id: applicationId } })
+        if (!application) throw new NotFoundException('Budget application not found')
+        throw new ConflictException('Budget application already decided')
+      }
+      return { id: applicationId, status: 'REJECTED' as const }
+    }, { applicationId })
   }
 
   async models(organizationId: string, id: string) {

@@ -1,7 +1,9 @@
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
+import Decimal from 'decimal.js'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import { readGroupBudgets } from '../../../packages/quota/src/group-budget-read.js'
+import { cny } from '../../../packages/quota/src/group-budget.js'
 import { usageWhere } from './usage-query.js'
 import type { UsageReadFilter } from '../../../packages/usage/src/analytics-types.js'
 import type { AuthPrincipal } from '../../../packages/security/src/auth.js'
@@ -56,6 +58,35 @@ export class LedGroupsService {
     const summary = (await readGroupBudgets(this.prisma, actor.organizationId, [groupId])).get(groupId)
     if (!summary) throw new ForbiddenException('Group leader required')
     return summary
+  }
+
+  async applications(actor: AuthPrincipal, groupId: string, query: { offset?: number; limit?: number }) {
+    this.webActor(actor)
+    await this.requireLedGroup(actor, groupId)
+    const limit = Math.min(LED_USAGE_LIMIT, Math.max(1, Number(query.limit) || 20))
+    const offset = Math.max(0, Number(query.offset) || 0)
+    const where = { organizationId: actor.organizationId, groupId }
+    const [items, total] = await Promise.all([
+      this.prisma.groupBudgetApplication.findMany({ where, skip: offset, take: limit, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+        include: { applicant: { select: { account: { select: { displayName: true } } } } } }),
+      this.prisma.groupBudgetApplication.count({ where })
+    ])
+    return { items, total, limit, offset }
+  }
+
+  async submitApplication(actor: AuthPrincipal, groupId: string, input: { requestedCny: string; reason: string }) {
+    this.webActor(actor)
+    await this.requireLedGroup(actor, groupId)
+    const amount = cny(input.requestedCny)
+    if (new Decimal(amount).lte(0)) throw new BadRequestException('Requested amount must be greater than zero')
+    const group = await this.prisma.usageGroup.findFirst({ where: { id: groupId, organizationId: actor.organizationId }, select: { archivedAt: true } })
+    if (!group || group.archivedAt) throw new BadRequestException('Archived groups cannot receive applications')
+    const application = await this.prisma.groupBudgetApplication.create({ data: {
+      organizationId: actor.organizationId, groupId, applicantAccountId: actor.sub, requestedCny: amount, reason: input.reason } })
+    await this.prisma.auditLog.create({ data: { organizationId: actor.organizationId, actorAccountId: actor.sub,
+      action: 'usage_group.application_submit', resourceType: 'usage_group', resourceId: groupId,
+      metadata: { applicationId: application.id, requestedCny: amount } } })
+    return application
   }
 
   private resolveRange(start?: string, end?: string) {

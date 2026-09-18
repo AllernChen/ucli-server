@@ -64,14 +64,22 @@ export class GroupBudgetService {
     return entry
   }
 
-  async adjust(actor: AuthPrincipal, groupId: string, input: { operationId: string; scope: 'CURRENT' | 'DEFAULT'; periodId?: string; limitCny: string; unlimited: boolean; reason: string }) {
+  async adjust(actor: AuthPrincipal, groupId: string, input: { operationId: string; scope: 'CURRENT' | 'DEFAULT'; periodId?: string; limitCny: string; unlimited: boolean; reason: string; applicationId?: string }) {
     this.assertAdmin(actor); const amount = cny(input.limitCny)
     if (!['CURRENT', 'DEFAULT'].includes(input.scope) || typeof input.unlimited !== 'boolean' || (input.scope === 'DEFAULT' && input.periodId)) throw new BadRequestException('Invalid adjustment scope')
+    if (input.applicationId && input.scope !== 'CURRENT') throw new BadRequestException('Budget application approval must adjust the current period')
     return this.prisma.$transaction(async db => {
       const group = await lockUsageGroup(db, actor.organizationId, groupId)
       const operation = await this.operation(db, actor, groupId, input, { ...input, limitCny: amount })
       if (operation.existing) return operation.existing
       if (group.archivedAt) throw conflict()
+      let application: { id: string } | null = null
+      if (input.applicationId) {
+        application = await db.groupBudgetApplication.findFirst({ where: { id: input.applicationId, organizationId: actor.organizationId, groupId }, select: { id: true } })
+        if (!application) throw new NotFoundException('Budget application not found')
+        const decided = await db.groupBudgetApplication.findUnique({ where: { id: application.id }, select: { status: true } })
+        if (decided?.status !== 'REGISTERED') throw conflict()
+      }
       const period = input.periodId ? await db.groupBudgetPeriod.findFirst({ where: { id: input.periodId, groupId, organizationId: actor.organizationId } }) : await this.period(db, group, new Date())
       if (!period) throw new NotFoundException('Budget period not found')
       await db.$queryRaw`SELECT id FROM group_budget_periods WHERE id = ${period.id}::uuid FOR UPDATE`
@@ -83,8 +91,14 @@ export class GroupBudgetService {
       } else {
         await db.usageGroup.update({ where: { id: groupId }, data: { defaultLimitCny: amount, unlimited: input.unlimited } })
       }
-      return this.adjustment(db, actor, period, input, 'LIMIT_ADJUSTMENT', { operationFingerprint: operation.hash, scope: input.scope,
-        before, after: { limitCny: amount, unlimited: input.unlimited } })
+      const entry = await this.adjustment(db, actor, period, input, 'LIMIT_ADJUSTMENT', { operationFingerprint: operation.hash, scope: input.scope,
+        before, after: { limitCny: amount, unlimited: input.unlimited }, ...(input.applicationId ? { applicationId: input.applicationId } : {}) })
+      if (application) {
+        await db.groupBudgetApplication.update({ where: { id: application.id }, data: {
+          status: 'LINKED', approvedCny: amount, decidedById: actor.sub, decidedAt: new Date(), linkedEntryId: entry.id
+        } })
+      }
+      return entry
     })
   }
 

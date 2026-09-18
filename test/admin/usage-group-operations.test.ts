@@ -23,6 +23,7 @@ beforeEach(() => {
     if (init?.method) return {}
     if (url.startsWith('/api/v1/admin/usage-groups?')) return page([group])
     if (url.endsWith('/budget')) return budget
+    if (url.includes('/budget-applications')) return page()
     if (url.includes('/budget-entries?')) return page([entry])
     if (url.includes('/members?') || url.includes('/users?')) return page()
     if (url.includes('/analytics/timeseries?')) return [{ bucket: '2026-09-15T16:00:00Z', costCny: '5.6', requestSuccessRate: 1 }]

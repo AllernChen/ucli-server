@@ -17,6 +17,11 @@ const id = computed(() => String(route.params.id)), base = computed(() => `/api/
 const group = ref<UsageGroup | null>(null), budget = ref<GroupBudget | null>(null)
 const tab = ref('overview'), error = ref(''), loading = ref(false), pending = ref(false)
 const members = ref<Page<any>>({ items: [], total: 0, offset: 0, limit: 20 }), entries = ref<Page<any>>({ items: [], total: 0, offset: 0, limit: 20 })
+const applications = ref<Page<any>>({ items: [], total: 0, offset: 0, limit: 20 })
+const applicationOffset = ref(0)
+const applicationForm = reactive({ requestedCny: '', reason: '' })
+const adjustApplicationId = ref('')
+const pendingApplications = computed(() => applications.value.items.filter(item => item.status === 'REGISTERED'))
 const users = ref<Page<any>>({ items: [], total: 0, offset: 0, limit: 20 })
 const memberOffset = ref(0), entryOffset = ref(0), userOffset = ref(0), userSearch = ref(''), accountId = ref(''), previewAccount = ref('')
 type ModelOption = { id: string; displayName: string; protocols: string[]; selected: boolean; archived: boolean; allowed: boolean | null; reasons: string[] }
@@ -38,6 +43,7 @@ const analysisRange = ref(defaultCompanyDateRange())
 const analysisDates = reactive({ start: companyDay(analysisRange.value.start), end: companyDay(new Date(new Date(analysisRange.value.end).getTime() - 1).toISOString()) })
 const selectedId = ref<string | null>(null), requestQuery = ref(''), requestError = ref(''), requestLoading = ref(false)
 const chinaTime = (value: string) => new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value))
+const applicationStatus = (status: string) => status === 'REGISTERED' ? '待批复' : status === 'LINKED' ? '已批复' : '已驳回'
 async function loadSeries() {
   const request = seriesLifecycle.next(); seriesLoading.value = true; seriesError.value = ''; groupSeries.value = []
   try {
@@ -85,10 +91,11 @@ const optionLifecycle = createRequestLifecycle(), userLifecycle = createRequestL
 async function load() {
   const request = lifecycle.next(); loading.value = true; error.value = ''
   try {
-    const [g, b, m, e] = await Promise.all([api<UsageGroup>(base.value), api<GroupBudget>(`${base.value}/budget`), api<Page<any>>(`${base.value}/members?offset=${memberOffset.value}&limit=20`), api<Page<any>>(`${base.value}/budget-entries?offset=${entryOffset.value}&limit=20`)])
+    const [g, b, m, e, a] = await Promise.all([api<UsageGroup>(base.value), api<GroupBudget>(`${base.value}/budget`), api<Page<any>>(`${base.value}/members?offset=${memberOffset.value}&limit=20`), api<Page<any>>(`${base.value}/budget-entries?offset=${entryOffset.value}&limit=20`), api<Page<any>>(`${base.value}/budget-applications?offset=${applicationOffset.value}&limit=20`)])
     if (!lifecycle.isCurrent(request)) return
     if (!group.value) { adjust.limitCny = b.limitCny; adjust.unlimited = b.unlimited }
-    group.value = g; budget.value = b; members.value = m; entries.value = e
+    group.value = g; budget.value = b; members.value = m; entries.value = e; applications.value = a
+    if (!pendingApplications.value.some(item => item.id === adjustApplicationId.value)) adjustApplicationId.value = ''
     form.name = g.name; form.description = g.description || ''; config.budgetMode = b.budgetMode; config.budgetTimezone = b.budgetTimezone
   } catch (e: any) { if (lifecycle.isCurrent(request)) error.value = e.message }
   finally { if (lifecycle.isCurrent(request)) loading.value = false }
@@ -119,12 +126,36 @@ async function mutate(path: string, method: string, body?: unknown) {
   finally { if (current === generation) pending.value = false }
 }
 async function saveBudget(configuration = false) {
-  const payload = configuration ? { ...config } : { ...adjust, ...(adjust.scope === 'CURRENT' && budget.value?.periodId ? { periodId: budget.value.periodId } : {}) }
+  const payload = configuration ? { ...config } : {
+    ...adjust,
+    ...(adjust.scope === 'CURRENT' && budget.value?.periodId ? { periodId: budget.value.periodId } : {}),
+    ...(adjust.scope === 'CURRENT' && adjustApplicationId.value ? { applicationId: adjustApplicationId.value } : {})
+  }
   const serialized = JSON.stringify({ configuration, ...payload })
   if (budgetRetry.body !== serialized) budgetRetry = { body: serialized, id: operationId() }
   if (await mutate(configuration ? '/budget-config' : '/budget-adjustments', configuration ? 'PATCH' : 'POST', { ...payload, operationId: budgetRetry.id })) {
-    budgetRetry = { body: '', id: '' }; adjust.reason = ''; config.reason = ''
+    budgetRetry = { body: '', id: '' }; adjust.reason = ''; config.reason = ''; adjustApplicationId.value = ''
   }
+}
+async function submitApplication() {
+  if (pending.value || !editable.value || !applicationForm.requestedCny || !applicationForm.reason.trim()) return
+  const current = generation; pending.value = true; error.value = ''
+  try {
+    await api(`${base.value}/budget-applications`, { method: 'POST', body: JSON.stringify({ ...applicationForm }) })
+    if (current !== generation) return
+    toast('申请已登记'); applicationForm.requestedCny = ''; applicationForm.reason = ''; await load()
+  } catch (e: any) { if (current === generation) error.value = e.message }
+  finally { if (current === generation) pending.value = false }
+}
+async function rejectApplication(application: any) {
+  if (pending.value || !editable.value) return
+  const current = generation; pending.value = true; error.value = ''
+  try {
+    await api(`${base.value}/budget-applications/${application.id}/decision`, { method: 'POST', body: JSON.stringify({ note: '' }) })
+    if (current !== generation) return
+    toast('已驳回'); await load()
+  } catch (e: any) { if (current === generation) error.value = e.message }
+  finally { if (current === generation) pending.value = false }
 }
 watch(() => adjust.scope, () => {
   if (!budget.value) return
@@ -134,8 +165,9 @@ watch(() => adjust.scope, () => {
 watch(tab, value => { if (value === 'models') loadModels(); if (value === 'members') searchUsers(); if (value === 'analysis' && !analysisLoaded.value) loadAnalysis() })
 watch(id, () => {
   generation++; pending.value = false; group.value = null; budget.value = null; confirmation.value = null
-  memberOffset.value = 0; entryOffset.value = 0; previewAccount.value = ''; models.value = []; tab.value = 'overview'; budgetRetry = { body: '', id: '' }
-  members.value = { items: [], total: 0, offset: 0, limit: 20 }; entries.value = { items: [], total: 0, offset: 0, limit: 20 }; users.value = { items: [], total: 0, offset: 0, limit: 20 }
+  memberOffset.value = 0; entryOffset.value = 0; applicationOffset.value = 0; previewAccount.value = ''; models.value = []; tab.value = 'overview'; budgetRetry = { body: '', id: '' }
+  members.value = { items: [], total: 0, offset: 0, limit: 20 }; entries.value = { items: [], total: 0, offset: 0, limit: 20 }; applications.value = { items: [], total: 0, offset: 0, limit: 20 }; users.value = { items: [], total: 0, offset: 0, limit: 20 }
+  applicationForm.requestedCny = ''; applicationForm.reason = ''; adjustApplicationId.value = ''
   userOffset.value = 0; userSearch.value = ''; accountId.value = ''; modelsReady.value = false; selected.value = []; modelSearch.value = ''
   adjust.scope = 'CURRENT'; adjust.reason = ''; config.reason = ''
   seriesLifecycle.next(); rankLifecycle.next(); requestLifecycle.next()
@@ -158,9 +190,12 @@ onUnmounted(() => { generation++; lifecycle.dispose(); optionLifecycle.dispose()
       <form class="form-row" @submit.prevent="userOffset = 0; searchUsers()"><input v-model="userSearch" placeholder="搜索员工姓名或邮箱" aria-label="搜索员工"><button :disabled="pending">搜索员工</button></form><form class="form-row" @submit.prevent="mutate('/members', 'POST', { accountId })"><label>添加员工<select v-model="accountId" required><option value="">请选择</option><option v-for="u in users.items" :key="u.id" :value="u.id" :disabled="u.status !== 'ACTIVE'">{{ u.displayName }} · {{ u.email }}</option></select></label><button :disabled="!editable || pending || !accountId">加入组</button></form><Pagination :total="users.total" :offset="userOffset" :limit="20" @change="userOffset = $event; searchUsers()" />
     </section>
     <section v-if="tab === 'models'" class="panel"><h2>允许模型</h2><p class="muted">模型权限是组白名单与现有组织/员工/角色策略的交集。协议表示当前配置，不代表实时健康。</p><p v-if="previewAccount">正在预览成员 {{ members.items.find(m => m.accountId === previewAccount)?.membership.account.displayName || previewAccount }} 的已保存权限。<button @click="previewAccount = ''; loadModels()">退出预览</button></p><input v-model="modelSearch" placeholder="搜索模型" aria-label="搜索允许模型"><form @submit.prevent="mutate('/models', 'PUT', { publicModelIds: selected }).then(ok => ok && loadModels())"><div v-for="m in visibleModels" :key="m.id" class="panel"><label class="check-row"><input v-model="selected" type="checkbox" :value="m.id" :disabled="!editable || pending || (m.archived && !selected.includes(m.id))">{{ m.displayName }} · {{ m.id }}</label><small>{{ m.protocols.join(' / ') || '无可用协议' }}</small><p v-for="reason in m.reasons" :key="reason" class="muted">{{ reason }}</p><p v-if="m.allowed === true" class="muted">该员工可用</p></div><p v-if="!models.length" class="empty">暂无模型</p><button :disabled="!editable || pending">保存允许模型</button></form></section>
-    <section v-if="tab === 'budget'" class="panel"><h2>人民币采购预算</h2><p class="muted">额度是上限，不是追加金额。0 表示不可调用；不限额必须显式勾选。当前调整不会改变下周期默认值。</p><form id="budget-adjust-form" class="stack-form" @submit.prevent="saveBudget()"><label>调整范围<select v-model="adjust.scope" :disabled="pending"><option value="CURRENT">当前周期总额度</option><option value="DEFAULT" :disabled="budget.budgetMode === 'TOTAL'">下周期默认额度</option></select></label><small>下周期默认：{{ budgetLabel({ unlimited: budget.defaultUnlimited, limitCny: budget.defaultLimitCny }) }}</small><label>额度（CNY）<input v-model="adjust.limitCny" aria-label="调整额度" inputmode="decimal" pattern="(0|[1-9][0-9]{0,11})(\.[0-9]{1,8})?" required :disabled="pending"></label><label class="check-row"><input v-model="adjust.unlimited" type="checkbox" :disabled="pending">显式不限额</label><label>调整原因<input v-model="adjust.reason" aria-label="调整原因" required maxlength="2000" :disabled="pending"></label><button :disabled="!editable || pending || !adjust.reason.trim()">保存额度</button></form>
+    <section v-if="tab === 'budget'" class="panel"><h2>人民币采购预算</h2><p class="muted">额度是上限，不是追加金额。0 表示不可调用；不限额必须显式勾选。当前调整不会改变下周期默认值。</p><form id="budget-adjust-form" class="stack-form" @submit.prevent="saveBudget()"><label>调整范围<select v-model="adjust.scope" :disabled="pending"><option value="CURRENT">当前周期总额度</option><option value="DEFAULT" :disabled="budget.budgetMode === 'TOTAL'">下周期默认额度</option></select></label><label v-if="adjust.scope === 'CURRENT' && pendingApplications.length">关联预算申请<select v-model="adjustApplicationId" :disabled="pending"><option value="">不关联申请</option><option v-for="a in pendingApplications" :key="a.id" :value="a.id">{{ a.applicant?.account?.displayName || '未知' }} · 申请 {{ formatCny(a.requestedCny) }} · {{ a.reason }}</option></select></label><small>下周期默认：{{ budgetLabel({ unlimited: budget.defaultUnlimited, limitCny: budget.defaultLimitCny }) }}</small><label>额度（CNY）<input v-model="adjust.limitCny" aria-label="调整额度" inputmode="decimal" pattern="(0|[1-9][0-9]{0,11})(\.[0-9]{1,8})?" required :disabled="pending"></label><label class="check-row"><input v-model="adjust.unlimited" type="checkbox" :disabled="pending">显式不限额</label><label>调整原因<input v-model="adjust.reason" aria-label="调整原因" required maxlength="2000" :disabled="pending"></label><button :disabled="!editable || pending || !adjust.reason.trim()">保存额度</button></form>
       <h3>周期设置</h3><p class="muted">有请求记录的周期不能切换模式或时区。</p><form class="stack-form" @submit.prevent="saveBudget(true)"><label>模式<select v-model="config.budgetMode" :disabled="pending"><option value="TOTAL">项目总额（长期累计）</option><option value="MONTHLY">自然月（不结转）</option></select></label><label>时区<input v-model="config.budgetTimezone" required :disabled="pending"></label><label>变更原因<input v-model="config.reason" required maxlength="2000" :disabled="pending"></label><button :disabled="!editable || pending || !config.reason.trim()">保存周期设置</button></form>
       <h3>预算账目与调整记录</h3><p v-if="requestLoading" class="state">正在查找请求…</p><p v-if="requestError" class="state error" role="alert">{{ requestError }}</p><table v-if="entries.items.length"><thead><tr><th>时间（中国标准时间） / 请求</th><th>周期 / 类型</th><th>状态</th><th>历史预留 / 当前保留 / 已结算</th><th>原因</th></tr></thead><tbody><tr v-for="e in entries.items" :key="e.id"><td>{{ chinaTime(e.startedAt) }}<small class="mono"><button v-if="e.requestId" :aria-label="`查看请求 ${e.requestId} 详情`" :disabled="requestLoading" @click="openRequest(e)">{{ e.requestId }}</button><template v-else>{{ e.operationId }}</template></small></td><td>{{ e.periodId }}<small>{{ e.kind }}</small></td><td>{{ budgetEntryStatus(e.status) }}</td><td>{{ ['SETTLED', 'RELEASED'].includes(e.status) ? '历史预留' : '当前保留' }} {{ formatCny(e.reservedCny) }}<small>已结算 {{ formatCny(e.settledCny) }}</small></td><td>{{ e.reason || '—' }}<details v-if="e.kind !== 'REQUEST'"><summary>调整前后</summary><pre>{{ JSON.stringify({ before: e.snapshot?.before, after: e.snapshot?.after }, null, 2) }}</pre></details></td></tr></tbody></table><p v-else class="empty">暂无预算账目</p><Pagination :total="entries.total" :offset="entryOffset" :limit="20" @change="entryOffset = $event; load()" />
+      <h3>预算申请记录</h3><p class="muted">登记线下预算申请；批复时在上方额度调整中选择关联申请（批复金额=批复后总额度），或在列表中驳回。</p>
+      <form class="form-row" @submit.prevent="submitApplication"><label>登记申请金额（CNY）<input v-model="applicationForm.requestedCny" inputmode="decimal" pattern="(0|[1-9][0-9]{0,11})(\.[0-9]{1,8})?" required :disabled="!editable || pending"></label><label>事由<input v-model="applicationForm.reason" required maxlength="2000" :disabled="!editable || pending"></label><button :disabled="!editable || pending || !applicationForm.requestedCny || !applicationForm.reason.trim()">登记申请</button></form>
+      <table v-if="applications.items.length"><thead><tr><th>申请时间</th><th>申请人</th><th>申请金额</th><th>状态</th><th>批复金额</th><th>事由 / 说明</th><th>关联调整</th><th>操作</th></tr></thead><tbody><tr v-for="a in applications.items" :key="a.id"><td>{{ chinaTime(a.createdAt) }}</td><td>{{ a.applicant?.account?.displayName || '—' }}</td><td>{{ formatCny(a.requestedCny) }}</td><td>{{ applicationStatus(a.status) }}</td><td>{{ a.approvedCny != null ? formatCny(a.approvedCny) : '—' }}</td><td>{{ a.reason }}<small v-if="a.decisionNote">{{ a.decisionNote }}</small></td><td><span v-if="a.linkedEntryId" class="mono">{{ a.linkedEntryId.slice(0, 8) }}…</span><span v-else>—</span></td><td><button v-if="a.status === 'REGISTERED'" :disabled="!editable || pending" @click="rejectApplication(a)">驳回</button><span v-else>—</span></td></tr></tbody></table><p v-else class="empty">暂无申请记录</p><Pagination :total="applications.total" :offset="applicationOffset" :limit="20" @change="applicationOffset = $event; load()" />
     </section>
     <section v-if="tab === 'analysis'" class="panel">
       <h2>使用分析</h2><p class="muted">当前用量组 · 人民币采购成本 · Asia/Shanghai 自然日 · 默认近 7 天，最多 90 天；分析日期不改变当前预算周期。</p>

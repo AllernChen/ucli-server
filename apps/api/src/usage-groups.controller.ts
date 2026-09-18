@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { AuthGuard, Roles, type AuthPrincipal } from '../../../packages/security/src/auth.js'
 import { UuidPipe } from '../../../packages/http/src/uuid.pipe.js'
 import { PageQueryDto } from './catalog.dto.js'
-import { AddGroupMemberDto, BudgetAdjustmentDto, BudgetConfigDto, BudgetReconcileDto, CreateUsageGroupDto, GroupModelOptionsDto, ReplaceGroupModelsDto, UpdateUsageGroupDto, UsageGroupPageQueryDto } from './usage-groups.dto.js'
+import { AddGroupMemberDto, BudgetAdjustmentDto, BudgetApplicationDecisionDto, BudgetConfigDto, BudgetReconcileDto, CreateBudgetApplicationDto, CreateUsageGroupDto, GroupModelOptionsDto, ReplaceGroupModelsDto, UpdateUsageGroupDto, UsageGroupPageQueryDto } from './usage-groups.dto.js'
 import { UsageGroupsService } from './usage-groups.service.js'
 import { GroupBudgetService } from '../../../packages/quota/src/group-budget.service.js'
 
@@ -33,4 +33,7 @@ export class UsageGroupsController {
   @Post(':id/budget-adjustments') budgetAdjust(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Body() body: BudgetAdjustmentDto) { return this.budget.adjust(req.principal, id, body) }
   @Get(':id/budget-entries') budgetEntries(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Query() query: PageQueryDto) { return this.budget.entries(req.principal, id, query) }
   @Post(':id/budget-entries/:entryId/reconcile') budgetReconcile(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Param('entryId', UuidPipe) entryId: string, @Body() body: BudgetReconcileDto) { return this.budget.reconcile(req.principal, id, entryId, body) }
+  @Get(':id/budget-applications') budgetApplications(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Query() query: PageQueryDto) { return this.groups.applications(req.principal.organizationId, id, query) }
+  @Post(':id/budget-applications') createBudgetApplication(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Body() body: CreateBudgetApplicationDto) { return this.groups.createApplication(req.principal, id, body) }
+  @Post(':id/budget-applications/:appId/decision') rejectBudgetApplication(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Param('appId', UuidPipe) appId: string, @Body() body: BudgetApplicationDecisionDto) { return this.groups.rejectApplication(req.principal, id, appId, body.note) }
 }

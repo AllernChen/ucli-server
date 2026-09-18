@@ -16,7 +16,7 @@ it('shows empty membership and sends explicit current CNY allocation with a reas
     if (init?.method) return {}
     if (url.endsWith('/budget')) return { groupId: 'g', periodId: null, periodKey: 'TOTAL', budgetMode: 'TOTAL', budgetTimezone: 'Asia/Shanghai', unlimited: false, limitCny: '0', defaultLimitCny: '0', spentCny: '0', reservedCny: '0', uncertainCny: '0', availableCny: '0' }
     if (url.endsWith('/model-options')) return []
-    if (url.includes('/members') || url.includes('/users') || url.includes('/budget-entries')) return { items: [], total: 0, offset: 0, limit: 20 }
+    if (url.includes('/members') || url.includes('/users') || url.includes('/budget-entries') || url.includes('/budget-applications')) return { items: [], total: 0, offset: 0, limit: 20 }
     return { id: 'g', name: '测试组', enabled: true, type: 'PROJECT', archivedAt: null }
   })
   const w = mount(UsageGroupDetail, { global: { stubs: { teleport: true, RouterLink: true } } }); await flushPromises()
