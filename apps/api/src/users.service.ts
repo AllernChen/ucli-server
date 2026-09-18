@@ -1,5 +1,6 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { AccountStatus, Role } from '@prisma/client'
+import argon2 from 'argon2'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import { deriveDeviceGrantStatus, type DeviceGrantStatus } from '../../../packages/security/src/device-grants.js'
 import { deriveDeviceGrantLinkStatus, type DeviceGrantLinkStatus } from '../../../packages/security/src/device-grant-links.js'
@@ -20,6 +21,7 @@ export interface ManagedUser {
 }
 
 export interface ManagedUserDetail extends ManagedUser {
+  hasPassword: boolean
   devices: Array<{
     id: string
     name: string
@@ -102,23 +104,49 @@ function isTransactionConflict(error: unknown): error is { code: string } {
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(organizationId: string, input: CreateManagedUserDto): Promise<ManagedUser> {
+  async create(organizationId: string, input: CreateManagedUserDto): Promise<ManagedUser & { initialPassword?: string }> {
     const normalized = normalize(input)
+    const passwordHash = input.initialPassword ? await argon2.hash(input.initialPassword) : null
     try {
       return await this.prisma.$transaction(async transaction => {
-        const account = await transaction.account.create({ data: { ...normalized, passwordHash: null } })
+        const account = await transaction.account.create({ data: { ...normalized, passwordHash } })
         const membership = await transaction.membership.create({ data: {
           organizationId, accountId: account.id, role: Role.MEMBER, status: AccountStatus.ACTIVE
         } })
         return {
           id: account.id, organizationId: membership.organizationId, email: account.email, displayName: account.displayName,
-          status: membership.status, role: membership.role, createdAt: account.createdAt, lastSeenAt: null, deviceCount: 0, deviceGrantCount: 0
+          status: membership.status, role: membership.role, createdAt: account.createdAt, lastSeenAt: null, deviceCount: 0, deviceGrantCount: 0,
+          ...(input.initialPassword ? { initialPassword: input.initialPassword } : {})
         }
       })
     } catch (error) {
       if (isUniqueConstraint(error)) throw new ConflictException('Account email already exists')
       throw error
     }
+  }
+
+  async resetPassword(
+    actor: Pick<AuthPrincipal, 'sub' | 'organizationId' | 'role'>,
+    accountId: string,
+    newPassword: string
+  ): Promise<{ initialPassword: string }> {
+    if (actor.role !== Role.PLATFORM_ADMIN && actor.role !== Role.ORG_ADMIN) {
+      throw new ForbiddenException('Administrator role required')
+    }
+    const membership = await this.prisma.membership.findUnique({
+      where: { organizationId_accountId: { organizationId: actor.organizationId, accountId } },
+      select: { accountId: true }
+    })
+    if (!membership) throw new NotFoundException('Managed user not found')
+    const passwordHash = await argon2.hash(newPassword)
+    await this.prisma.$transaction(async transaction => {
+      await transaction.account.update({ where: { id: accountId }, data: { passwordHash, tokenVersion: { increment: 1 } } })
+      await transaction.auditLog.create({ data: {
+        organizationId: actor.organizationId, actorAccountId: actor.sub,
+        action: 'user.password_reset', resourceType: 'account', resourceId: accountId, metadata: {}
+      } })
+    })
+    return { initialPassword: newPassword }
   }
 
   async list(organizationId: string, query: ManagedUserPageQueryDto): Promise<{ items: ManagedUser[]; total: number; limit: number; offset: number }> {
@@ -162,7 +190,7 @@ export class UsersService {
       select: {
         organizationId: true, role: true, status: true,
         account: { select: {
-          id: true, email: true, displayName: true, createdAt: true,
+          id: true, email: true, displayName: true, createdAt: true, passwordHash: true,
           devices: { where: { organizationId }, select: {
             id: true, name: true, installationId: true, platform: true, clientVersion: true,
             revokedAt: true, lastSeenAt: true, createdAt: true,
@@ -187,6 +215,7 @@ export class UsersService {
     const { account } = membership
     return {
       id: account.id, organizationId: membership.organizationId, email: account.email, displayName: account.displayName,
+      hasPassword: Boolean(account.passwordHash),
       status: membership.status, role: membership.role, createdAt: account.createdAt, lastSeenAt: account.devices.reduce<Date | null>((latest, device) => !latest || (device.lastSeenAt && device.lastSeenAt > latest) ? device.lastSeenAt : latest, null),
       deviceCount: account.devices.length, deviceGrantCount: account.deviceGrants.length,
       devices: account.devices.map(device => {

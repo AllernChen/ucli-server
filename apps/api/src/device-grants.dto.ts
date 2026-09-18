@@ -9,6 +9,12 @@ export class CreateManagedUserDto {
 
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString() @Length(1, 120) displayName!: string
+
+  @IsOptional() @IsString() @Length(8, 128) initialPassword?: string
+}
+
+export class ResetUserPasswordDto {
+  @IsString() @Length(8, 128) newPassword!: string
 }
 
 export class ManagedUserPageQueryDto extends PageQueryDto {

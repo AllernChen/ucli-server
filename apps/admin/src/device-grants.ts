@@ -135,6 +135,7 @@ export interface ManagedUser {
 }
 
 export interface ManagedUserDetail extends ManagedUser {
+  hasPassword: boolean
   devices: ManagedDevice[]
   deviceGrants: UserDetailGrant[]
 }

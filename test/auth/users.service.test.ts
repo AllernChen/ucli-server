@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { plainToInstance } from 'class-transformer'
 import { validate } from 'class-validator'
 import { UsersService } from '../../apps/api/src/users.service.js'
-import { CreateManagedUserDto, UpdateManagedUserRoleDto } from '../../apps/api/src/device-grants.dto.js'
+import { CreateManagedUserDto, ResetUserPasswordDto, UpdateManagedUserRoleDto } from '../../apps/api/src/device-grants.dto.js'
 
 const schema = readFileSync('prisma/schema.prisma', 'utf8')
 const migration = readFileSync('prisma/migrations/202608260001_device_grants/migration.sql', 'utf8')
@@ -27,6 +27,7 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
   ]
   state.lifecycleUpdateWheres = []
   state.transactionAttempts = 0
+  state.audits = []
   if (options.secondOrganization) {
     state.accounts.push({
       id: 'account-2', email: 'other@example.com', displayName: 'Other user', passwordHash: null,
@@ -148,6 +149,12 @@ function makeUsersHarness(options: { role?: string; secondOrganization?: boolean
           .filter((membership: any) => matchesMembership(membership, where))
         memberships.forEach((membership: any) => Object.assign(membership, data))
         return { count: memberships.length }
+      }
+    },
+    auditLog: {
+      create: async ({ data }: any) => {
+        state.audits.push(data)
+        return data
       }
     },
     $transaction: async (operation: any) => {
@@ -373,5 +380,60 @@ describe('managed users', () => {
 
     const invalid = plainToInstance(UpdateManagedUserRoleDto, { role: 'OWNER' })
     expect(await validate(invalid)).not.toEqual([])
+  })
+
+  it('stores an optional initial password hash and echoes it exactly once', async () => {
+    const { service, state } = makeUsersHarness()
+    const created = await service.create('org-1', { email: 'new@example.com', displayName: 'New', initialPassword: 'initial-pass-123' })
+    expect(created).toMatchObject({ initialPassword: 'initial-pass-123', role: 'MEMBER' })
+    expect(state.accounts[1].passwordHash).toEqual(expect.any(String))
+    expect(state.accounts[1].passwordHash).not.toContain('initial-pass-123')
+
+    const passwordless = await service.create('org-1', { email: 'plain@example.com', displayName: 'Plain' })
+    expect(passwordless).not.toHaveProperty('initialPassword')
+    expect(state.accounts[2].passwordHash).toBeNull()
+  })
+
+  it('validates the initial and reset password length bounds', async () => {
+    const short = plainToInstance(CreateManagedUserDto, { email: 'a@example.com', displayName: 'A', initialPassword: '1234567' })
+    expect(await validate(short)).not.toEqual([])
+    const ok = plainToInstance(CreateManagedUserDto, { email: 'a@example.com', displayName: 'A', initialPassword: '12345678' })
+    expect(await validate(ok)).toEqual([])
+
+    const blankReset = plainToInstance(ResetUserPasswordDto, { newPassword: '' })
+    expect(await validate(blankReset)).not.toEqual([])
+    const okReset = plainToInstance(ResetUserPasswordDto, { newPassword: 'long-enough-8' })
+    expect(await validate(okReset)).toEqual([])
+  })
+
+  it('resets a password, invalidates sessions and audits without leaking the secret', async () => {
+    const { service, state } = makeUsersHarness()
+    const result = await service.resetPassword(
+      { sub: 'admin-1', organizationId: 'org-1', role: 'ORG_ADMIN' },
+      'account-1', 'brand-new-pass'
+    )
+    expect(result).toEqual({ initialPassword: 'brand-new-pass' })
+    expect(state.accounts[0].passwordHash).toEqual(expect.any(String))
+    expect(state.accounts[0].tokenVersion).toBe(2)
+    expect(state.audits).toEqual([expect.objectContaining({
+      organizationId: 'org-1', actorAccountId: 'admin-1',
+      action: 'user.password_reset', resourceType: 'account', resourceId: 'account-1'
+    })])
+    expect(JSON.stringify(state.audits)).not.toContain('brand-new-pass')
+  })
+
+  it('rejects password resets from non-administrators or across organizations', async () => {
+    const member = makeUsersHarness()
+    await expect(member.service.resetPassword(
+      { sub: 'member-2', organizationId: 'org-1', role: 'MEMBER' }, 'account-1', 'whatever-pass'
+    )).rejects.toMatchObject({ status: 403 })
+    expect(member.state.accounts[0].passwordHash).toBeNull()
+
+    const outsider = makeUsersHarness({ secondOrganization: true })
+    await expect(outsider.service.resetPassword(
+      { sub: 'admin-1', organizationId: 'org-1', role: 'ORG_ADMIN' }, 'account-2', 'whatever-pass'
+    )).rejects.toMatchObject({ status: 404 })
+    expect(outsider.state.accounts[1].passwordHash).toBeNull()
+    expect(outsider.state.audits).toEqual([])
   })
 })

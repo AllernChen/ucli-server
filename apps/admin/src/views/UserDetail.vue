@@ -32,6 +32,12 @@ let groupRequest = 0
 const linkExpiryForm = reactive<LinkExpiryForm>({ mode: '7d', customExpiresAt: '' })
 const canCreateGrant = computed(() => user.value?.status === 'ACTIVE')
 const grantGate = createExclusiveAsyncRequestGate(pending => { grantPending.value = pending })
+const passwordOpen = ref(false)
+const passwordPending = ref(false)
+const passwordError = ref('')
+const passwordCopyError = ref('')
+const createdPassword = ref('')
+const passwordForm = reactive({ newPassword: '' })
 
 function errorMessage(value: unknown, fallback: string) {
   return deviceGrantErrorMessage(value, fallback)
@@ -63,6 +69,56 @@ function clearSecret() {
   copyError.value = ''
 }
 
+function clearCreatedPassword() {
+  createdPassword.value = ''
+  passwordCopyError.value = ''
+}
+
+function openPassword() {
+  passwordError.value = ''
+  passwordForm.newPassword = ''
+  passwordOpen.value = true
+}
+
+function closePassword() {
+  if (passwordPending.value) return
+  passwordOpen.value = false
+  passwordError.value = ''
+}
+
+async function submitPassword() {
+  if (passwordPending.value) return
+  const requestedUserId = userId.value
+  const routeGeneration = currentRouteGeneration
+  passwordError.value = ''
+  passwordPending.value = true
+  try {
+    const result = await api<{ initialPassword: string }>(`/api/v1/admin/users/${requestedUserId}/reset-password`, {
+      method: 'POST', body: JSON.stringify({ newPassword: passwordForm.newPassword })
+    })
+    if (!isCurrentRoute(routeGeneration, requestedUserId)) return
+    createdPassword.value = result.initialPassword
+    passwordOpen.value = false
+    await load()
+  } catch (value: unknown) {
+    if (!isCurrentRoute(routeGeneration, requestedUserId)) return
+    passwordError.value = errorMessage(value, '设置密码失败')
+  } finally {
+    if (isCurrentRoute(routeGeneration, requestedUserId)) passwordPending.value = false
+  }
+}
+
+async function copyCreatedPassword() {
+  if (!createdPassword.value) return
+  passwordCopyError.value = ''
+  try {
+    await navigator.clipboard.writeText(createdPassword.value)
+    toast('密码已复制')
+  } catch (value: unknown) {
+    passwordCopyError.value = errorMessage(value, '复制失败，请手动复制')
+  }
+}
+
 function resetForUser() {
   grantGate.invalidate()
   user.value = null
@@ -76,6 +132,10 @@ function resetForUser() {
   grantForm.expiresAt = ''
   resetLinkExpiryForm()
   clearSecret()
+  passwordOpen.value = false
+  passwordPending.value = false
+  passwordError.value = ''
+  clearCreatedPassword()
 }
 
 async function load() {
@@ -175,15 +235,16 @@ onUnmounted(() => {
   routeLifecycle.dispose()
   loadLifecycle.dispose()
   clearSecret()
+  clearCreatedPassword()
 })
 </script>
 
 <template>
   <header class="page-header"><div><button type="button" class="back-link" @click="router.push('/users')">← 返回用户管理</button><p>USER ACCESS</p><h1>{{ user?.displayName || userId }}</h1><span class="subtitle">{{ user?.email }}</span></div>
-    <div class="actions"><button type="button" @click="load">刷新</button><button type="button" class="primary" :disabled="!canCreateGrant || grantPending" @click="openGrant">创建授权</button></div></header>
+    <div class="actions"><button type="button" @click="load">刷新</button><button type="button" @click="openPassword">{{ user?.hasPassword ? '重置密码' : '设置密码' }}</button><button type="button" class="primary" :disabled="!canCreateGrant || grantPending" @click="openGrant">创建授权</button></div></header>
   <p v-if="user && !canCreateGrant" class="state">仅可为已启用的用户创建授权；请先启用该用户。</p>
   <p v-if="loading && !hasLoaded" class="state">正在加载用户…</p><p v-else-if="error && !hasLoaded" class="state error">{{ error }}</p>
-  <template v-else-if="user"><p v-if="error" class="state error">{{ error }}</p><div class="detail-grid"><article class="panel metric-block"><span>当前组织成员状态</span><strong class="small-strong">{{ user.status === 'ACTIVE' ? '正常' : '已禁用' }}</strong></article><article class="panel metric-block"><span>角色</span><strong class="small-strong">{{ user.role }}</strong></article><article class="panel metric-block"><span>设备</span><strong>{{ user.deviceCount }}</strong></article><article class="panel metric-block"><span>授权</span><strong>{{ user.deviceGrantCount }}</strong></article></div>
+  <template v-else-if="user"><p v-if="error" class="state error">{{ error }}</p><div class="detail-grid"><article class="panel metric-block"><span>当前组织成员状态</span><strong class="small-strong">{{ user.status === 'ACTIVE' ? '正常' : '已禁用' }}</strong></article><article class="panel metric-block"><span>角色</span><strong class="small-strong">{{ user.role }}</strong></article><article class="panel metric-block"><span>设备</span><strong>{{ user.deviceCount }}</strong></article><article class="panel metric-block"><span>授权</span><strong>{{ user.deviceGrantCount }}</strong></article><article class="panel metric-block"><span>登录密码</span><strong class="small-strong">{{ user.hasPassword ? '已设置' : '未设置（仅 Key 访问）' }}</strong></article></div>
     <section class="panel table-panel"><div class="section-header"><div><h2>设备授权</h2><p class="muted">可在当前授权中查看或重新生成 URL。</p></div><button type="button" @click="router.push('/device-grants')">管理全部授权</button></div><table v-if="user.deviceGrants.length"><thead><tr><th>当前 URL</th><th>URL 状态</th><th>URL 有效期</th><th>授权状态</th><th>授权有效期</th><th>绑定设备</th><th>绑定时间</th><th>创建时间</th><th>操作</th></tr></thead><tbody><tr v-for="grant in user.deviceGrants" :key="grant.id"><td class="mono">{{ grant.currentLink?.secretHint || '—' }}</td><td>{{ detailLinkStatusLabel(grant) }}</td><td>{{ grant.currentLink ? (grant.currentLink.expiresAt ? new Date(grant.currentLink.expiresAt).toLocaleString() : '永久') : '—' }}</td><td><StatusBadge :status="grant.status" /><small>{{ detailGrantStatusLabel(grant) }}</small></td><td>{{ grant.expiresAt ? new Date(grant.expiresAt).toLocaleString() : '永久' }}</td><td>{{ grant.deviceId || '未绑定' }}</td><td>{{ grant.boundAt ? new Date(grant.boundAt).toLocaleString() : '—' }}</td><td>{{ new Date(grant.createdAt).toLocaleString() }}</td><td><DeviceGrantLinkActions :grant="grant" @changed="load" /></td></tr></tbody></table><p v-else class="empty">暂无设备授权</p></section>
     <section class="panel table-panel"><h2>设备</h2><table v-if="user.devices.length"><thead><tr><th>名称</th><th>平台 / 版本</th><th>对应授权</th><th>绑定时间</th><th>最后活跃</th><th>状态</th></tr></thead><tbody><tr v-for="device in user.devices" :key="device.id"><td><strong>{{ device.name }}</strong><small class="mono">{{ device.installationId || '—' }}</small></td><td>{{ device.platform || '—' }} / {{ device.clientVersion || '—' }}</td><td><template v-if="device.grant"><span class="mono">{{ device.grant.currentLink?.secretHint || '—' }}</span><small>{{ detailGrantStatusLabel(device.grant) }}</small></template><span v-else>—</span></td><td>{{ device.grant?.boundAt ? new Date(device.grant.boundAt).toLocaleString() : '—' }}</td><td>{{ device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString() : '—' }}</td><td>{{ device.revokedAt ? '已永久撤销' : '正常' }}</td></tr></tbody></table><p v-else class="empty">暂无已绑定设备</p></section>
     <EmployeeKeysPanel :key="userId" :account-id="userId" />
@@ -191,4 +252,6 @@ onUnmounted(() => {
 
   <Drawer :open="grantOpen" title="创建设备授权" description="创建后会显示完整连接链接，请及时复制并安全发送给用户。关闭只会清除当前页面中的副本，之后仍可在授权列表再次查看。" :close-disabled="grantPending" @close="closeGrant"><form id="grant-form" class="stack-form" @submit.prevent="createGrant"><label class="check-row"><input v-model="grantForm.permanent" type="checkbox">永久有效</label><label>有效期<input v-model="grantForm.expiresAt" type="datetime-local" :disabled="grantForm.permanent" :required="!grantForm.permanent"></label><label>用量组<select v-model="grantGroupId" aria-label="设备所属组" :required="groupRequired" :disabled="groupLoading || grantPending"><option value="">{{ groupRequired ? '请选择员工所属组（必选）' : '暂不归组（兼容旧设备）' }}</option><option v-for="g in grantGroups" :key="g.id" :value="g.id">{{ g.name }}</option></select></label><LinkExpiryFields :model-value="linkExpiryForm" @update:model-value="updateLinkExpiryForm" /><p v-if="grantError" class="state error">{{ grantError }}</p></form><template #footer><button type="button" :disabled="grantPending" @click="closeGrant">取消</button><button type="submit" form="grant-form" class="primary" :disabled="grantPending || !groupReady">{{ grantPending ? '正在创建…' : '创建授权' }}</button></template></Drawer>
   <Drawer :open="Boolean(createdSecret)" title="授权创建成功" description="关闭只会清除当前页面中的副本；以后仍可在授权列表中查看当前 URL" @close="clearSecret"><label>连接链接<textarea readonly :value="createdSecret?.connectionUrl || ''" aria-label="完整连接链接"></textarea></label><p v-if="copyError" class="state error">{{ copyError }}</p><template #footer><button type="button" @click="copyConnectionUrl">复制连接链接</button><button type="button" class="primary" @click="clearSecret">关闭</button></template></Drawer>
+  <Drawer :open="passwordOpen" :title="user?.hasPassword ? '重置登录密码' : '设置登录密码'" description="设置后员工可使用邮箱和密码登录平台访问个人中心；重置会使该账号已登录的网页会话全部失效。密码仅在提交成功后显示一次。" :close-disabled="passwordPending" @close="closePassword"><form id="password-form" class="stack-form" @submit.prevent="submitPassword"><label>新密码（至少 8 位）<input v-model="passwordForm.newPassword" type="text" autocomplete="off" minlength="8" maxlength="128" required></label><p v-if="passwordError" class="state error">{{ passwordError }}</p></form><template #footer><button type="button" :disabled="passwordPending" @click="closePassword">取消</button><button type="submit" form="password-form" class="primary" :disabled="passwordPending">{{ passwordPending ? '正在设置…' : '确认设置' }}</button></template></Drawer>
+  <Drawer :open="Boolean(createdPassword)" title="密码已设置" description="关闭只会清除当前页面中的副本；员工忘记密码时，管理员可随时重置。" @close="clearCreatedPassword"><label>登录密码<textarea readonly :value="createdPassword" aria-label="登录密码"></textarea></label><p v-if="passwordCopyError" class="state error">{{ passwordCopyError }}</p><template #footer><button type="button" @click="copyCreatedPassword">复制密码</button><button type="button" class="primary" @click="clearCreatedPassword">关闭</button></template></Drawer>
 </template>
