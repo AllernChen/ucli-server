@@ -1110,7 +1110,7 @@ git commit -m "feat: 统计和个人视角支持项目维度"
 - Usage group list groups by region and renders project tags.
 - Employee key form requires region + project.
 
-- [ ] **Step 1: 写失败组件测试**
+- [x] **Step 1: 写失败组件测试**
 
 覆盖：
 
@@ -1121,7 +1121,7 @@ git commit -m "feat: 统计和个人视角支持项目维度"
 - 项目预算耗尽显示风险；
 - 未加载或请求失败时不显示假数据。
 
-- [ ] **Step 2: 运行失败测试**
+- [x] **Step 2: 运行失败测试**
 
 Run:
 
@@ -1131,7 +1131,7 @@ npm test -- test/admin/projects.test.ts test/admin/usage-groups.test.ts
 
 Expected: FAIL。
 
-- [ ] **Step 3: 注册路由和导航**
+- [x] **Step 3: 注册路由和导航**
 
 `main.ts`：
 
@@ -1142,7 +1142,7 @@ Expected: FAIL。
 
 `App.vue` 管理员导航增加 `['projects', '项目管理']`，权限映射允许 `project-detail`。
 
-- [ ] **Step 4: 实现项目页面**
+- [x] **Step 4: 实现项目页面**
 
 `Projects.vue` 列：
 
@@ -1162,7 +1162,7 @@ Expected: FAIL。
 4. `budget`：当前额度、账目、调整、申请；
 5. `usage`：内嵌 `Usage` 并带 `budgetProjectId` 过滤。
 
-- [ ] **Step 5: 改造用量组页面**
+- [x] **Step 5: 改造用量组页面**
 
 `UsageGroups.vue`：
 
@@ -1178,7 +1178,7 @@ Expected: FAIL。
 
 `UsageGroupDetail.vue` 增加「项目」页签，列出下属项目并链接到 `/projects/:id`；预算卡片改为项目预算合计，不再暗示区域扣费。
 
-- [ ] **Step 6: 改造员工 Key 表单**
+- [x] **Step 6: 改造员工 Key 表单**
 
 `EmployeeKeysPanel.vue`：
 
@@ -1189,7 +1189,7 @@ Expected: FAIL。
 5. 创建成功仅在一次性 Drawer 中展示 secret；
 6. 列表增加项目列和项目筛选。
 
-- [ ] **Step 7: 运行测试和构建**
+- [x] **Step 7: 运行测试和构建**
 
 Run:
 
@@ -1200,7 +1200,7 @@ npm run admin:build
 
 Expected: 全部通过。
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```powershell
 git add apps/admin/src/main.ts apps/admin/src/App.vue apps/admin/src/projects.ts apps/admin/src/views/Projects.vue apps/admin/src/views/ProjectDetail.vue apps/admin/src/views/UsageGroups.vue apps/admin/src/views/UsageGroupDetail.vue apps/admin/src/components/EmployeeKeysPanel.vue test/admin/projects.test.ts test/admin/usage-groups.test.ts
