@@ -1227,7 +1227,7 @@ git commit -m "feat: 管理端支持区域项目与项目 Key"
   - `--output path`：新 Key 发放清单。
 - Produces idempotent migration report and replacement key CSV.
 
-- [ ] **Step 1: 写失败迁移测试**
+- [x] **Step 1: 写失败迁移测试**
 
 固定内置映射：
 
@@ -1252,7 +1252,7 @@ const REGION_MAPPING = [
 - 预算迁移前后总额都是 `13650.00000000`；
 - 干跑不发送任何 mutation 请求。
 
-- [ ] **Step 2: 运行失败测试**
+- [x] **Step 2: 运行失败测试**
 
 Run:
 
@@ -1262,7 +1262,7 @@ npm test -- test/deploy/region-project-migration.test.ts
 
 Expected: FAIL。
 
-- [ ] **Step 3: 实现迁移脚本**
+- [x] **Step 3: 实现迁移脚本**
 
 脚本流程：
 
@@ -1290,7 +1290,7 @@ Expected: FAIL。
 - 不把完整 Key 写日志；
 - 生成迁移审计摘要。
 
-- [ ] **Step 4: 本地真库演练**
+- [x] **Step 4: 本地真库演练**
 
 Run:
 
@@ -1311,7 +1311,7 @@ project_budget_total=13650.00000000
 archived_source_groups=13
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add scripts/migrate-region-projects.mjs scripts/migrate-region-projects.preview.md docs/release-0.8.0.md test/deploy/region-project-migration.test.ts

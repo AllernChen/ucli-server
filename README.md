@@ -50,7 +50,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/v1/auth/setup `
 
 ### 员工 Key 与组预算（0.4.0，默认关闭）
 
-员工不安装 UCLI 也可持平台 Key 访问网关。每个 Key 固定归属一个员工和一个用量组；组维护成员、模型白名单和人民币采购成本预算，零额度禁止使用，不限额必须显式设置。管理入口为“用量组”“用户详情 → 员工 API Key”“我的接入”，成本分析支持组/员工/Key 等维度。设备归组与强制开关位于“设备授权”和“组织”页面。
+员工不安装 UCLI 也可持平台 Key 访问网关。活动业务用量组为区域组；项目在“项目管理”中维护，并拥有独立人民币预算。区域 Key 实际绑定员工、区域和项目，AI CLI 只需配置 Base URL 和 Key，不需要额外项目请求头。管理入口为“用量组”“项目管理”“用户详情 → 员工 API Key”“我的接入”，成本分析支持区域/项目/员工/Key 等维度。设备归组与强制开关位于“设备授权”和“组织”页面；新区域设备授权也必须选择项目。
 
 公开入口：`/gateway/v1/chat/completions`（Chat）、`/gateway/v1/responses`（Responses）、`/gateway/anthropic/v1/messages`（Messages）；目录为 `/gateway/v1/models` 和 `/gateway/anthropic/v1/models`。三种协议不自动互转，Gemini 仅内部 Chat 文本转换。目录成功不等于具体 CLI 的 `/model`、工具调用全部兼容。
 
