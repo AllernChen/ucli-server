@@ -1005,7 +1005,7 @@ git commit -m "feat: 设备授权绑定项目归属"
 - Project dimension uses `UsageLog.budgetProjectId`.
 - `GET /api/v1/me/projects` returns active projects in the caller's active regions.
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 覆盖：
 
@@ -1016,7 +1016,7 @@ git commit -m "feat: 设备授权绑定项目归属"
 - 普通成员可看自己区域的项目；
 - 设备会话访问个人项目接口返回 403。
 
-- [ ] **Step 2: 运行失败测试**
+- [x] **Step 2: 运行失败测试**
 
 Run:
 
@@ -1026,7 +1026,7 @@ npm test -- test/analytics/project-dimensions.test.ts test/integration/me-projec
 
 Expected: FAIL。
 
-- [ ] **Step 3: 实现查询**
+- [x] **Step 3: 实现查询**
 
 过滤条件：
 
@@ -1044,7 +1044,7 @@ COALESCE(u.budget_project_id, p.source_group_id)
 
 并按项目名称快照或 `projects.name` 展示。所有 SQL 保持参数化。
 
-- [ ] **Step 4: 实现个人项目 API**
+- [x] **Step 4: 实现个人项目 API**
 
 `MeProjectsService.list(actor)`：
 
@@ -1069,7 +1069,7 @@ this.prisma.project.findMany({
 
 项目负责人预算权限由 `ProjectMember.role=OWNER` 判断。
 
-- [ ] **Step 5: 运行测试**
+- [x] **Step 5: 运行测试**
 
 Run:
 
@@ -1079,7 +1079,7 @@ npm test -- test/analytics/project-dimensions.test.ts test/integration/me-projec
 
 Expected: 全部通过。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add apps/api/src/analytics.dto.ts apps/api/src/usage-query.ts apps/api/src/analytics.service.ts packages/usage/src/analytics-types.ts apps/api/src/me-projects.controller.ts apps/api/src/me-projects.service.ts apps/api/src/app.module.ts test/analytics/project-dimensions.test.ts test/integration/me-projects.test.ts
