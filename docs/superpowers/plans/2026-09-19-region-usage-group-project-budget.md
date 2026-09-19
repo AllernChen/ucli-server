@@ -1401,7 +1401,7 @@ git add docs/release-0.8.0.md README.md CONTEXT.md
 git commit -m "docs: 完善区域项目预算发布说明"
 ```
 
-- [ ] **Step 7: 推送并等待 CI**
+- [x] **Step 7: 推送并等待 CI**
 
 Run:
 
