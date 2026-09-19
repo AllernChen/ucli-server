@@ -756,7 +756,7 @@ git commit -m "feat: 员工 Key 绑定项目预算归属"
 - Gateway calls `ProjectBudgetService` when `principal.projectId` exists.
 - Usage logs persist `budgetProjectId`.
 
-- [ ] **Step 1: 写失败认证测试**
+- [x] **Step 1: 写失败认证测试**
 
 覆盖：
 
@@ -767,7 +767,7 @@ git commit -m "feat: 员工 Key 绑定项目预算归属"
 - 传统 `PROJECT` / `DEPARTMENT` 存量 Key 保持兼容；
 - identity 输出 `groupId` 与 `projectId`。
 
-- [ ] **Step 2: 写失败网关测试**
+- [x] **Step 2: 写失败网关测试**
 
 覆盖：
 
@@ -791,7 +791,7 @@ expect(prisma.usageLog.create.mock.calls[0][0].data).toMatchObject({
 })
 ```
 
-- [ ] **Step 3: 运行测试确认失败**
+- [x] **Step 3: 运行测试确认失败**
 
 Run:
 
@@ -801,7 +801,7 @@ npm test -- test/security/gateway-project-auth.test.ts test/gateway/project-budg
 
 Expected: FAIL。
 
-- [ ] **Step 4: 修改 GatewayIdentity**
+- [x] **Step 4: 修改 GatewayIdentity**
 
 ```ts
 export type GatewayIdentity = {
@@ -832,7 +832,7 @@ if (!key.project || key.project.regionId !== key.groupId || key.project.status !
 }
 ```
 
-- [ ] **Step 5: 改造预算请求执行器**
+- [x] **Step 5: 改造预算请求执行器**
 
 将 `relayGroupRequest` 导出重命名为 `relayBudgetedRequest`，输入增加：
 
@@ -869,11 +869,11 @@ actorSnapshot: {
 
 保留 `...context` 中的原始 `projectId`，但预算归因只读 `principal.projectId`。
 
-- [ ] **Step 6: GatewayService 分支**
+- [x] **Step 6: GatewayService 分支**
 
 在 `relay()` 中先处理区域+项目身份，再保留传统组路径。将 principal 类型拆为 `RegionProjectIdentity` 与 `LegacyGroupIdentity`，不得用 `as any` 掩盖类型差异。
 
-- [ ] **Step 7: 运行测试**
+- [x] **Step 7: 运行测试**
 
 Run:
 
@@ -883,7 +883,7 @@ npm test -- test/security/gateway-project-auth.test.ts test/gateway/project-budg
 
 Expected: 全部通过。
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```powershell
 git add packages/security/src/gateway-auth.ts apps/gateway/src/gateway.service.ts apps/gateway/src/group-request.ts apps/gateway/src/app.module.ts test/security/gateway-project-auth.test.ts test/gateway/project-budget-relay.test.ts
