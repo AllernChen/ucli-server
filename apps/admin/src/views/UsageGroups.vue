@@ -3,7 +3,7 @@ import { onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { createRequestLifecycle, type Page } from '../device-grants'
-import { budgetLabel, budgetWarning, type UsageGroup } from '../usage-groups'
+import { budgetLabel, budgetWarning, type UsageGroup, type UsageProjectSummary } from '../usage-groups'
 import { formatCny } from '../currency'
 import Drawer from '../components/Drawer.vue'
 import Pagination from '../components/Pagination.vue'
@@ -11,6 +11,7 @@ const route = useRoute(), router = useRouter(), lifecycle = createRequestLifecyc
 const rows = ref<Page<UsageGroup>>({ items: [], total: 0, offset: 0, limit: 20 })
 const filters = reactive({ q: '', type: 'REGION', status: 'active', budgetRisk: '', offset: 0 })
 const loading = ref(false), error = ref(''), open = ref(false), pending = ref(false), formError = ref('')
+const expandedRegionId = ref('')
 const form = reactive({ name: '', type: 'REGION', description: '' })
 let alive = true
 let lastRoute = ''
@@ -43,6 +44,12 @@ async function create() {
   } catch (e: any) { if (alive) formError.value = e.message }
   finally { if (alive) pending.value = false }
 }
+function toggleRegionProjects(groupId: string) {
+  expandedRegionId.value = expandedRegionId.value === groupId ? '' : groupId
+}
+function openProjectKeys(project: UsageProjectSummary) {
+  router.push({ path: `/projects/${project.id}`, query: { tab: 'keys' } })
+}
 watch(() => route.query, query => {
   const values = Object.fromEntries(Object.entries(query).map(([key, value]) => [key, String(Array.isArray(value) ? value[0] || '' : value || '')]))
   if (JSON.stringify(values) === lastRoute) return
@@ -59,16 +66,55 @@ onUnmounted(() => { alive = false; lifecycle.dispose() })
   <header class="page-header"><div><p>REGION ACCESS</p><h1>用量组</h1><span class="subtitle">按业务区域分配模型权限；项目预算在项目管理维护</span></div><button class="primary" @click="open = true; formError = ''">创建区域</button></header>
   <form class="panel form-row" @submit.prevent="filters.offset = 0; apply()"><input v-model="filters.q" aria-label="搜索组名" placeholder="搜索区域"><select v-model="filters.type" aria-label="组类型"><option value="REGION">区域组</option><option value="">全部类型</option><option value="PROJECT">历史项目组</option><option value="DEPARTMENT">部门组</option></select><select v-model="filters.status" aria-label="组状态"><option value="active">启用</option><option value="disabled">停用</option><option value="archived">归档</option><option value="all">全部状态</option></select><select v-model="filters.budgetRisk" aria-label="预算风险"><option value="">全部预算</option><option value="ATTENTION">需关注</option><option value="NEAR_LIMIT">接近额度上限</option><option value="EXHAUSTED">额度已耗尽</option><option value="UNSETTLED">有待核算</option></select><button :disabled="loading">查询</button></form>
   <p v-if="error" class="state error" role="alert">{{ error }}</p><p v-if="loading" class="state">正在加载用量组…</p>
-  <section v-else class="panel table-panel"><table v-if="rows.items.length" class="usage-groups-table"><thead><tr><th>组 / 类型</th><th>状态</th><th>成员 / 模型 / Key</th><th>当前周期</th><th>额度 / 已用</th><th>预占 / 可用</th><th>消耗进度</th></tr></thead><tbody>
-    <tr v-for="g in rows.items" :key="g.id">
-      <td><button class="back-link" @click="router.push(`/usage-groups/${g.id}`)">{{ g.name }}</button><small>{{ g.type === 'REGION' ? '区域组' : g.type === 'PROJECT' ? '历史项目组' : '部门组' }}</small><span v-if="g.projects?.length" class="muted">{{ g.projects.map(project => project.name).join(' · ') }}</span></td>
+  <section v-else class="panel table-panel"><table v-if="rows.items.length" class="usage-groups-table"><thead><tr><th>组 / 类型</th><th>状态</th><th>成员 / 模型 / Key</th><th>关联项目</th><th>当前周期</th><th>额度 / 已用</th><th>预占 / 可用</th><th>消耗进度</th></tr></thead><tbody>
+    <template v-for="g in rows.items" :key="g.id">
+    <tr>
+      <td><button class="back-link" @click="router.push(`/usage-groups/${g.id}`)">{{ g.name }}</button><small>{{ g.type === 'REGION' ? '区域组' : g.type === 'PROJECT' ? '历史项目组' : '部门组' }}</small></td>
       <td>{{ g.archivedAt ? '已归档' : g.enabled ? '启用' : '停用' }}<small v-if="!g.enabled">组已停用</small><small v-if="g._count?.models === 0">未配置模型</small><small v-if="g.activeMembers === 0">无有效成员</small></td>
       <td>有效成员 {{ g.activeMembers }} / {{ g._count?.members }}<small>允许模型 {{ g._count?.models }} · 员工 Key {{ g.activeKeys }}</small></td>
+      <td>
+        <template v-if="g.type === 'REGION'">
+          <button class="back-link" data-action="toggle-region-projects" :aria-expanded="expandedRegionId === g.id" @click="toggleRegionProjects(g.id)">{{ g.projects?.length || 0 }} 个项目</button>
+          <small>{{ g.projects?.length ? g.projects.map(project => project.name).join(' · ') : '未关联项目' }}</small>
+        </template>
+        <span v-else>—</span>
+      </td>
       <td>{{ g.budget.budgetMode === 'TOTAL' ? '项目总额' : '自然月' }}<small>{{ g.budget.periodKey }} · {{ g.budget.budgetTimezone }}</small></td>
       <td>{{ budgetLabel(g.budget) }}<small>已用 {{ formatCny(g.budget.spentCny) }}</small></td>
       <td>预占 {{ formatCny(g.budget.reservedCny) }}<small>待核算（包含在预占内）{{ formatCny(g.budget.uncertainCny) }}</small><small>可用 {{ g.budget.unlimited ? '不限额' : formatCny(g.budget.availableCny) }}</small></td>
       <td><progress v-if="!g.budget.unlimited && Number(g.budget.limitCny) > 0" :value="Number(g.budget.spentCny) + Number(g.budget.reservedCny)" :max="Number(g.budget.limitCny)" aria-label="含预占预算消耗" /><span v-else>{{ g.budget.unlimited ? '不限额' : '零额度' }}</span><small v-if="budgetWarning(g.budget)">{{ budgetWarning(g.budget) }}</small></td>
     </tr>
+    <tr v-if="g.type === 'REGION' && expandedRegionId === g.id" class="region-project-detail-row">
+      <td colspan="8">
+        <div class="region-project-details">
+          <article v-for="project in g.projects || []" :key="project.id" class="region-project-card">
+            <div><strong>{{ project.name }}</strong><small>{{ project.code }}</small></div>
+            <dl>
+              <dt>项目额度</dt><dd>{{ project.budget?.unlimited ? '不限额' : formatCny(project.budget?.limitCny || '0') }}</dd>
+              <dt>已用 / 预占</dt><dd>{{ formatCny(project.budget?.spentCny || '0') }} / {{ formatCny(project.budget?.reservedCny || '0') }}</dd>
+              <dt>可用</dt><dd>{{ project.budget?.unlimited ? '不限额' : formatCny(project.budget?.availableCny || '0') }}</dd>
+              <dt>人员</dt><dd>职责成员 {{ project.memberCount }} 人；负责人：{{ project.owners.map(owner => owner.displayName).join('、') || '未设置' }}</dd>
+              <dt>Key</dt><dd>有效 Key {{ project.activeKeyCount }} 把</dd>
+            </dl>
+            <button data-action="view-project-keys" @click="openProjectKeys(project)">查看 Key</button>
+          </article>
+          <p v-if="!g.projects?.length" class="empty">该区域暂未关联项目。</p>
+        </div>
+      </td>
+    </tr>
+    </template>
   </tbody></table><p v-else class="empty">暂无用量组</p><Pagination :total="rows.total" :limit="20" :offset="filters.offset" @change="filters.offset = $event; apply()" /></section>
   <Drawer :open="open" title="创建区域用量组" description="区域用于组织成员和模型权限；项目预算请在项目管理模块配置。" :close-disabled="pending" @close="open = false"><form id="create-group-form" class="stack-form" @submit.prevent="create"><label>区域名称<input v-model="form.name" required maxlength="120"></label><label>说明<textarea v-model="form.description" maxlength="2000" /></label><p v-if="formError" class="state error">{{ formError }}</p></form><template #footer><button :disabled="pending" @click="open = false">取消</button><button class="primary" type="submit" form="create-group-form" :disabled="pending || !form.name.trim()">创建</button></template></Drawer>
 </template>
+
+<style scoped>
+.region-project-detail-row > td { padding: 0 16px 16px !important; background: rgba(15, 28, 44, .45); }
+.region-project-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
+.region-project-card { display: grid; gap: 12px; padding: 14px; border: 1px solid #26364c; border-radius: 10px; background: #101d2e; }
+.region-project-card > div { display: grid; gap: 2px; }
+.region-project-card dl { margin: 0; display: grid; grid-template-columns: 88px 1fr; gap: 6px 12px; }
+.region-project-card dt { color: #8ba0b8; }
+.region-project-card dd { margin: 0; }
+.region-project-card button { justify-self: start; }
+@media (max-width: 720px) { .region-project-detail-row > td { padding: 0 8px 12px !important; } .region-project-card dl { grid-template-columns: 1fr; } }
+</style>

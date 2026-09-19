@@ -8,6 +8,7 @@ import { canAccessModel } from '../../../packages/gateway-core/src/access-policy
 import { modelCapabilitiesSelect } from '../../../packages/gateway-core/src/model-catalog.service.js'
 import { configuredClientProtocols } from '../../../packages/gateway-core/src/model-capabilities.js'
 import { readGroupBudgets } from '../../../packages/quota/src/group-budget-read.js'
+import { readProjectBudgets } from '../../../packages/quota/src/project-budget-read.js'
 import { cny } from '../../../packages/quota/src/group-budget.js'
 import { PageQueryDto } from './catalog.dto.js'
 import { UsageGroupPageQueryDto, type CreateUsageGroupDto, type UpdateUsageGroupDto } from './usage-groups.dto.js'
@@ -99,9 +100,39 @@ export class UsageGroupsService {
       current.push(project)
       projectsByRegion.set(project.regionId, current)
     }
+    const projectIds = projects.map(project => project.id)
+    const [projectBudgets, projectMembers, projectKeys, projectOwners] = projectIds.length ? await Promise.all([
+      readProjectBudgets(this.prisma, organizationId, projectIds, now),
+      this.prisma.projectMember.groupBy({ by: ['projectId'], where: {
+        organizationId, projectId: { in: projectIds },
+        membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } }
+      }, _count: true }),
+      this.prisma.employeeApiKey.groupBy({ by: ['projectId'], where: {
+        organizationId, projectId: { in: projectIds }, revokedAt: null, disabledAt: null, deletedAt: null,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }]
+      }, _count: true }),
+      this.prisma.projectMember.findMany({ where: {
+        organizationId, projectId: { in: projectIds }, role: 'OWNER',
+        membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } }
+      }, select: { projectId: true, accountId: true,
+        membership: { select: { account: { select: { displayName: true } } } } } })
+    ]) : [new Map(), [], [], []]
+    const projectMemberCounts = new Map(projectMembers.map(row => [row.projectId, row._count]))
+    const projectKeyCounts = new Map(projectKeys.map(row => [row.projectId, row._count]))
+    const projectOwnersByProject = new Map<string, Array<{ accountId: string; displayName: string }>>()
+    for (const owner of projectOwners) {
+      const current = projectOwnersByProject.get(owner.projectId) ?? []
+      current.push({ accountId: owner.accountId, displayName: owner.membership.account.displayName })
+      projectOwnersByProject.set(owner.projectId, current)
+    }
     return { items: items.map(group => ({ ...group, budget: budgets.get(group.id)!, activeMembers: memberCounts.get(group.id) ?? 0,
       activeKeys: keyCounts.get(group.id) ?? 0,
-      ...(group.type === 'REGION' ? { projects: projectsByRegion.get(group.id) ?? [] } : {}) })),
+      ...(group.type === 'REGION' ? { projects: (projectsByRegion.get(group.id) ?? []).map(project => ({
+        id: project.id, regionId: project.regionId, code: project.code, name: project.name, status: project.status,
+        budget: projectBudgets.get(project.id) ?? null, memberCount: projectMemberCounts.get(project.id) ?? 0,
+        activeKeyCount: projectKeyCounts.get(project.id) ?? 0,
+        owners: projectOwnersByProject.get(project.id) ?? []
+      })) } : {}) })),
       total, limit: query.limit, offset: query.offset }
   }
 
