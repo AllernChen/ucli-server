@@ -36,7 +36,7 @@
 
 - Produces: 后续任务的领域决策合同：7 区域、项目预算为主、项目化 Key、无项目请求头。
 
-- [ ] **Step 1: 核对设计决策**
+- [x] **Step 1: 核对设计决策**
 
 确认设计文档开头包含：
 
@@ -49,7 +49,7 @@
 | 请求头方案 | **不采用 `X-UCLI-Project-Id` 请求头选择项目**；项目归因必须内嵌在凭据中 |
 ```
 
-- [ ] **Step 2: 核对名单统计**
+- [x] **Step 2: 核对名单统计**
 
 在 `output/region-project-reorganization/人员分组名单-v2.md` 中确认：
 
@@ -59,7 +59,7 @@
 现有需替换 Key：23 把
 ```
 
-- [ ] **Step 3: 检查文档质量**
+- [x] **Step 3: 检查文档质量**
 
 Run:
 
@@ -70,7 +70,7 @@ Select-String -Path docs/superpowers/specs/2026-09-19-region-usage-group-project
 
 Expected: `git diff --check` 无输出；`Select-String` 无匹配。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```powershell
 git add docs/superpowers/specs/2026-09-19-region-usage-group-project-budget-design.md docs/superpowers/plans/2026-09-19-region-usage-group-project-budget.md
@@ -99,7 +99,7 @@ git commit -m "docs: 设计区域项目化用量与预算方案"
   - `DeviceGrant.projectId`
   - `UsageLog.budgetProjectId`
 
-- [ ] **Step 1: 写失败的结构测试**
+- [x] **Step 1: 写失败的结构测试**
 
 创建 `test/deploy/region-project-schema.test.ts`：
 
@@ -142,7 +142,7 @@ describe('region and project budget schema', () => {
 })
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run:
 
@@ -152,7 +152,7 @@ npm test -- test/deploy/region-project-schema.test.ts
 
 Expected: FAIL，原因是迁移文件不存在。
 
-- [ ] **Step 3: 修改 Prisma schema**
+- [x] **Step 3: 修改 Prisma schema**
 
 在 `UsageGroupType` 增加 `REGION`，新增 `ProjectStatus` 与 `ProjectMemberRole` 枚举。
 
@@ -241,7 +241,7 @@ model ProjectBudgetPeriod {
 
 `ProjectBudgetEntry` 与 `ProjectBudgetApplication` 按现有 `GroupBudgetEntry` / `GroupBudgetApplication` 的字段、索引和状态语义实现，所有 `groupId` 替换为 `projectId`。
 
-- [ ] **Step 4: 手写迁移**
+- [x] **Step 4: 手写迁移**
 
 迁移必须包含：
 
@@ -284,7 +284,7 @@ CREATE INDEX "usage_logs_budget_project_time_idx" ON "usage_logs"("organization_
 
 `source_group_id` 只加唯一索引，不加外键；旧组会归档，但历史来源标识必须稳定。
 
-- [ ] **Step 5: 生成并验证 Prisma client**
+- [x] **Step 5: 生成并验证 Prisma client**
 
 Run:
 
@@ -295,7 +295,7 @@ npm test -- test/deploy/region-project-schema.test.ts
 
 Expected: 测试通过。
 
-- [ ] **Step 6: 空库迁移演练**
+- [x] **Step 6: 空库迁移演练**
 
 Run:
 
@@ -306,7 +306,7 @@ npx prisma migrate deploy
 
 Expected: 所有迁移应用，无枚举、外键或循环依赖错误。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add prisma/schema.prisma prisma/migrations/202609190001_region_projects_project_budgets/migration.sql test/deploy/region-project-schema.test.ts
@@ -340,7 +340,7 @@ git commit -m "feat: 增加区域项目与项目预算数据模型"
   - `ProjectsService.removeMember(actor, id, accountId)`
 - Region list response includes `projects`.
 
-- [ ] **Step 1: 写失败集成测试**
+- [x] **Step 1: 写失败集成测试**
 
 创建 `test/integration/projects.test.ts`，使用 `withTestDatabase` / `createOrganization`：
 
@@ -365,7 +365,7 @@ it('creates projects under a region and lists them with the region', async () =>
 
 继续覆盖跨组织 404、区域不存在、项目编码唯一、项目成员必须是区域成员、停用项目不可签 Key、区域全员默认可见项目。
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run:
 
@@ -375,7 +375,7 @@ npm test -- test/integration/projects.test.ts
 
 Expected: FAIL，模块不存在。
 
-- [ ] **Step 3: 实现 DTO**
+- [x] **Step 3: 实现 DTO**
 
 `projects.dto.ts` 核心类型：
 
@@ -399,7 +399,7 @@ export class CreateProjectDto {
 
 成员 DTO 使用 `accountId` 与 `OWNER | CONTRIBUTOR | VIEWER`。
 
-- [ ] **Step 4: 实现 Service**
+- [x] **Step 4: 实现 Service**
 
 区域校验必须是：
 
@@ -416,7 +416,7 @@ private async region(organizationId: string, regionId: string) {
 
 `detail` 固定包含区域和项目成员。`setStatus('ARCHIVED')` 必须拒绝未结算或预留中的预算账目，保留历史 Key 和日志。
 
-- [ ] **Step 5: 注册 Controller**
+- [x] **Step 5: 注册 Controller**
 
 路由：
 
@@ -436,7 +436,7 @@ DELETE /api/v1/admin/projects/:id/members/:accountId
 
 所有端点 `@Roles('PLATFORM_ADMIN', 'ORG_ADMIN')`，`:id` 与 `:accountId` 均使用 `UuidPipe`。
 
-- [ ] **Step 6: 区域列表返回项目标签**
+- [x] **Step 6: 区域列表返回项目标签**
 
 `UsageGroupsService.list` 对 `type=REGION` 的结果批量查询：
 
@@ -450,7 +450,7 @@ const projects = await this.prisma.project.findMany({
 
 映射为 `group.projects = byRegion.get(group.id) ?? []`。
 
-- [ ] **Step 7: 运行测试**
+- [x] **Step 7: 运行测试**
 
 Run:
 
@@ -461,7 +461,7 @@ npm test -- test/integration/projects.test.ts test/integration/usage-groups.test
 
 Expected: 全部通过。
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```powershell
 git add apps/api/src/projects.dto.ts apps/api/src/projects.service.ts apps/api/src/projects.controller.ts apps/api/src/app.module.ts apps/api/src/usage-groups.service.ts test/integration/projects.test.ts
