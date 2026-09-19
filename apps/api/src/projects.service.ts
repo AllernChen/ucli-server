@@ -23,11 +23,17 @@ export class ProjectsService {
     if (!['PLATFORM_ADMIN', 'ORG_ADMIN'].includes(actor.role)) throw new ForbiddenException('Administrator required')
   }
 
-  private async region(organizationId: string, regionId: string) {
-    const region = await this.prisma.usageGroup.findFirst({
-      where: { id: regionId, organizationId, type: 'REGION', enabled: true, archivedAt: null },
-      select: { id: true, name: true }
-    })
+  private async region(db: Prisma.TransactionClient, organizationId: string, regionId: string) {
+    const regions = await db.$queryRaw<Array<{ id: string, name: string }>>(Prisma.sql`
+      SELECT id, name FROM usage_groups
+      WHERE id = ${regionId}::uuid
+        AND organization_id = ${organizationId}::uuid
+        AND type = 'REGION'
+        AND enabled = true
+        AND archived_at IS NULL
+      FOR UPDATE
+    `)
+    const region = regions[0]
     if (!region) throw new NotFoundException('Region usage group not found')
     return region
   }
@@ -69,7 +75,7 @@ export class ProjectsService {
     this.assertAdmin(actor)
     try {
       return await this.prisma.$transaction(async db => {
-        await this.region(actor.organizationId, input.regionId)
+        await this.region(db, actor.organizationId, input.regionId)
         const project = await db.project.create({ data: { organizationId: actor.organizationId,
           regionId: input.regionId, code: input.code, name: input.name, description: input.description },
           select: projectSelect })
@@ -143,6 +149,7 @@ export class ProjectsService {
 
   addMember(actor: AuthPrincipal, id: string, input: { accountId: string; role: ProjectMemberRole }) {
     return this.mutate(actor, id, 'add_member', async (db, project) => {
+      if (project.status === 'ARCHIVED') throw new ConflictException('Archived projects cannot be modified')
       const regionMember = await db.groupMember.findFirst({ where: {
         organizationId: actor.organizationId, groupId: project.regionId, accountId: input.accountId, removedAt: null,
         group: { enabled: true, archivedAt: null, organization: { enabled: true } },

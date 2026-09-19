@@ -80,6 +80,30 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
     })
   })
 
+  it('reads region availability from the project creation transaction', async () => {
+    await withTestDatabase(async db => {
+      const { actor } = await createOrganization(db)
+      const region = await db.usageGroup.create({ data: {
+        organizationId: actor.organizationId, name: '并发区域', type: 'REGION'
+      } })
+      const transactionScopedClient = {
+        usageGroup: db.usageGroup,
+        $transaction: async <T>(run: (db: unknown) => Promise<T>) =>
+          db.$transaction(async tx => run({
+            usageGroup: { findFirst: () => Promise.resolve(null) },
+            $queryRaw: () => Promise.resolve([]),
+            project: tx.project,
+            auditLog: tx.auditLog
+          }))
+      } as unknown as PrismaService
+      const service = new ProjectsService(transactionScopedClient)
+
+      await expect(service.create(actor, { regionId: region.id, code: 'TX-REGION', name: '事务区域项目' }))
+        .rejects.toMatchObject({ status: 404 })
+      expect(await db.project.count({ where: { organizationId: actor.organizationId } })).toBe(0)
+    })
+  })
+
   it('scopes project reads and updates to the actor organization and administrator role', async () => {
     await withTestDatabase(async db => {
       const { actor, account } = await createOrganization(db)
@@ -169,6 +193,29 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
     })
   })
 
+  it('rejects adding and updating members of archived projects', async () => {
+    await withTestDatabase(async db => {
+      const { actor, organization, account } = await createOrganization(db)
+      const service = new ProjectsService(db as PrismaService)
+      const region = await db.usageGroup.create({ data: { organizationId: organization.id, name: '区域', type: 'REGION' } })
+      const project = await service.create(actor, { regionId: region.id, code: 'GD-ARCHIVED', name: '归档项目' })
+      const employee = await db.account.create({ data: { email: `${randomUUID()}@example.invalid`, displayName: '新成员' } })
+      await db.membership.create({ data: { organizationId: organization.id, accountId: employee.id, role: 'MEMBER' } })
+      await db.groupMember.create({ data: { organizationId: organization.id, groupId: region.id, accountId: account.id } })
+      await db.groupMember.create({ data: { organizationId: organization.id, groupId: region.id, accountId: employee.id } })
+      await service.addMember(actor, project.id, { accountId: account.id, role: 'OWNER' })
+
+      await service.setStatus(actor, project.id, 'ARCHIVED')
+      await expect(service.addMember(actor, project.id, { accountId: account.id, role: 'VIEWER' }))
+        .rejects.toMatchObject({ status: 409 })
+      await expect(service.addMember(actor, project.id, { accountId: employee.id, role: 'CONTRIBUTOR' }))
+        .rejects.toMatchObject({ status: 409 })
+      expect((await service.members(actor, project.id)).items).toMatchObject([
+        { accountId: account.id, role: 'OWNER' }
+      ])
+    })
+  })
+
   it('changes project status and rejects archiving unsettled or reserved budget entries', async () => {
     await withTestDatabase(async db => {
       const { actor, organization } = await createOrganization(db)
@@ -181,7 +228,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
       const regionList = await groups.list(organization.id, Object.assign(new UsageGroupPageQueryDto(), { type: 'REGION' }))
       expect(regionList.items[0].projects).toEqual([])
       await expect(service.setStatus(actor, project.id, 'ACTIVE')).resolves.toMatchObject({ id: project.id, status: 'ACTIVE' })
-      expect(regionList.items).toHaveLength(1)
+      const enabledRegions = await groups.list(organization.id, Object.assign(new UsageGroupPageQueryDto(), { type: 'REGION' }))
+      expect(enabledRegions.items[0].projects).toEqual([{
+        id: project.id, regionId: region.id, code: 'GD-PROV-SLT', name: '省厅', status: 'ACTIVE'
+      }])
 
       const period = await db.projectBudgetPeriod.create({ data: { organizationId: organization.id, projectId: project.id,
         periodKey: 'TOTAL', timezone: 'Asia/Shanghai' } })

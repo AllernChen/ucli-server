@@ -187,11 +187,15 @@ export class UsageGroupsService {
   }
 
   removeMember(actor: AuthPrincipal, id: string, accountId: string) {
-    return this.mutate(actor, id, 'remove_member', async db => {
+    return this.mutate(actor, id, 'remove_member', async (db, group) => {
       const now = new Date()
       const result = await db.groupMember.updateMany({ where: { organizationId: actor.organizationId, groupId: id, accountId, removedAt: null },
         data: { removedAt: now } })
       if (!result.count) throw new NotFoundException('Group member not found')
+      if (group.type === 'REGION') {
+        await db.projectMember.deleteMany({ where: { organizationId: actor.organizationId, accountId,
+          project: { regionId: id } } })
+      }
       await this.revokeCredentials(db, actor.organizationId, id, now, accountId)
       return { accountId, removedAt: now }
     }, { accountId })

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ProjectsService } from '../../apps/api/src/projects.service.js'
 import { UsageGroupsService } from '../../apps/api/src/usage-groups.service.js'
 import { PrismaService } from '../../packages/database/src/prisma.service.js'
 import { createOrganization, withTestDatabase } from './database.js'
@@ -182,6 +183,45 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('group management (PostgreSQL)',
       expect(revokedLink.revokedAt).not.toBeNull()
       expect(revokedLink.secretEncrypted).toBeNull()
       expect(await db.auditLog.count({ where: { organizationId: organization.id, action: 'usage_group.remove_member' } })).toBe(1)
+    })
+  })
+
+  it('removes region project memberships when a region member leaves', async () => {
+    await withTestDatabase(async db => {
+      const { organization, account, actor } = await createOrganization(db)
+      const groups = new UsageGroupsService(db as PrismaService)
+      const projects = new ProjectsService(db as PrismaService)
+      const region = await groups.create(actor, { name: '广东区域', type: 'REGION' })
+      const ownerProject = await projects.create(actor, { regionId: region.id, code: 'GD-OWNER', name: '区域负责项目' })
+      const viewerProject = await projects.create(actor, { regionId: region.id, code: 'GD-VIEWER', name: '区域只读项目' })
+      await groups.addMember(actor, region.id, account.id)
+      await projects.addMember(actor, ownerProject.id, { accountId: account.id, role: 'OWNER' })
+      await projects.addMember(actor, viewerProject.id, { accountId: account.id, role: 'VIEWER' })
+      const channel = await db.channel.create({ data: { name: '区域历史渠道', provider: 'test', protocol: 'OPENAI', baseUrl: 'http://upstream' } })
+      const model = await db.publicModel.create({ data: { id: `model-${randomUUID()}`, displayName: '区域历史模型' } })
+      const key = await db.employeeApiKey.create({ data: { organizationId: organization.id, groupId: region.id,
+        accountId: account.id, createdById: account.id, name: '区域历史密钥', secretHash: randomUUID(), secretHint: 'test' } })
+      const at = new Date()
+      const usage = await db.usageLog.create({ data: {
+        requestId: randomUUID(), organizationId: organization.id, accountId: account.id,
+        groupId: region.id, budgetProjectId: ownerProject.id, credentialType: 'API_KEY', apiKeyId: key.id,
+        publicModelId: model.id, upstreamModel: 'upstream', channelId: channel.id,
+        protocol: 'OPENAI_CHAT', startedAt: at, finishedAt: at, durationMs: 12,
+        statusCode: 200, costUsd: '1.25', usageSource: 'UPSTREAM', streaming: false,
+        inputTokens: 10, outputTokens: 5
+      } })
+
+      await groups.removeMember(actor, region.id, account.id)
+
+      const removedRegionMember = await db.groupMember.findUniqueOrThrow({ where: {
+        groupId_accountId: { groupId: region.id, accountId: account.id } } })
+      expect(removedRegionMember.removedAt).not.toBeNull()
+      expect(await db.projectMember.count({ where: { organizationId: organization.id, accountId: account.id } })).toBe(0)
+      expect((await projects.members(actor, ownerProject.id)).items).toEqual([])
+      expect((await projects.members(actor, viewerProject.id)).items).toEqual([])
+      const storedUsage = await db.usageLog.findUniqueOrThrow({ where: { id: usage.id } })
+      expect(storedUsage).toMatchObject({ groupId: region.id, budgetProjectId: ownerProject.id, accountId: account.id })
+      expect(storedUsage.costUsd.toFixed(8)).toBe('1.25000000')
     })
   })
 
