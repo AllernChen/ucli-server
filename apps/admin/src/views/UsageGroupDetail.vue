@@ -3,7 +3,7 @@ import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { createRequestLifecycle, type Page } from '../device-grants'
-import { budgetLabel, budgetWarning, budgetEntryStatus, operationId, type GroupBudget, type UsageGroup } from '../usage-groups'
+import { budgetLabel, budgetWarning, budgetEntryStatus, operationId, type GroupBudget, type UsageGroup, type UsageProjectSummary } from '../usage-groups'
 import { companyDateRange, defaultCompanyDateRange, usageQuery } from '../usage-filters'
 import { formatCny } from '../currency'
 import { toast } from '../toast'
@@ -17,6 +17,7 @@ const id = computed(() => String(route.params.id)), base = computed(() => `/api/
 const group = ref<UsageGroup | null>(null), budget = ref<GroupBudget | null>(null)
 const tab = ref('overview'), error = ref(''), loading = ref(false), pending = ref(false)
 const members = ref<Page<any>>({ items: [], total: 0, offset: 0, limit: 20 }), entries = ref<Page<any>>({ items: [], total: 0, offset: 0, limit: 20 })
+const regionProjects = ref<Page<UsageProjectSummary>>({ items: [], total: 0, offset: 0, limit: 100 })
 const applications = ref<Page<any>>({ items: [], total: 0, offset: 0, limit: 20 })
 const applicationOffset = ref(0)
 const applicationForm = reactive({ requestedCny: '', reason: '' })
@@ -35,6 +36,7 @@ const config = reactive({ budgetMode: 'TOTAL', budgetTimezone: 'Asia/Shanghai', 
 const confirmation = ref<{ path: string; method: string; message: string } | null>(null)
 const editable = computed(() => Boolean(group.value && !group.value.archivedAt))
 const seriesLifecycle = createRequestLifecycle(), rankLifecycle = createRequestLifecycle(), requestLifecycle = createRequestLifecycle()
+const projectLifecycle = createRequestLifecycle()
 const groupSeries = ref<any[]>([]), ranking = ref<Page<any>>({ items: [], total: 0, offset: 0, limit: 20 })
 const seriesError = ref(''), rankError = ref(''), analysisError = ref(''), seriesLoading = ref(false), rankLoading = ref(false)
 const analysisLoaded = ref(false), dimension = ref('account'), rankOffset = ref(0)
@@ -43,6 +45,10 @@ const analysisRange = ref(defaultCompanyDateRange())
 const analysisDates = reactive({ start: companyDay(analysisRange.value.start), end: companyDay(new Date(new Date(analysisRange.value.end).getTime() - 1).toISOString()) })
 const selectedId = ref<string | null>(null), requestQuery = ref(''), requestError = ref(''), requestLoading = ref(false)
 const chinaTime = (value: string) => new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value))
+const sourceLabel = { MEMBER: '职责', KEY: 'Key' } as const
+const projectLabel = (project: { name: string; sources?: Array<keyof typeof sourceLabel> }) =>
+  `${project.name}${project.sources?.length ? `（${project.sources.map(source => sourceLabel[source]).join('/')}）` : ''}`
+const tokens = (value: string | number | null | undefined) => value == null ? '—' : BigInt(value).toLocaleString('zh-CN')
 const applicationStatus = (status: string) => status === 'REGISTERED' ? '待批复' : status === 'LINKED' ? '已批复' : '已驳回'
 async function loadSeries() {
   const request = seriesLifecycle.next(); seriesLoading.value = true; seriesError.value = ''; groupSeries.value = []
@@ -107,6 +113,13 @@ async function loadModels() {
     if (optionLifecycle.isCurrent(request)) { models.value = result; selected.value = result.filter(m => m.selected).map(m => m.id); modelsReady.value = true }
   } catch (e: any) { if (optionLifecycle.isCurrent(request)) error.value = e.message }
 }
+async function loadProjects() {
+  const request = projectLifecycle.next(); regionProjects.value = { items: [], total: 0, offset: 0, limit: 100 }
+  try {
+    const result = await api<Page<UsageProjectSummary>>(`${base.value}/projects`)
+    if (projectLifecycle.isCurrent(request)) regionProjects.value = result
+  } catch (e: any) { if (projectLifecycle.isCurrent(request)) error.value = e.message }
+}
 async function searchUsers() {
   const request = userLifecycle.next()
   try {
@@ -162,11 +175,12 @@ watch(() => adjust.scope, () => {
   adjust.limitCny = adjust.scope === 'CURRENT' ? budget.value.limitCny : budget.value.defaultLimitCny
   adjust.unlimited = adjust.scope === 'CURRENT' ? budget.value.unlimited : budget.value.defaultUnlimited
 })
-watch(tab, value => { if (value === 'models') loadModels(); if (value === 'members') searchUsers(); if (value === 'analysis' && !analysisLoaded.value) loadAnalysis() })
+watch(tab, value => { if (value === 'models') loadModels(); if (value === 'projects') loadProjects(); if (value === 'members') searchUsers(); if (value === 'analysis' && !analysisLoaded.value) loadAnalysis() }, { immediate: true })
 watch(id, () => {
   generation++; pending.value = false; group.value = null; budget.value = null; confirmation.value = null
   memberOffset.value = 0; entryOffset.value = 0; applicationOffset.value = 0; previewAccount.value = ''; models.value = []; tab.value = 'overview'; budgetRetry = { body: '', id: '' }
   members.value = { items: [], total: 0, offset: 0, limit: 20 }; entries.value = { items: [], total: 0, offset: 0, limit: 20 }; applications.value = { items: [], total: 0, offset: 0, limit: 20 }; users.value = { items: [], total: 0, offset: 0, limit: 20 }
+  regionProjects.value = { items: [], total: 0, offset: 0, limit: 100 }
   applicationForm.requestedCny = ''; applicationForm.reason = ''; adjustApplicationId.value = ''
   userOffset.value = 0; userSearch.value = ''; accountId.value = ''; modelsReady.value = false; selected.value = []; modelSearch.value = ''
   adjust.scope = 'CURRENT'; adjust.reason = ''; config.reason = ''
@@ -180,13 +194,14 @@ watch(id, () => {
 onUnmounted(() => { generation++; lifecycle.dispose(); optionLifecycle.dispose(); userLifecycle.dispose(); seriesLifecycle.dispose(); rankLifecycle.dispose(); requestLifecycle.dispose() })
 </script>
 <template>
-  <header class="page-header"><div><button class="back-link" @click="router.push('/usage-groups')">← 返回用量组</button><h1>{{ group?.name || '用量组详情' }}</h1><span v-if="group" class="subtitle">{{ group.type === 'PROJECT' ? '项目组' : '部门组' }} · {{ group.archivedAt ? '已归档' : group.enabled ? '启用' : '停用' }}</span></div><button :disabled="loading || pending" @click="load">刷新</button></header>
-  <nav class="actions" aria-label="用量组详情"><button v-for="t in [['overview','概览'],['members','成员'],['models','允许模型'],['budget','预算'],['analysis','使用分析'],['usage','用量']]" :key="t[0]" :data-tab="t[0]" :class="{ primary: tab === t[0] }" :disabled="pending || !group" @click="tab = t[0]">{{ t[1] }}</button></nav>
+  <header class="page-header"><div><button class="back-link" @click="router.push('/usage-groups')">← 返回用量组</button><h1>{{ group?.name || '用量组详情' }}</h1><span v-if="group" class="subtitle">{{ group.type === 'REGION' ? '区域组' : group.type === 'PROJECT' ? '项目组' : '部门组' }} · {{ group.archivedAt ? '已归档' : group.enabled ? '启用' : '停用' }}</span></div><button :disabled="loading || pending" @click="load">刷新</button></header>
+  <nav class="actions" aria-label="用量组详情"><button v-for="t in [['overview','概览'],['members','成员'],...(group?.type === 'REGION' ? [['projects','关联项目']] : []),['models','允许模型'],['budget','预算'],['analysis','使用分析'],['usage','用量']]" :key="t[0]" :data-tab="t[0]" :class="{ primary: tab === t[0] }" :disabled="pending || !group" @click="tab = t[0]">{{ t[1] }}</button></nav>
   <p v-if="error" class="state error" role="alert">{{ error }}</p><p v-if="loading" class="state">正在加载…</p>
   <template v-if="group && budget">
     <div class="detail-grid"><article class="panel metric-block"><span>当前周期 · {{ budget.periodKey }}</span><strong class="small-strong">{{ budgetLabel(budget) }}</strong><small>{{ budget.budgetMode === 'TOTAL' ? '项目总额（长期累计）' : '自然月' }} · {{ budget.budgetTimezone }}</small><small v-if="budgetWarning(budget)">{{ budgetWarning(budget) }}</small></article><article class="panel metric-block"><span>已结算采购成本</span><strong class="small-strong">{{ formatCny(budget.spentCny) }}</strong></article><article class="panel metric-block"><span>预占</span><strong class="small-strong">{{ formatCny(budget.reservedCny) }}</strong><small>待核算（包含在预占内）{{ formatCny(budget.uncertainCny) }}</small></article><article class="panel metric-block"><span>可用额度</span><strong class="small-strong">{{ budget.unlimited ? '不限额' : formatCny(budget.availableCny) }}</strong></article></div>
     <section v-if="tab === 'overview'" class="panel"><form class="stack-form" @submit.prevent="mutate('', 'PATCH', form)"><label>名称<input v-model="form.name" required maxlength="120" :disabled="!editable || pending"></label><label>说明<textarea v-model="form.description" maxlength="2000" :disabled="!editable || pending" /></label><div class="actions"><button :disabled="!editable || pending">保存资料</button><button type="button" :disabled="!editable || pending" @click="confirmation = { path: group.enabled ? '/disable' : '/enable', method: 'POST', message: '停用会阻止此组所有新模型调用；启用仍需满足成员、模型和预算条件。' }">{{ group.enabled ? '停用组' : '启用组' }}</button><button type="button" :disabled="!editable || pending" @click="confirmation = { path: '', method: 'DELETE', message: '归档不可恢复，将永久撤销组内 Key 和设备授权，历史成本保留。' }">归档组</button></div></form></section>
-    <section v-if="tab === 'members'" class="panel table-panel"><h2>组成员</h2><p class="muted">移除成员会永久撤销该员工在本组的 Key 和设备授权；重新加入不会恢复。负责人可在个人中心查看本组预算与用量（只读）。</p><table v-if="members.items.length"><thead><tr><th>员工</th><th>组内角色</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="m in members.items" :key="m.accountId"><td><button @click="router.push(`/users/${m.accountId}`)">{{ m.membership.account.displayName }}</button><small>{{ m.membership.account.email }}</small></td><td>{{ m.role === 'LEADER' ? '负责人' : '成员' }}</td><td>{{ m.membership.status }}</td><td><button :disabled="!editable || pending" @click="confirmation = { path: `/members/${m.accountId}`, method: 'DELETE', message: '永久撤销该员工本组凭据，并移除成员，确认继续？' }">移除</button><button :disabled="!editable || pending" @click="mutate(`/members/${m.accountId}/leader`, m.role === 'LEADER' ? 'DELETE' : 'POST')">{{ m.role === 'LEADER' ? '取消负责人' : '设为负责人' }}</button><button @click="previewAccount = m.accountId; tab = 'models'">预览模型权限</button></td></tr></tbody></table><p v-else class="empty">暂无成员</p><Pagination :total="members.total" :offset="memberOffset" :limit="20" @change="memberOffset = $event; load()" />
+    <section v-if="tab === 'projects'" class="panel table-panel"><h2>关联项目</h2><p class="muted">区域下当前启用项目；额度、职责成员和有效 Key 汇总直接来自项目档案。</p><table v-if="regionProjects.items.length"><thead><tr><th>项目 / 编码</th><th>项目额度</th><th>已用 / 预占 / 可用</th><th>人员</th><th>有效 Key</th><th>操作</th></tr></thead><tbody><tr v-for="project in regionProjects.items" :key="project.id"><td>{{ project.name }}<small>{{ project.code }}</small></td><td>{{ project.budget?.unlimited ? '不限额' : formatCny(project.budget?.limitCny || '0') }}</td><td>{{ formatCny(project.budget?.spentCny || '0') }} / {{ formatCny(project.budget?.reservedCny || '0') }} / {{ project.budget?.unlimited ? '不限额' : formatCny(project.budget?.availableCny || '0') }}</td><td><strong>职责成员 {{ project.memberCount }}</strong><small v-if="project.owners.length">负责人：{{ project.owners.map(owner => owner.displayName).join('、') }}</small></td><td>{{ project.activeKeyCount }}</td><td><button data-action="view-project-keys" @click="router.push({ path: `/projects/${project.id}`, query: { tab: 'keys' } })">查看 Key</button></td></tr></tbody></table><p v-else class="empty">暂无关联项目</p></section>
+    <section v-if="tab === 'members'" class="panel table-panel"><h2>组成员</h2><p class="muted">移除成员会永久撤销该员工在本组的 Key 和设备授权；重新加入不会恢复。成员用量统计为近 30 天、当前组内请求。</p><table v-if="members.items.length"><thead><tr><th>员工</th><th>组内角色</th><th>所属项目</th><th>近 30 天用量</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="m in members.items" :key="m.accountId"><td><button @click="router.push(`/users/${m.accountId}`)">{{ m.membership.account.displayName }}</button><small>{{ m.membership.account.email }}</small></td><td>{{ m.role === 'LEADER' ? '负责人' : '成员' }}</td><td><template v-if="m.projects?.length"><span v-for="project in m.projects" :key="project.id">{{ projectLabel(project) }}</span></template><span v-else>—</span></td><td><strong>{{ m.usage?.requests ?? 0 }} 次</strong><small>Token {{ tokens(m.usage?.totalTokens) }} · 采购成本 {{ formatCny(m.usage?.costCny || '0') }}</small><small>最后使用 {{ m.usage?.lastUsedAt ? chinaTime(m.usage.lastUsedAt) : '—' }}</small></td><td>{{ m.membership.status }}</td><td><button :disabled="!editable || pending" @click="confirmation = { path: `/members/${m.accountId}`, method: 'DELETE', message: '永久撤销该员工本组凭据，并移除成员，确认继续？' }">移除</button><button :disabled="!editable || pending" @click="mutate(`/members/${m.accountId}/leader`, m.role === 'LEADER' ? 'DELETE' : 'POST')">{{ m.role === 'LEADER' ? '取消负责人' : '设为负责人' }}</button><button @click="previewAccount = m.accountId; tab = 'models'">预览模型权限</button></td></tr></tbody></table><p v-else class="empty">暂无成员</p><Pagination :total="members.total" :offset="memberOffset" :limit="20" @change="memberOffset = $event; load()" />
       <form class="form-row" @submit.prevent="userOffset = 0; searchUsers()"><input v-model="userSearch" placeholder="搜索员工姓名或邮箱" aria-label="搜索员工"><button :disabled="pending">搜索员工</button></form><form class="form-row" @submit.prevent="mutate('/members', 'POST', { accountId })"><label>添加员工<select v-model="accountId" required><option value="">请选择</option><option v-for="u in users.items" :key="u.id" :value="u.id" :disabled="u.status !== 'ACTIVE'">{{ u.displayName }} · {{ u.email }}</option></select></label><button :disabled="!editable || pending || !accountId">加入组</button></form><Pagination :total="users.total" :offset="userOffset" :limit="20" @change="userOffset = $event; searchUsers()" />
     </section>
     <section v-if="tab === 'models'" class="panel"><h2>允许模型</h2><p class="muted">模型权限是组白名单与现有组织/员工/角色策略的交集。协议表示当前配置，不代表实时健康。</p><p v-if="previewAccount">正在预览成员 {{ members.items.find(m => m.accountId === previewAccount)?.membership.account.displayName || previewAccount }} 的已保存权限。<button @click="previewAccount = ''; loadModels()">退出预览</button></p><input v-model="modelSearch" placeholder="搜索模型" aria-label="搜索允许模型"><form @submit.prevent="mutate('/models', 'PUT', { publicModelIds: selected }).then(ok => ok && loadModels())"><div v-for="m in visibleModels" :key="m.id" class="panel"><label class="check-row"><input v-model="selected" type="checkbox" :value="m.id" :disabled="!editable || pending || (m.archived && !selected.includes(m.id))">{{ m.displayName }} · {{ m.id }}</label><small>{{ m.protocols.join(' / ') || '无可用协议' }}</small><p v-for="reason in m.reasons" :key="reason" class="muted">{{ reason }}</p><p v-if="m.allowed === true" class="muted">该员工可用</p></div><p v-if="!models.length" class="empty">暂无模型</p><button :disabled="!editable || pending">保存允许模型</button></form></section>

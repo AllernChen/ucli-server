@@ -6,6 +6,7 @@ import { createServer } from 'node:http'
 import { setTimeout as delay } from 'node:timers/promises'
 import { Module, ValidationPipe } from '@nestjs/common'
 import { NestFactory } from '@nestjs/core'
+import argon2 from 'argon2'
 import { createOrganization, testDatabaseUrl } from './database.ts'
 import { PrismaService } from '../../dist/packages/database/src/prisma.service.js'
 import { AuthGuard, signAccessToken } from '../../dist/packages/security/src/auth.js'
@@ -155,6 +156,13 @@ try {
   assert.deepEqual(mine.body.items.map(item => item.id), [key.id])
   assert.ok(!JSON.stringify(mine).includes(key.secret))
   assert.ok(!JSON.stringify(mine).includes('secretHash'))
+  await db.account.update({ where: { id: a.account.id }, data: { passwordHash: await argon2.hash('http-admin-password') } })
+  const revealPath = `/api/v1/admin/employee-api-keys/${key.id}/reveal`
+  assert.equal((await request(revealPath, 'POST', { password: 'wrong' })).status, 401)
+  const revealed = await request(revealPath, 'POST', { password: 'http-admin-password' })
+  assert.equal(revealed.status, 200)
+  assert.equal(revealed.headers.get('cache-control'), 'no-store')
+  assert.equal(revealed.body.secret, key.secret)
   const device = await db.device.create({ data: { organizationId: a.organization.id, accountId: employee.id,
     name: 'Device', refreshTokenHash: randomUUID() } })
   const legacyGrant = await db.deviceGrant.create({ data: { organizationId: a.organization.id, accountId: employee.id, createdById: a.account.id, deviceId: device.id } })

@@ -67,3 +67,49 @@ it('shows the region project count and expands project budget, people and key de
   expect(state.routerPush).toHaveBeenCalledWith({ path: '/projects/project-1', query: { tab: 'keys' } })
   wrapper.unmount()
 })
+
+it('shows region projects and member project usage in the usage group detail page', async () => {
+  state.route = { query: {}, params: { id: 'region-1' } }
+  state.api.mockImplementation(async (url: string) => {
+    if (url.endsWith('/budget')) return { groupId: 'region-1', periodId: null, periodKey: 'TOTAL', budgetMode: 'TOTAL',
+      budgetTimezone: 'Asia/Shanghai', unlimited: false, defaultUnlimited: false, defaultLimitCny: '0', limitCny: '0',
+      spentCny: '0', reservedCny: '0', uncertainCny: '0', availableCny: '0' }
+    if (url.endsWith('/projects')) return { items: [
+      { id: 'project-1', regionId: 'region-1', code: 'GZ-YX', name: '云岩', status: 'ACTIVE', memberCount: 2,
+        activeKeyCount: 3, owners: [{ accountId: 'employee-1', displayName: '负责人' }],
+        budget: { projectId: 'project-1', periodId: 'period-1', periodKey: 'TOTAL', budgetMode: 'TOTAL',
+          budgetTimezone: 'Asia/Shanghai', unlimited: false, limitCny: '2000', spentCny: '100', reservedCny: '20',
+          uncertainCny: '0', availableCny: '1880' } }
+    ], total: 1, offset: 0, limit: 20 }
+    if (url.includes('/members')) return { items: [
+      { accountId: 'employee-1', role: 'MEMBER', membership: { status: 'ACTIVE', account: { id: 'employee-1',
+        displayName: '员工', email: 'employee@example.invalid', status: 'ACTIVE' } },
+        projects: [{ id: 'project-1', code: 'GZ-YX', name: '云岩', sources: ['KEY'] }],
+        usage: { requests: 8, totalTokens: '12345', costCny: '12.50000000', lastUsedAt: '2026-09-19T01:02:03Z' } }
+    ], total: 1, offset: 0, limit: 20 }
+    if (url.includes('/budget-entries') || url.includes('/budget-applications') || url.includes('/users')) return { items: [], total: 0, offset: 0, limit: 20 }
+    return { id: 'region-1', name: '贵州区域', type: 'REGION', enabled: true, archivedAt: null,
+      description: '', budgetMode: 'TOTAL', budgetTimezone: 'Asia/Shanghai', unlimited: false, defaultLimitCny: '0' }
+  })
+  const wrapper = mount(UsageGroupDetail, { global: { stubs: { teleport: true, RouterLink: true } } })
+  await flushPromises()
+  await wrapper.get('[data-tab="projects"]').trigger('click')
+  await flushPromises()
+  expect(wrapper.text()).toContain('关联项目')
+  expect(wrapper.text()).toContain('云岩')
+  expect(wrapper.text()).toContain('项目额度')
+  expect(wrapper.text()).toContain('¥2000')
+  expect(wrapper.text()).toContain('职责成员 2')
+  expect(wrapper.text()).toContain('有效 Key')
+  expect(wrapper.findAll('tbody tr')[0].text()).toContain('3')
+  await wrapper.get('[data-action="view-project-keys"]').trigger('click')
+  expect(state.routerPush).toHaveBeenCalledWith({ path: '/projects/project-1', query: { tab: 'keys' } })
+  await wrapper.get('[data-tab="members"]').trigger('click')
+  await flushPromises()
+  expect(wrapper.text()).toContain('所属项目')
+  expect(wrapper.text()).toContain('云岩（Key）')
+  expect(wrapper.text()).toContain('8 次')
+  expect(wrapper.text()).toContain('12,345')
+  expect(wrapper.text()).toContain('¥12.50')
+  wrapper.unmount()
+})

@@ -1,15 +1,19 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common'
+import argon2 from 'argon2'
 import { Prisma, type EmployeeApiKey } from '@prisma/client'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import type { AuthPrincipal } from '../../../packages/security/src/auth.js'
 import { assertActiveGroupMember, lockUsageGroup } from '../../../packages/security/src/group-access.js'
+import { decryptSecret, encryptSecret } from '../../../packages/security/src/envelope-crypto.js'
+import { loadMasterKey } from '../../../packages/security/src/master-key.js'
 import { createOpaqueToken, hashOpaqueToken, opaqueTokenHint } from '../../../packages/security/src/tokens.js'
 import { PageQueryDto } from './catalog.dto.js'
 import { EmployeeKeyQueryDto, type CreateEmployeeKeyDto, type UpdateEmployeeKeyDto } from './employee-keys.dto.js'
 
 const keySummary = Prisma.validator<Prisma.EmployeeApiKeySelect>()({
   id: true, organizationId: true, accountId: true, groupId: true, projectId: true,
-  name: true, secretHint: true, project: { select: { id: true, code: true, name: true } },
+  name: true, secretHint: true, secretCiphertext: true, secretIv: true, secretTag: true,
+  project: { select: { id: true, code: true, name: true } },
   createdAt: true, createdById: true, expiresAt: true, disabledAt: true, revokedAt: true, deletedAt: true, lastUsedAt: true
 })
 
@@ -26,6 +30,12 @@ function expiry(value: string | null | undefined): Date | null | undefined {
   const date = new Date(value)
   if (!Number.isFinite(date.getTime()) || date <= new Date()) throw new BadRequestException('expiresAt must be in the future')
   return date
+}
+
+function publicSummary<T extends { secretCiphertext: string | null; secretIv: string | null; secretTag: string | null }>({
+  secretCiphertext, secretIv, secretTag, ...summary
+}: T) {
+  return { ...summary, secretRecoverable: Boolean(secretCiphertext && secretIv && secretTag) }
 }
 
 @Injectable()
@@ -77,6 +87,7 @@ export class EmployeeKeysService {
     this.assertAdmin(actor)
     const expiresAt = expiry(input.expiresAt)
     const secret = `ucli_sk_${createOpaqueToken()}`
+    const encrypted = encryptSecret(secret, loadMasterKey())
     const key = await this.prisma.$transaction(async db => {
       const region = await lockUsageGroup(db, actor.organizationId, input.groupId)
       await assertActiveGroupMember(db, { organizationId: actor.organizationId, accountId, groupId: input.groupId })
@@ -94,11 +105,12 @@ export class EmployeeKeysService {
       }
       const created = await db.employeeApiKey.create({ data: { organizationId: actor.organizationId, accountId,
         groupId: input.groupId, projectId, name: input.name, createdById: actor.sub, expiresAt,
-        secretHash: hashOpaqueToken(secret), secretHint: opaqueTokenHint(secret) }, select: keySummary })
+        secretHash: hashOpaqueToken(secret), secretHint: opaqueTokenHint(secret),
+        secretCiphertext: encrypted.ciphertext, secretIv: encrypted.iv, secretTag: encrypted.tag }, select: keySummary })
       await this.audit(db, actor, created, 'create')
       return created
     })
-    return { ...key, secret }
+    return { ...publicSummary(key), secret }
   }
 
   async list(actor: AuthPrincipal, accountId: string, query: PageQueryDto = new PageQueryDto()) {
@@ -130,8 +142,34 @@ export class EmployeeKeysService {
     ])
     return { items: items.map(item => {
       const { membership, group, project, createdBy, ...key } = item
-      return { ...key, account: membership.account, group, project, createdBy }
+      return { ...publicSummary(key), account: membership.account, group, project, createdBy }
     }), total, offset: query.offset, limit: query.limit, ...(!managed ? { filterGroups } : {}) }
+  }
+
+  async reveal(actor: AuthPrincipal, id: string, input: { password: string }) {
+    this.assertAdmin(actor)
+    this.assertWebSession(actor)
+    const account = await this.prisma.account.findUnique({ where: { id: actor.sub },
+      select: { status: true, passwordHash: true } })
+    if (!account || account.status !== 'ACTIVE' || !account.passwordHash ||
+        !await argon2.verify(account.passwordHash, input.password)) {
+      throw new UnauthorizedException('Administrator password is incorrect')
+    }
+    const key = await this.prisma.employeeApiKey.findFirst({ where: { id, organizationId: actor.organizationId, deletedAt: null },
+      select: { id: true, accountId: true, groupId: true, projectId: true, name: true, secretHint: true,
+        secretCiphertext: true, secretIv: true, secretTag: true } })
+    if (!key) throw new NotFoundException('Employee API key not found')
+    if (!key.secretCiphertext || !key.secretIv || !key.secretTag) {
+      throw new ConflictException('Legacy key has no recoverable secret; create a replacement key')
+    }
+    let secret: string
+    try {
+      secret = decryptSecret({ algorithm: 'aes-256-gcm', ciphertext: key.secretCiphertext, iv: key.secretIv, tag: key.secretTag }, loadMasterKey())
+    } catch {
+      throw new ConflictException('Stored key cannot be decrypted with the current MASTER_KEY')
+    }
+    await this.prisma.$transaction(db => this.audit(db, actor, key, 'reveal'))
+    return { id: key.id, secret }
   }
 
   private listWhere(organizationId: string, accountId: string | undefined, query: EmployeeKeyQueryDto, managed: boolean, now: Date): Prisma.EmployeeApiKeyWhereInput {
@@ -168,7 +206,7 @@ export class EmployeeKeysService {
       const data = await change(key, db)
       await db.employeeApiKey.updateMany({ where, data })
       await this.audit(db, actor, key, action)
-      return db.employeeApiKey.findFirstOrThrow({ where, select: keySummary })
+      return publicSummary(await db.employeeApiKey.findFirstOrThrow({ where, select: keySummary }))
     })
   }
 

@@ -178,6 +178,43 @@ export class UsageGroupsService {
     return group
   }
 
+  async projects(organizationId: string, id: string) {
+    const group = await this.detail(organizationId, id)
+    if (group.type !== 'REGION') return { items: [], total: 0, limit: 0, offset: 0 }
+    const now = new Date()
+    const projects = await this.prisma.project.findMany({ where: { organizationId, regionId: id, status: 'ACTIVE' },
+      select: { id: true, regionId: true, code: true, name: true, status: true },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }] })
+    const projectIds = projects.map(project => project.id)
+    const [budgets, members, keys, owners] = projectIds.length ? await Promise.all([
+      readProjectBudgets(this.prisma, organizationId, projectIds, now),
+      this.prisma.projectMember.groupBy({ by: ['projectId'], where: {
+        organizationId, projectId: { in: projectIds }, membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } }
+      }, _count: true }),
+      this.prisma.employeeApiKey.groupBy({ by: ['projectId'], where: {
+        organizationId, projectId: { in: projectIds }, revokedAt: null, disabledAt: null, deletedAt: null,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }]
+      }, _count: true }),
+      this.prisma.projectMember.findMany({ where: {
+        organizationId, projectId: { in: projectIds }, role: 'OWNER',
+        membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } }
+      }, select: { projectId: true, accountId: true,
+        membership: { select: { account: { select: { displayName: true } } } } } })
+    ]) : [new Map(), [], [], []]
+    const memberCounts = new Map(members.map(row => [row.projectId, row._count]))
+    const keyCounts = new Map(keys.map(row => [row.projectId, row._count]))
+    const ownersByProject = new Map<string, Array<{ accountId: string; displayName: string }>>()
+    for (const owner of owners) {
+      const current = ownersByProject.get(owner.projectId) ?? []
+      current.push({ accountId: owner.accountId, displayName: owner.membership.account.displayName })
+      ownersByProject.set(owner.projectId, current)
+    }
+    return { items: projects.map(project => ({ ...project,
+      budget: budgets.get(project.id) ?? null, memberCount: memberCounts.get(project.id) ?? 0,
+      activeKeyCount: keyCounts.get(project.id) ?? 0, owners: ownersByProject.get(project.id) ?? [] })),
+      total: projects.length, limit: projects.length, offset: 0 }
+  }
+
   update(actor: AuthPrincipal, id: string, input: UpdateUsageGroupDto) {
     return this.mutate(actor, id, 'update', db => db.usageGroup.update({ where: { id },
       data: { name: input.name, description: input.description } }), { ...input })
@@ -196,7 +233,7 @@ export class UsageGroupsService {
   }
 
   async members(organizationId: string, id: string, query = new PageQueryDto()) {
-    await this.detail(organizationId, id)
+    const group = await this.detail(organizationId, id)
     const where = { organizationId, groupId: id, removedAt: null }
     const [items, total] = await Promise.all([
       this.prisma.groupMember.findMany({ where, skip: query.offset, take: query.limit, orderBy: { accountId: 'asc' },
@@ -204,7 +241,46 @@ export class UsageGroupsService {
           account: { select: { id: true, displayName: true, email: true, status: true } } } } } }),
       this.prisma.groupMember.count({ where })
     ])
-    return { items, total, limit: query.limit, offset: query.offset }
+    const accountIds = items.map(item => item.accountId)
+    if (group.type !== 'REGION' || !accountIds.length) {
+      return { items: items.map(item => ({ ...item, projects: [], usage: null })), total, limit: query.limit, offset: query.offset }
+    }
+    const now = new Date()
+    const [projectMembers, projectKeys, usageRows] = await Promise.all([
+      this.prisma.projectMember.findMany({ where: { organizationId, accountId: { in: accountIds },
+        project: { regionId: id }, membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } } },
+        select: { accountId: true, project: { select: { id: true, code: true, name: true } } },
+        orderBy: [{ accountId: 'asc' }, { projectId: 'asc' }] }),
+      this.prisma.employeeApiKey.findMany({ where: { organizationId, groupId: id, accountId: { in: accountIds },
+        projectId: { not: null }, deletedAt: null, revokedAt: null, disabledAt: null,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
+        select: { accountId: true, project: { select: { id: true, code: true, name: true } } },
+        orderBy: [{ accountId: 'asc' }, { projectId: 'asc' }] }),
+      this.prisma.usageLog.groupBy({ by: ['accountId'], where: { organizationId, groupId: id,
+        accountId: { in: accountIds }, startedAt: { gte: new Date(now.getTime() - 30 * 86_400_000) } },
+        _count: { _all: true }, _sum: { inputTokens: true, outputTokens: true, costUsd: true }, _max: { startedAt: true } })
+    ])
+    const projectsByAccount = new Map<string, Array<{ id: string; code: string; name: string; sources: Array<'MEMBER' | 'KEY'> }>>()
+    const addProject = (accountId: string, project: { id: string; code: string; name: string }, source: 'MEMBER' | 'KEY') => {
+      const projects = projectsByAccount.get(accountId) ?? []
+      const existing = projects.find(item => item.id === project.id)
+      if (existing) {
+        if (!existing.sources.includes(source)) existing.sources.push(source)
+      } else projects.push({ ...project, sources: [source] })
+      projectsByAccount.set(accountId, projects)
+    }
+    for (const binding of projectMembers) addProject(binding.accountId, binding.project, 'MEMBER')
+    for (const key of projectKeys) if (key.project) addProject(key.accountId, key.project, 'KEY')
+    const usageByAccount = new Map(usageRows.map(row => [row.accountId, {
+      requests: row._count._all,
+      totalTokens: ((row._sum.inputTokens ?? 0n) + (row._sum.outputTokens ?? 0n)).toString(),
+      costCny: new Decimal(row._sum.costUsd ?? 0).toFixed(8),
+      lastUsedAt: row._max.startedAt
+    }]))
+    return { items: items.map(item => ({ ...item,
+      projects: (projectsByAccount.get(item.accountId) ?? []).sort((left, right) => left.name.localeCompare(right.name, 'zh-Hans-CN')),
+      usage: usageByAccount.get(item.accountId) ?? { requests: 0, totalTokens: '0', costCny: '0.00000000', lastUsedAt: null }
+    })), total, limit: query.limit, offset: query.offset }
   }
 
   addMember(actor: AuthPrincipal, id: string, accountId: string) {

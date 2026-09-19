@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import { plainToInstance } from 'class-transformer'
 import { validate } from 'class-validator'
+import argon2 from 'argon2'
 import { EmployeeKeysService } from '../../apps/api/src/employee-keys.service.js'
 import { UsageGroupsService } from '../../apps/api/src/usage-groups.service.js'
 import { PrismaService } from '../../packages/database/src/prisma.service.js'
@@ -101,6 +102,38 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('employee API keys (PostgreSQL)'
       expect(audits.length).toBeGreaterThan(0)
       expect(JSON.stringify(audits)).not.toContain(key.secret)
       expect(JSON.stringify(audits)).not.toContain(stored.secretHash)
+    })
+  })
+
+  it('stores a recoverable encrypted secret and reveals it only after administrator password verification', async () => {
+    vi.stubEnv('MASTER_KEY', Buffer.alloc(32, 7).toString('base64'))
+    await withTestDatabase(async db => {
+      const { actor, account } = await createOrganization(db)
+      await db.account.update({ where: { id: actor.sub }, data: { passwordHash: await argon2.hash('admin-password') } })
+      const groups = new UsageGroupsService(db as PrismaService)
+      const service = new EmployeeKeysService(db as PrismaService)
+      const group = await groups.create(actor, { name: 'Revealable keys', type: 'PROJECT' })
+      await groups.addMember(actor, group.id, account.id)
+      const key = await service.create(actor, account.id, { name: 'CLI', groupId: group.id })
+
+      const stored = await db.employeeApiKey.findUniqueOrThrow({ where: { id: key.id } })
+      expect(stored.secretCiphertext).toBeTruthy()
+      expect(stored.secretCiphertext).not.toBe(key.secret)
+      const listed = await service.list(actor, account.id)
+      expect(listed.items[0].secretRecoverable).toBe(true)
+      expect(JSON.stringify(listed)).not.toContain(key.secret)
+
+      await expect(service.reveal({ ...actor, role: 'MEMBER' }, key.id, { password: 'admin-password' }))
+        .rejects.toMatchObject({ status: 403 })
+      await expect(service.reveal(actor, key.id, { password: 'wrong-password' }))
+        .rejects.toMatchObject({ status: 401 })
+      await expect(service.reveal(actor, key.id, { password: 'admin-password' })).resolves.toMatchObject({ secret: key.secret })
+
+      await db.employeeApiKey.update({ where: { id: key.id }, data: { secretCiphertext: null, secretIv: null, secretTag: null } })
+      await expect(service.reveal(actor, key.id, { password: 'admin-password' }))
+        .rejects.toMatchObject({ status: 409 })
+      const audit = await db.auditLog.findFirstOrThrow({ where: { resourceId: key.id, action: 'employee_api_key.reveal' } })
+      expect(JSON.stringify(audit)).not.toContain(key.secret)
     })
   })
 

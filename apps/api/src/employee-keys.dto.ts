@@ -32,3 +32,9 @@ export class UpdateEmployeeKeyDto {
   @ValidateIf((_, value) => value !== undefined && value !== null)
   @IsDateString({ strict: true }) expiresAt?: string | null
 }
+
+export class RevealEmployeeKeyDto {
+  @IsString()
+  @Length(1, 200)
+  password!: string
+}

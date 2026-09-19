@@ -16,6 +16,7 @@ export class UsageGroupsController {
   @Get() list(@Req() req: AdminRequest, @Query() query: UsageGroupPageQueryDto) { return this.groups.list(req.principal.organizationId, query) }
   @Post() create(@Req() req: AdminRequest, @Body() body: CreateUsageGroupDto) { return this.groups.create(req.principal, body) }
   @Get(':id') detail(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string) { return this.groups.detail(req.principal.organizationId, id) }
+  @Get(':id/projects') projects(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string) { return this.groups.projects(req.principal.organizationId, id) }
   @Patch(':id') update(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Body() body: UpdateUsageGroupDto) { return this.groups.update(req.principal, id, body) }
   @Delete(':id') archive(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string) { return this.groups.archive(req.principal, id) }
   @Post(':id/enable') enable(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string) { return this.groups.setEnabled(req.principal, id, true) }

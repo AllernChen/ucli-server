@@ -35,15 +35,21 @@ it('lists projects and filters by name', async () => {
   expect(state.url).toContain('q=%E8%B6%8A%E7%A7%80')
 })
 
-it('shows project budget and keys without exposing a secret', async () => {
+it('shows project keys masked by default and reveals the secret after password verification', async () => {
   window.history.replaceState({}, '', '/projects/project-1')
   state.api.mockImplementation(async (url: string) => {
     if (url.endsWith('/budget')) return { projectId: 'project-1', periodId: 'period', periodKey: 'TOTAL',
       budgetMode: 'TOTAL', budgetTimezone: 'Asia/Shanghai', unlimited: false, limitCny: '100',
       spentCny: '20', reservedCny: '5', uncertainCny: '0', availableCny: '75' }
-    if (url.includes('api-keys')) return { ...page, items: [{ id: 'key-1', name: '项目 Key', secretHint: '…abcd',
+    if (url.includes('api-keys/key-1/reveal')) return { id: 'key-1', secret: 'ucli_sk_revealed_secret' }
+    if (url.includes('api-keys')) return { ...page, items: [
+      { id: 'key-1', name: '项目 Key', secretHint: '…abcd', secretRecoverable: true,
       account: { displayName: '员工', email: 'employee@example.invalid' }, expiresAt: null, disabledAt: null,
-      revokedAt: null, lastUsedAt: '2026-09-19T01:02:03Z', createdAt: '2026-09-18T01:02:03Z' }] }
+      revokedAt: null, lastUsedAt: '2026-09-19T01:02:03Z', createdAt: '2026-09-18T01:02:03Z' },
+      { id: 'key-2', name: '第二把 Key', secretHint: '…efgh', secretRecoverable: true,
+        account: { displayName: '员工', email: 'employee@example.invalid' }, expiresAt: null, disabledAt: null,
+        revokedAt: null, lastUsedAt: null, createdAt: '2026-09-18T01:02:03Z' }
+    ] }
     return { id: 'project-1', organizationId: 'org', regionId: 'region', code: 'GD-YX', name: '越秀',
       description: '', status: 'ACTIVE', budgetMode: 'TOTAL', budgetTimezone: 'Asia/Shanghai',
       region: { id: 'region', name: '广东-市局区域' }, members: [] }
@@ -64,4 +70,15 @@ it('shows project budget and keys without exposing a secret', async () => {
   expect(wrapper.text()).toContain('employee@example.invalid')
   expect(wrapper.text()).toContain('不设到期时间')
   expect(wrapper.text()).not.toContain('ucli_sk_')
+  await wrapper.get('[aria-label="输入管理员密码"]').setValue('admin-password')
+  await wrapper.get('[data-action="reveal-key"]').trigger('click')
+  await flushPromises()
+  const revealCall = state.api.mock.calls.find(([url, init]) => url.includes('api-keys/key-1/reveal'))
+  expect(revealCall?.[1]).toMatchObject({ method: 'POST', body: JSON.stringify({ password: 'admin-password' }) })
+  expect(wrapper.get('[data-secret]').text()).toBe('ucli_sk_revealed_secret')
+  expect(wrapper.text()).toContain('复制 Key')
+  await wrapper.findAll('button').filter(button => button.text() === '查看').at(1)!.trigger('click')
+  await flushPromises()
+  expect(wrapper.text()).not.toContain('ucli_sk_revealed_secret')
+  expect(wrapper.text()).toContain('…efgh')
 })

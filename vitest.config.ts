@@ -5,6 +5,7 @@ export default defineConfig({
   plugins: [vue()],
   test: {
     include: ['test/**/*.test.ts'],
+    setupFiles: ['test/setup.ts'],
     environment: 'node',
     // Keep shared PostgreSQL and Docker workloads within the local/CI resource budget.
     maxWorkers: 4,

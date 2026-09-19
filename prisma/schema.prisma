@@ -776,6 +776,9 @@ model EmployeeApiKey {
   name String
   secretHash String @unique @map("secret_hash")
   secretHint String @map("secret_hint")
+  secretCiphertext String? @map("secret_ciphertext")
+  secretIv String? @map("secret_iv")
+  secretTag String? @map("secret_tag")
   createdById String @map("created_by_id") @db.Uuid
   createdAt DateTime @default(now()) @map("created_at")
   expiresAt DateTime? @map("expires_at")

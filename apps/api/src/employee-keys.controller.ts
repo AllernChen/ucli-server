@@ -1,8 +1,8 @@
-import { Body, Controller, Delete, Get, Header, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Header, HttpCode, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { AuthGuard, Roles, type AuthPrincipal } from '../../../packages/security/src/auth.js'
 import { UuidPipe } from '../../../packages/http/src/uuid.pipe.js'
-import { CreateEmployeeKeyDto, EmployeeKeyQueryDto, ProjectOptionQueryDto, UpdateEmployeeKeyDto } from './employee-keys.dto.js'
+import { CreateEmployeeKeyDto, EmployeeKeyQueryDto, ProjectOptionQueryDto, RevealEmployeeKeyDto, UpdateEmployeeKeyDto } from './employee-keys.dto.js'
 import { EmployeeKeysService } from './employee-keys.service.js'
 
 type AuthRequest = { principal: AuthPrincipal }
@@ -22,6 +22,10 @@ export class EmployeeKeysController {
   list(@Req() req: AuthRequest, @Param('accountId', UuidPipe) accountId: string, @Query() query: EmployeeKeyQueryDto) { return this.keys.list(req.principal, accountId, query) }
   @Get('admin/employee-api-keys') @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Header('Cache-Control', 'no-store')
   listManaged(@Req() req: AuthRequest, @Query() query: EmployeeKeyQueryDto) { return this.keys.listManaged(req.principal, query) }
+  @Post('admin/employee-api-keys/:id/reveal') @HttpCode(200) @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Header('Cache-Control', 'no-store')
+  reveal(@Req() req: AuthRequest, @Param('id', UuidPipe) id: string, @Body() body: RevealEmployeeKeyDto) {
+    return this.keys.reveal(req.principal, id, body)
+  }
   @Post('admin/users/:accountId/api-keys') @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Header('Cache-Control', 'no-store')
   create(@Req() req: AuthRequest, @Param('accountId', UuidPipe) accountId: string, @Body() body: CreateEmployeeKeyDto) { return this.keys.create(req.principal, accountId, body) }
   @Patch('admin/employee-api-keys/:id') @Roles('PLATFORM_ADMIN', 'ORG_ADMIN')
