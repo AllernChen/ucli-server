@@ -3,7 +3,7 @@
 // Dry run is the default. --apply requires admin credentials and performs API mutations.
 
 import { readFileSync, existsSync, writeFileSync } from 'node:fs'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 const APPLY = process.argv.includes('--apply')
 const outputIndex = process.argv.indexOf('--output')
@@ -12,16 +12,24 @@ const credentialsIndex = process.argv.indexOf('--credentials')
 const credentialsPath = credentialsIndex >= 0 ? process.argv[credentialsIndex + 1] : 'credentials.json'
 
 const REGION_MAPPING = [
-  { region: '广东-省厅区域', projects: ['省厅', '机场', '地市'] },
-  { region: '广东-市局区域', projects: ['市局', '越秀', '黄埔', '揭阳', '交警'] },
-  { region: '广东-花都区域', projects: ['花都'] },
-  { region: '广东-东莞区域', projects: ['东莞'] },
-  { region: '北京-GAB区域', projects: ['GAB'] },
-  { region: '江苏-苏州区域', projects: ['苏州'] },
-  { region: '贵州-贵州', projects: ['贵州'] }
+  { region: '广东-省厅区域', projects: ['广东-省厅', '广东-机场', '广东-地市'] },
+  { region: '广东-市局区域', projects: ['广东-市局', '广东-越秀', '广东-黄埔', '广东-揭阳', '广东-交警'] },
+  { region: '广东-花都区域', projects: ['广东-花都'] },
+  { region: '广东-东莞区域', projects: ['广东-东莞'] },
+  { region: '北京-GAB区域', projects: ['北京-GAB'] },
+  { region: '江苏-苏州区域', projects: ['江苏-苏州'] },
+  { region: '贵州区域', projects: ['贵州-贵州'] }
 ]
 const SOURCE_GROUPS = REGION_MAPPING.flatMap(item => item.projects)
 if (new Set(SOURCE_GROUPS).size !== SOURCE_GROUPS.length) throw new Error('Duplicate source project group')
+
+function deterministicUuid(value) {
+  const bytes = createHash('sha256').update(value).digest().subarray(0, 16)
+  bytes[6] = (bytes[6] & 15) | 64
+  bytes[8] = (bytes[8] & 63) | 128
+  const hex = bytes.toString('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
 
 function fail(message) { console.error(`[migrate] ${message}`); process.exit(1) }
 function readJson(path) {
@@ -89,6 +97,10 @@ async function applyMigration() {
   const groupByName = new Map(groups.map(group => [group.name, group]))
   const accountByEmail = new Map(users.map(user => [user.email.toLowerCase(), user]))
   const projectBySourceGroupId = new Map()
+  const existingProjects = await paginate('/api/v1/admin/projects')
+  for (const project of existingProjects) {
+    if (project.sourceGroupId) projectBySourceGroupId.set(project.sourceGroupId, project)
+  }
 
   for (const mapping of REGION_MAPPING) {
     let region = groups.find(group => group.name === mapping.region)
@@ -100,7 +112,10 @@ async function applyMigration() {
     state.created[mapping.region] = region.id
     const sourceGroups = mapping.projects.map(name => {
       const group = groupByName.get(name)
-      if (!group) throw new Error(`source group not found: ${name}`)
+      if (!group) {
+        console.error('[migrate] available groups:', [...groupByName.keys()].join(', '))
+        throw new Error(`source group not found: ${name}`)
+      }
       return group
     })
     const modelIds = new Set()
@@ -127,10 +142,14 @@ async function applyMigration() {
 
     for (const [index, source] of sourceGroups.entries()) {
       const name = mapping.projects[index]
-      const project = await api('/api/v1/admin/projects', { method: 'POST', body: JSON.stringify({
-        regionId: region.id, code: `MIG-${source.id.slice(0, 8).toUpperCase()}`, name,
-        description: `迁移自用量组 ${source.name}`, sourceGroupId: source.id
-      }) })
+      console.log('[migrate] creating project', { regionId: region.id, regionName: mapping.region, name, sourceGroupId: source.id })
+      let project = projectBySourceGroupId.get(source.id)
+      if (!project) {
+        project = await api('/api/v1/admin/projects', { method: 'POST', body: JSON.stringify({
+          regionId: region.id, code: `MIG-${source.id.slice(0, 8).toUpperCase()}`, name,
+          description: `迁移自用量组 ${source.name}`, sourceGroupId: source.id
+        }) })
+      }
       projectBySourceGroupId.set(source.id, project)
       for (const owner of projectOwners.filter(owner => owner.source === source.id)) {
         await api(`/api/v1/admin/projects/${project.id}/members`, { method: 'POST', body: JSON.stringify({
@@ -140,7 +159,7 @@ async function applyMigration() {
       const budget = await api(`/api/v1/admin/usage-groups/${source.id}/budget`)
       if (!budget.unlimited) {
         await api(`/api/v1/admin/projects/${project.id}/budget-adjustments`, { method: 'POST', body: JSON.stringify({
-          operationId: randomUUID(), limitCny: budget.limitCny, unlimited: false,
+          operationId: deterministicUuid(`region-project-budget:${source.id}`), limitCny: budget.limitCny, unlimited: false,
           reason: '迁移原项目组临时额度'
         }) })
       }
@@ -153,8 +172,6 @@ async function applyMigration() {
     for (const sourceName of mapping.projects) {
       const source = groupByName.get(sourceName)
       const project = projectBySourceGroupId.get(source.id)
-      const keys = await paginate(`/api/v1/admin/users?projectId=${project.id}`)
-      for (const user of users) { /* keep users loaded for account email mapping */ }
       const oldKeys = await oldProjectKeys(source.id)
       for (const oldKey of oldKeys) {
         const account = accountByEmail.get(oldKey.account.email.toLowerCase())
@@ -177,12 +194,8 @@ async function applyMigration() {
 }
 
 async function oldProjectKeys(groupId) {
-  const keys = []
-  for (const user of users) {
-    const page = await api(`/api/v1/admin/users/${user.id}/api-keys?limit=200`)
-    keys.push(...page.items.filter(key => key.groupId === groupId && !key.revokedAt && !key.deletedAt))
-  }
-  return keys
+  const page = await api(`/api/v1/admin/employee-api-keys?groupId=${groupId}&limit=200`)
+  return page.items.filter(key => key.groupId === groupId && !key.revokedAt && !key.deletedAt)
 }
 
 let users = []
