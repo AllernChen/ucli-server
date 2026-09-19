@@ -499,7 +499,7 @@ git commit -m "feat: 提供区域项目管理接口"
   - `.recoverQuota(quota, now)`
 - `ProjectBudgetReservation` 导出为 `{ id, requestId, periodId, projectId, reservedCny }`。
 
-- [ ] **Step 1: 写失败预算测试**
+- [x] **Step 1: 写失败预算测试**
 
 测试场景：
 
@@ -521,7 +521,7 @@ await expect(service.reserve({
 })).rejects.toMatchObject({ status: 429, response: { code: 'project_budget_exceeded' } })
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run:
 
@@ -531,7 +531,7 @@ npm test -- test/integration/project-budget.test.ts
 
 Expected: FAIL，服务不存在。
 
-- [ ] **Step 3: 实现读取汇总**
+- [x] **Step 3: 实现读取汇总**
 
 `project-budget-read.ts` 提供：
 
@@ -553,7 +553,7 @@ export interface ProjectBudgetSummary {
 
 汇总规则复用 `availableCny` / `budgetPeriodKey`，但按 `project.budgetMode` 与 `project.budgetTimezone` 计算周期。
 
-- [ ] **Step 4: 实现项目预算服务**
+- [x] **Step 4: 实现项目预算服务**
 
 从现有 `GroupBudgetService` 抽出或复用以下纯逻辑，不复制业务语义：
 
@@ -582,7 +582,7 @@ throw new HttpException({
 }, 429)
 ```
 
-- [ ] **Step 5: 暴露预算 API**
+- [x] **Step 5: 暴露预算 API**
 
 在 `projects.controller.ts` 增加：
 
@@ -597,7 +597,7 @@ POST /api/v1/admin/projects/:id/budget-applications/:applicationId/decision
 
 预算 DTO 复用现有金额、reason、operationId 校验；调整值是批复后总额，不是增量。
 
-- [ ] **Step 6: 运行测试**
+- [x] **Step 6: 运行测试**
 
 Run:
 
@@ -607,7 +607,7 @@ npm test -- test/integration/project-budget.test.ts test/quota
 
 Expected: 全部通过。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add packages/quota/src/project-budget-read.ts packages/quota/src/project-budget.service.ts apps/api/src/projects.controller.ts apps/api/src/projects.dto.ts apps/api/src/app.module.ts test/integration/project-budget.test.ts
