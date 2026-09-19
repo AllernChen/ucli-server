@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer'
-import { IsIn, IsOptional, IsString, IsUUID, Length, Matches, ValidateIf } from 'class-validator'
+import { IsBoolean, IsIn, IsOptional, IsString, IsUUID, Length, Matches, ValidateIf } from 'class-validator'
 import { PageQueryDto } from './catalog.dto.js'
 
 export type ProjectStatusFilter = 'ACTIVE' | 'SUSPENDED' | 'ARCHIVED'
@@ -39,4 +39,25 @@ export class AddProjectMemberDto {
 
 export class SetProjectMemberRoleDto {
   @IsIn(['OWNER', 'CONTRIBUTOR', 'VIEWER']) role!: ProjectMemberRole
+}
+
+export class ProjectBudgetAdjustmentDto {
+  @IsUUID() operationId!: string
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @Length(1, 2000) reason!: string
+  @IsString() @Matches(/^(0|[1-9]\d{0,11})(\.\d{1,8})?$/) limitCny!: string
+  @IsBoolean() unlimited!: boolean
+  @IsOptional() @IsUUID() applicationId?: string
+}
+
+export class CreateProjectBudgetApplicationDto {
+  @IsString() @Matches(/^(0|[1-9]\d{0,11})(\.\d{1,8})?$/) requestedCny!: string
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @Length(1, 2000) reason!: string
+  @IsOptional() @IsUUID() applicantAccountId?: string
+}
+
+export class ProjectBudgetApplicationDecisionDto {
+  @IsOptional() @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @Length(0, 2000) note?: string
 }
