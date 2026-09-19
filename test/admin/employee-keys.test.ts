@@ -26,7 +26,7 @@ it('requires an employee group, shows secret once, and retries failed creation w
   expect(w.text()).toContain('暂时失败')
   fail = false
   await w.get('#employee-key-form').trigger('submit'); await flushPromises()
-  expect(state.api).toHaveBeenCalledWith('/api/v1/admin/users/employee-a/api-keys', expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'CLI', groupId: 'group-a', expiresAt: null }) }))
+  expect(state.api).toHaveBeenCalledWith('/api/v1/admin/users/employee-a/api-keys', expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'CLI', groupId: 'group-a', projectId: null, expiresAt: null }) }))
   expect(w.get<HTMLTextAreaElement>('[aria-label="完整 API Key"]').element.value).toBe('ucli_sk_only_once')
   expect(localStorage.length).toBe(0)
   await w.get('[data-action="close-secret"]').trigger('click')
@@ -104,7 +104,7 @@ it('loads the selected employee groups before creating an organization key', asy
   await w.get('[aria-label="Key 名称"]').setValue('CLI')
   await w.get('[aria-label="Key 所属组"]').setValue('group-b')
   await w.get('#employee-key-form').trigger('submit'); await flushPromises()
-  expect(state.api).toHaveBeenCalledWith('/api/v1/admin/users/employee-b/api-keys', expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'CLI', groupId: 'group-b', expiresAt: null }) }))
+  expect(state.api).toHaveBeenCalledWith('/api/v1/admin/users/employee-b/api-keys', expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'CLI', groupId: 'group-b', projectId: null, expiresAt: null }) }))
 })
 
 it('searches employee pages inside the create drawer and keeps the selected employee', async () => {

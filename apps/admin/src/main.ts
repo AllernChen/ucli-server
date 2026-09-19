@@ -42,6 +42,8 @@ const routes = [
   { path: '/users', name: 'users', component: Users },
   { path: '/usage-groups', name: 'usage-groups', component: () => import('./views/UsageGroups.vue') },
   { path: '/usage-groups/:id', name: 'usage-group-detail', component: () => import('./views/UsageGroupDetail.vue') },
+  { path: '/projects', name: 'projects', component: () => import('./views/Projects.vue') },
+  { path: '/projects/:id', name: 'project-detail', component: () => import('./views/ProjectDetail.vue') },
   { path: '/my-access', name: 'my-access', component: () => import('./views/MyAccess.vue') },
   { path: '/users/:id', name: 'user-detail', component: UserDetail },
   { path: '/device-grants', name: 'device-grants', component: DeviceGrants },
