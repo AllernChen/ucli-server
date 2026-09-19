@@ -908,7 +908,7 @@ git commit -m "feat: 网关按项目 Key 执行项目预算"
 - New region device grants require `projectId`.
 - `GatewayIdentity` receives project from live grant state, not JWT claim.
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 覆盖：
 
@@ -919,7 +919,7 @@ git commit -m "feat: 网关按项目 Key 执行项目预算"
 - 传统项目组授权不强制项目并保持兼容；
 - 授权审计记录项目 ID，不记录连接 URL 明文。
 
-- [ ] **Step 2: 运行失败测试**
+- [x] **Step 2: 运行失败测试**
 
 Run:
 
@@ -929,7 +929,7 @@ npm test -- test/auth/device-project-grants.test.ts
 
 Expected: FAIL。
 
-- [ ] **Step 3: 实现授权校验**
+- [x] **Step 3: 实现授权校验**
 
 创建 / 更新组时：
 
@@ -943,7 +943,7 @@ if (group.type === 'REGION') {
 }
 ```
 
-- [ ] **Step 4: 认证回读项目**
+- [x] **Step 4: 认证回读项目**
 
 `AuthGuard.authenticateToken` 中：
 
@@ -965,7 +965,7 @@ if (group.type === 'REGION' && !principal.projectId) {
 
 如果项目存在，继续查询活动项目并确认 `regionId === groupId`。
 
-- [ ] **Step 5: 运行测试**
+- [x] **Step 5: 运行测试**
 
 Run:
 
@@ -975,7 +975,7 @@ npm test -- test/auth/device-project-grants.test.ts test/auth/device-grant-lifec
 
 Expected: 全部通过。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add apps/api/src/device-grants.dto.ts apps/api/src/device-grants.service.ts packages/security/src/auth.ts apps/admin/src/views/DeviceGrants.vue test/auth/device-project-grants.test.ts
