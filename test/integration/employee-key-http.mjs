@@ -14,6 +14,7 @@ import { encryptSecret } from '../../dist/packages/security/src/envelope-crypto.
 import { ModelCatalogService } from '../../dist/packages/gateway-core/src/model-catalog.service.js'
 import { RedisQuotaService } from '../../dist/packages/quota/src/redis-quota.js'
 import { GroupBudgetService } from '../../dist/packages/quota/src/group-budget.service.js'
+import { ProjectBudgetService } from '../../dist/packages/quota/src/project-budget.service.js'
 import { JsonSafeInterceptor } from '../../dist/packages/http/src/json.interceptor.js'
 import { EmployeeKeysController } from '../../dist/apps/api/src/employee-keys.controller.js'
 import { EmployeeKeysService } from '../../dist/apps/api/src/employee-keys.service.js'
@@ -71,7 +72,7 @@ const upstream = createServer(async (req, res) => {
 })
 class KeyTestModule {}
 Module({ controllers: [AuthController, DeviceGrantsController, UsageGroupsController, UsersController, UsageController, AnalyticsController, EmployeeKeysController, GatewayController], providers: [AuthService, DeviceGrantsService, DeviceGrantLinksService, UsersService, AnalyticsService, AuthGuard, GatewayAuthGuard,
-  EmployeeKeysService, UsageGroupsService, ModelCatalogService, GatewayService, GroupBudgetService, { provide: PrismaService, useValue: db },
+  EmployeeKeysService, UsageGroupsService, ModelCatalogService, GatewayService, GroupBudgetService, ProjectBudgetService, { provide: PrismaService, useValue: db },
   RedisQuotaService] })(KeyTestModule)
 const app = await NestFactory.create(KeyTestModule, { logger: false })
 const cliRequests = []

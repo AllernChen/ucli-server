@@ -11,6 +11,7 @@ import { GatewayAuthGuard } from '../../dist/packages/security/src/gateway-auth.
 import { ModelCatalogService } from '../../dist/packages/gateway-core/src/model-catalog.service.js'
 import { RedisQuotaService } from '../../dist/packages/quota/src/redis-quota.js'
 import { GroupBudgetService } from '../../dist/packages/quota/src/group-budget.service.js'
+import { ProjectBudgetService } from '../../dist/packages/quota/src/project-budget.service.js'
 import { JsonSafeInterceptor } from '../../dist/packages/http/src/json.interceptor.js'
 import { UsageGroupsController } from '../../dist/apps/api/src/usage-groups.controller.js'
 import { UsageGroupsService } from '../../dist/apps/api/src/usage-groups.service.js'
@@ -18,12 +19,17 @@ import { ClientController } from '../../dist/apps/api/src/client.controller.js'
 import { GatewayController } from '../../dist/apps/gateway/src/gateway.controller.js'
 import { GatewayService } from '../../dist/apps/gateway/src/gateway.service.js'
 
+console.log('group-http: starting')
+process.on('unhandledRejection', error => {
+  console.error('group-http: unhandled rejection', error)
+  process.exit(1)
+})
 const db = new PrismaService({ datasources: { db: { url: testDatabaseUrl() } } })
 process.env.JWT_SECRET = randomUUID()
 class GroupTestModule {}
 Module({
   controllers: [UsageGroupsController, GatewayController, ClientController],
-  providers: [AuthGuard, GatewayAuthGuard, UsageGroupsService, ModelCatalogService, GatewayService, GroupBudgetService,
+  providers: [AuthGuard, GatewayAuthGuard, UsageGroupsService, ModelCatalogService, GatewayService, GroupBudgetService, ProjectBudgetService,
     { provide: PrismaService, useValue: db },
     { provide: RedisQuotaService, useValue: { reserve() { throw new Error('Denied requests must not reserve quota') } } }]
 })(GroupTestModule)
@@ -103,6 +109,9 @@ try {
   await request(`${prefix}/${id}`, 'DELETE')
   assert.equal((await request(`${prefix}/${id}/enable`, 'POST')).status, 409)
   console.log('Group HTTP smoke passed: admin validation, tenant isolation, live directory/relay/bootstrap permissions, permanent revocation.')
+} catch (error) {
+  console.error('group-http failed:', error)
+  process.exitCode = 1
 } finally {
   await app.close()
   await db.$disconnect()
