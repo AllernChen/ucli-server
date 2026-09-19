@@ -4,6 +4,7 @@ export interface AnalyticsFilter {
   organizationId?: string
   accountId?: string
   groupId?: string
+  budgetProjectId?: string
   apiKeyId?: string
   credentialType?: 'DEVICE' | 'API_KEY'
   channelId?: string

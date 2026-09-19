@@ -15,6 +15,10 @@ const DIMENSIONS = {
   channelModel: { id: 'a.channel_model_id::text', name: "COALESCE(cm.upstream_model, '未关联渠道模型')" },
   account: { id: 'u.account_id::text', name: "COALESCE(u.actor_snapshot->>'employeeName', u.account_id::text)" },
   group: { id: 'u.group_id::text', name: "COALESCE(u.actor_snapshot->>'groupName', u.group_id::text, '历史未归组')" },
+  project: {
+    id: `(SELECT pr.id::text FROM projects pr WHERE pr.organization_id = u.organization_id AND pr.id = COALESCE(u.budget_project_id, (SELECT pr2.id FROM projects pr2 WHERE pr2.organization_id = u.organization_id AND pr2.source_group_id = u.group_id)))`,
+    name: `(SELECT pr.name FROM projects pr WHERE pr.organization_id = u.organization_id AND pr.id = COALESCE(u.budget_project_id, (SELECT pr2.id FROM projects pr2 WHERE pr2.organization_id = u.organization_id AND pr2.source_group_id = u.group_id)))`
+  },
   apiKey: { id: 'u.api_key_id::text', name: "COALESCE(u.actor_snapshot->>'keyName', u.api_key_id::text, '设备凭据')" },
   costRule: { id: 'a.price_key', name: "COALESCE(a.price_snapshot->>'ruleName', a.price_snapshot->>'source', '历史价格信息不足')" }
 } as const
@@ -147,7 +151,8 @@ export class AnalyticsService {
     if (dimension === 'group' && !row.id) return { ...allocation, groupScope: 'UNGROUPED' }
     if (dimension === 'apiKey' && !row.id) return { ...allocation, keyScope: 'NO_KEY' }
     const key = { organization: 'organizationId', channel: 'channelId', model: 'publicModelId',
-      channelModel: 'channelModelId', account: 'accountId', group: 'groupId', apiKey: 'apiKeyId' }[dimension]
+      channelModel: 'channelModelId', account: 'accountId', group: 'groupId', apiKey: 'apiKeyId',
+      project: 'budgetProjectId' }[dimension]
     return { ...allocation, [key!]: row.id }
   }
 
@@ -241,8 +246,8 @@ export class AnalyticsService {
       const result = await this.groupedRows(principal, optionQuery, mode)
       const items = result.items.map(item => ({ id: item.id, name: item.name, drillQuery: item.drillQuery }))
       const empty: Array<{ id: string | null; name: string; drillQuery?: Record<string, string> }> = []
-      const collection = { organizations: empty, channels: empty, models: empty, channelModels: empty, accounts: empty, costRules: empty, groups: empty, apiKeys: empty }
-      const key = { organization: 'organizations', channel: 'channels', model: 'models', channelModel: 'channelModels', account: 'accounts', costRule: 'costRules', group: 'groups', apiKey: 'apiKeys' }[query.optionDimension]!
+      const collection = { organizations: empty, channels: empty, models: empty, channelModels: empty, accounts: empty, costRules: empty, groups: empty, apiKeys: empty, projects: empty }
+      const key = { organization: 'organizations', channel: 'channels', model: 'models', channelModel: 'channelModels', account: 'accounts', costRule: 'costRules', group: 'groups', apiKey: 'apiKeys', project: 'projects' }[query.optionDimension]!
       collection[key as keyof typeof collection] = items
       return { ...collection, page: { dimension: query.optionDimension, items, total: result.total, limit: result.limit, offset: result.offset } }
     }

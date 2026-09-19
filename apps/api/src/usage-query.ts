@@ -30,6 +30,7 @@ export function resolveUsageFilter(
     accountId: principal.role === 'MEMBER' ? principal.sub : query.accountId || undefined,
     groupId: query.groupId || undefined, groupScope: query.groupScope,
     apiKeyId: query.apiKeyId || undefined, keyScope: query.keyScope, credentialType: query.credentialType,
+    budgetProjectId: query.budgetProjectId,
     channelId: query.channelId || undefined, publicModelId: query.publicModelId || query.model || undefined,
     channelModelId: query.channelModelId || undefined, channelModelScope: query.channelModelScope, requestState: query.requestState, billingState: query.billingState,
     costRuleId: query.costRuleId, priceKey: query.priceKey, allocation: query.allocation,
@@ -44,6 +45,7 @@ export function usageWhere(filter: UsageReadFilter, requestOnly = false): Prisma
   if (filter.groupId) conditions.push(Prisma.sql`u.group_id = ${filter.groupId}::uuid`)
   if (filter.groupScope) conditions.push(Prisma.sql`u.group_id IS NULL`)
   if (filter.apiKeyId) conditions.push(Prisma.sql`u.api_key_id = ${filter.apiKeyId}::uuid`)
+  if (filter.budgetProjectId) conditions.push(Prisma.sql`u.budget_project_id = ${filter.budgetProjectId}::uuid`)
   if (filter.keyScope) conditions.push(Prisma.sql`u.api_key_id IS NULL`)
   if (filter.credentialType) conditions.push(Prisma.sql`u.credential_type::text = ${filter.credentialType}`)
   if (filter.publicModelId) conditions.push(Prisma.sql`u.public_model_id = ${filter.publicModelId}`)

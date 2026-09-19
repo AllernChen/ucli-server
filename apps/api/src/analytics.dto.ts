@@ -7,6 +7,7 @@ export class AnalyticsQueryDto {
   @IsOptional() @IsUUID() organizationId?: string
   @IsOptional() @IsUUID() accountId?: string
   @IsOptional() @IsUUID() groupId?: string
+  @IsOptional() @IsUUID() budgetProjectId?: string
   @IsOptional() @IsUUID() apiKeyId?: string
   @IsOptional() @IsIn(['DEVICE', 'API_KEY']) credentialType?: 'DEVICE' | 'API_KEY'
   @IsOptional() @IsUUID() channelId?: string
@@ -15,8 +16,8 @@ export class AnalyticsQueryDto {
   @IsOptional() @IsUUID() channelModelId?: string
   @IsOptional() @IsIn(['UNASSOCIATED']) channelModelScope?: 'UNASSOCIATED'
   @IsOptional() @IsIn(['hour', 'day']) interval?: 'hour' | 'day'
-  @IsOptional() @IsIn(['organization', 'channel', 'model', 'channelModel', 'account', 'costRule', 'group', 'apiKey'])
-  dimension?: 'organization' | 'channel' | 'model' | 'channelModel' | 'account' | 'costRule' | 'group' | 'apiKey'
+  @IsOptional() @IsIn(['organization', 'channel', 'model', 'channelModel', 'account', 'costRule', 'group', 'apiKey', 'project'])
+  dimension?: 'organization' | 'channel' | 'model' | 'channelModel' | 'account' | 'costRule' | 'group' | 'apiKey' | 'project'
   @IsOptional() @IsIn(['requests', 'costCny', 'costUsd', 'tokens', 'successRate', 'requestSuccessRate', 'p95LatencyMs'])
   sort?: 'requests' | 'costCny' | 'costUsd' | 'tokens' | 'successRate' | 'requestSuccessRate' | 'p95LatencyMs'
   @IsOptional() @IsIn(['asc', 'desc']) order?: 'asc' | 'desc'
@@ -30,8 +31,8 @@ export class AnalyticsQueryDto {
   @IsOptional() @IsUUID() costRuleId?: string
   @IsOptional() @Matches(/^[0-9a-f]{32}$/) priceKey?: string
   @IsOptional() @IsIn(['UNALLOCATED']) allocation?: 'UNALLOCATED'
-  @IsOptional() @IsIn(['organization', 'channel', 'model', 'channelModel', 'account', 'costRule', 'group', 'apiKey'])
-  optionDimension?: 'organization' | 'channel' | 'model' | 'channelModel' | 'account' | 'costRule' | 'group' | 'apiKey'
+  @IsOptional() @IsIn(['organization', 'channel', 'model', 'channelModel', 'account', 'costRule', 'group', 'apiKey', 'project'])
+  optionDimension?: 'organization' | 'channel' | 'model' | 'channelModel' | 'account' | 'costRule' | 'group' | 'apiKey' | 'project'
   @IsOptional() @IsString() @Length(1, 100) q?: string
 }
 
