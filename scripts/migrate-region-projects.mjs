@@ -103,27 +103,40 @@ async function applyMigration() {
       if (!group) throw new Error(`source group not found: ${name}`)
       return group
     })
+    const modelIds = new Set()
+    const projectOwners = []
 
     const members = new Map()
     for (const source of sourceGroups) {
       const membersPage = await api(`/api/v1/admin/usage-groups/${source.id}/members?limit=200`)
-      for (const member of membersPage.items) members.set(member.accountId, member)
+      for (const member of membersPage.items) {
+        members.set(member.accountId, member)
+        if (member.role === 'LEADER') projectOwners.push({ source: source.id, accountId: member.accountId })
+      }
     }
     for (const [accountId] of members) {
       await api(`/api/v1/admin/usage-groups/${region.id}/members`, { method: 'POST', body: JSON.stringify({ accountId }) })
     }
+    for (const source of sourceGroups) {
+      const models = await api(`/api/v1/admin/usage-groups/${source.id}/models`)
+      for (const model of models) modelIds.add(model.publicModelId)
+    }
+    await api(`/api/v1/admin/usage-groups/${region.id}/models`, { method: 'PUT', body: JSON.stringify({
+      publicModelIds: [...modelIds]
+    }) })
 
     for (const [index, source] of sourceGroups.entries()) {
       const name = mapping.projects[index]
-      const models = await api(`/api/v1/admin/usage-groups/${source.id}/models`)
       const project = await api('/api/v1/admin/projects', { method: 'POST', body: JSON.stringify({
         regionId: region.id, code: `MIG-${source.id.slice(0, 8).toUpperCase()}`, name,
         description: `迁移自用量组 ${source.name}`, sourceGroupId: source.id
       }) })
       projectBySourceGroupId.set(source.id, project)
-      await api(`/api/v1/admin/projects/${project.id}/models`, { method: 'PUT', body: JSON.stringify({
-        publicModelIds: models.map(model => model.publicModelId)
-      }) })
+      for (const owner of projectOwners.filter(owner => owner.source === source.id)) {
+        await api(`/api/v1/admin/projects/${project.id}/members`, { method: 'POST', body: JSON.stringify({
+          accountId: owner.accountId, role: 'OWNER'
+        }) })
+      }
       const budget = await api(`/api/v1/admin/usage-groups/${source.id}/budget`)
       if (!budget.unlimited) {
         await api(`/api/v1/admin/projects/${project.id}/budget-adjustments`, { method: 'POST', body: JSON.stringify({

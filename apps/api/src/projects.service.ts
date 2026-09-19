@@ -77,7 +77,8 @@ export class ProjectsService {
       return await this.prisma.$transaction(async db => {
         await this.region(db, actor.organizationId, input.regionId)
         const project = await db.project.create({ data: { organizationId: actor.organizationId,
-          regionId: input.regionId, code: input.code, name: input.name, description: input.description },
+          regionId: input.regionId, code: input.code, name: input.name, description: input.description,
+          ...(input.sourceGroupId ? { sourceGroupId: input.sourceGroupId } : {}) },
           select: projectSelect })
         await this.audit(db, actor, project.id, 'create', { regionId: input.regionId, code: input.code, name: input.name })
         return project

@@ -19,6 +19,8 @@ export class CreateProjectDto {
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString() @Length(1, 120) name!: string
   @ValidateIf((_, value) => value !== undefined)
+  @IsUUID() sourceGroupId?: string
+  @ValidateIf((_, value) => value !== undefined)
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString() @Length(0, 2000) description?: string
 }
