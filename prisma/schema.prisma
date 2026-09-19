@@ -21,11 +21,24 @@ enum AccountStatus {
 enum UsageGroupType {
   DEPARTMENT
   PROJECT
+  REGION
 }
 
 enum GroupBudgetMode {
   TOTAL
   MONTHLY
+}
+
+enum ProjectStatus {
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum ProjectMemberRole {
+  OWNER
+  CONTRIBUTOR
+  VIEWER
 }
 
 enum GroupMemberRole {
@@ -145,6 +158,7 @@ model Organization {
   quotas       QuotaPolicy[]
   logs         UsageLog[]
   skillScopes  SkillOrganization[]
+  projects     Project[]
 
   @@map("organizations")
 }
@@ -153,6 +167,8 @@ model Account {
   createdEmployeeKeys EmployeeApiKey[] @relation("EmployeeKeyCreator")
   budgetAdjustments GroupBudgetEntry[] @relation("BudgetActor")
   decidedApplications GroupBudgetApplication[] @relation("ApplicationDecider")
+  projectBudgetAdjustments ProjectBudgetEntry[] @relation("ProjectBudgetActor")
+  decidedProjectBudgetApplications ProjectBudgetApplication[] @relation("ProjectBudgetApplicationDecider")
   id                  String                @id @default(uuid()) @db.Uuid
   email               String                @unique
   displayName         String                @map("display_name")
@@ -178,6 +194,9 @@ model Membership {
   employeeKeys EmployeeApiKey[]
   budgetEntries GroupBudgetEntry[]
   budgetApplications GroupBudgetApplication[]
+  projectMemberships ProjectMember[]
+  projectBudgetEntries ProjectBudgetEntry[]
+  projectBudgetApplications ProjectBudgetApplication[]
   organizationId String       @map("organization_id") @db.Uuid
   accountId      String       @map("account_id") @db.Uuid
   role           Role
@@ -213,6 +232,8 @@ model Device {
 model DeviceGrant {
   groupId String? @map("group_id") @db.Uuid
   group UsageGroup? @relation(fields: [groupId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  projectId String? @map("project_id") @db.Uuid
+  project Project? @relation(fields: [projectId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
   id               String       @id @default(uuid()) @db.Uuid
   organizationId   String       @map("organization_id") @db.Uuid
   accountId        String       @map("account_id") @db.Uuid
@@ -233,6 +254,7 @@ model DeviceGrant {
 
   @@index([organizationId, accountId, createdAt])
   @@index([organizationId, deletedAt, expiresAt])
+  @@index([organizationId, projectId])
   @@map("device_grants")
 }
 
@@ -462,10 +484,12 @@ model QuotaPolicy {
 model UsageLog {
   groupId String? @map("group_id") @db.Uuid
   apiKeyId String? @map("api_key_id") @db.Uuid
+  budgetProjectId String? @map("budget_project_id") @db.Uuid
   credentialType CredentialType @default(DEVICE) @map("credential_type")
   actorSnapshot Json? @map("actor_snapshot")
   group UsageGroup? @relation(fields: [groupId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
   apiKey EmployeeApiKey? @relation(fields: [apiKeyId, organizationId, accountId, groupId], references: [id, organizationId, accountId, groupId], onDelete: Restrict, onUpdate: Restrict)
+  budgetProject Project? @relation(fields: [budgetProjectId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
   id                String                @id @default(uuid()) @db.Uuid
   requestId         String                @unique @map("request_id")
   organizationId    String                @map("organization_id") @db.Uuid
@@ -523,6 +547,7 @@ model UsageLog {
   @@index([sessionId, startedAt])
   @@index([organizationId, groupId, startedAt])
   @@index([apiKeyId, startedAt])
+  @@index([organizationId, budgetProjectId, startedAt], map: "usage_logs_budget_project_time_idx")
   @@map("usage_logs")
 }
 
@@ -667,6 +692,7 @@ model UsageGroup {
   logs UsageLog[]
   periods GroupBudgetPeriod[]
   applications GroupBudgetApplication[]
+  projects Project[]
   @@unique([id, organizationId])
   @@index([organizationId, archivedAt, enabled])
   @@map("usage_groups")
@@ -696,6 +722,52 @@ model GroupModelAccess {
   @@map("group_model_access")
 }
 
+model Project {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  regionId String @map("region_id") @db.Uuid
+  code String
+  name String
+  description String @default("")
+  status ProjectStatus @default(ACTIVE)
+  sourceGroupId String? @unique @map("source_group_id") @db.Uuid
+  budgetMode GroupBudgetMode @default(TOTAL) @map("budget_mode")
+  budgetTimezone String @default("Asia/Shanghai") @map("budget_timezone")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  region UsageGroup @relation(fields: [regionId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  members ProjectMember[]
+  employeeKeys EmployeeApiKey[]
+  deviceGrants DeviceGrant[]
+  logs UsageLog[]
+  periods ProjectBudgetPeriod[]
+  applications ProjectBudgetApplication[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, code])
+  @@unique([organizationId, regionId, name])
+  @@index([organizationId, regionId, status], map: "projects_org_region_status_idx")
+  @@map("projects")
+}
+
+model ProjectMember {
+  organizationId String @map("organization_id") @db.Uuid
+  projectId String @map("project_id") @db.Uuid
+  accountId String @map("account_id") @db.Uuid
+  role ProjectMemberRole @default(CONTRIBUTOR)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  project Project @relation(fields: [projectId, organizationId], references: [id, organizationId], onDelete: Cascade, onUpdate: Cascade)
+  membership Membership @relation(fields: [organizationId, accountId], references: [organizationId, accountId], onDelete: Cascade, onUpdate: Cascade)
+
+  @@id([projectId, accountId])
+  @@index([organizationId, accountId])
+  @@map("project_members")
+}
+
 model EmployeeApiKey {
   id String @id @default(uuid()) @db.Uuid
   organizationId String @map("organization_id") @db.Uuid
@@ -712,11 +784,14 @@ model EmployeeApiKey {
   deletedAt DateTime? @map("deleted_at")
   lastUsedAt DateTime? @map("last_used_at")
   group UsageGroup @relation(fields: [groupId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  projectId String? @map("project_id") @db.Uuid
+  project Project? @relation(fields: [projectId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
   membership Membership @relation(fields: [organizationId, accountId], references: [organizationId, accountId], onDelete: Restrict, onUpdate: Restrict)
   createdBy Account @relation("EmployeeKeyCreator", fields: [createdById], references: [id], onDelete: Restrict)
   logs UsageLog[]
   @@unique([id, organizationId, accountId, groupId])
   @@index([organizationId, groupId, accountId])
+  @@index([organizationId, projectId, accountId])
   @@map("employee_api_keys")
 }
 
@@ -787,4 +862,79 @@ model GroupBudgetApplication {
   @@index([organizationId, groupId, createdAt])
   @@index([organizationId, groupId, status])
   @@map("group_budget_applications")
+}
+
+model ProjectBudgetPeriod {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  projectId String @map("project_id") @db.Uuid
+  periodKey String @map("period_key")
+  timezone String
+  unlimited Boolean @default(false)
+  limitCny Decimal @default(0) @map("limit_cny") @db.Decimal(20, 8)
+  spentCny Decimal @default(0) @map("spent_cny") @db.Decimal(20, 8)
+  reservedCny Decimal @default(0) @map("reserved_cny") @db.Decimal(20, 8)
+  alertedThreshold Int @default(0) @map("alerted_threshold")
+
+  project Project @relation(fields: [projectId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  entries ProjectBudgetEntry[]
+
+  @@unique([projectId, periodKey])
+  @@unique([id, organizationId, projectId])
+  @@map("project_budget_periods")
+}
+
+model ProjectBudgetEntry {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  projectId String @map("project_id") @db.Uuid
+  periodId String @map("period_id") @db.Uuid
+  requestId String? @map("request_id")
+  operationId String @unique @map("operation_id")
+  kind BudgetEntryKind
+  status BudgetEntryStatus
+  accountId String? @map("account_id") @db.Uuid
+  credentialType CredentialType? @map("credential_type")
+  credentialId String? @map("credential_id") @db.Uuid
+  reservedCny Decimal @default(0) @map("reserved_cny") @db.Decimal(20, 8)
+  settledCny Decimal @default(0) @map("settled_cny") @db.Decimal(20, 8)
+  startedAt DateTime @default(now()) @map("started_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  dispatchedAt DateTime? @map("dispatched_at")
+  leaseUntil DateTime? @map("lease_until")
+  snapshot Json
+  reason String?
+  actorAccountId String? @map("actor_account_id") @db.Uuid
+
+  period ProjectBudgetPeriod @relation(fields: [periodId, organizationId, projectId], references: [id, organizationId, projectId], onDelete: Restrict, onUpdate: Restrict)
+  membership Membership? @relation(fields: [organizationId, accountId], references: [organizationId, accountId], onDelete: Restrict, onUpdate: Restrict)
+  actor Account? @relation("ProjectBudgetActor", fields: [actorAccountId], references: [id], onDelete: Restrict)
+
+  @@index([status, leaseUntil], map: "project_budget_entries_state_idx")
+  @@index([organizationId, projectId, startedAt], map: "project_budget_entries_project_time_idx")
+  @@map("project_budget_entries")
+}
+
+model ProjectBudgetApplication {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  projectId String @map("project_id") @db.Uuid
+  applicantAccountId String @map("applicant_account_id") @db.Uuid
+  requestedCny Decimal @map("requested_cny") @db.Decimal(20, 8)
+  reason String
+  status BudgetApplicationStatus @default(REGISTERED)
+  approvedCny Decimal? @map("approved_cny") @db.Decimal(20, 8)
+  decidedById String? @map("decided_by_id") @db.Uuid
+  decidedAt DateTime? @map("decided_at")
+  decisionNote String? @map("decision_note")
+  linkedEntryId String? @map("linked_entry_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  project Project @relation(fields: [projectId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  applicant Membership @relation(fields: [organizationId, applicantAccountId], references: [organizationId, accountId], onDelete: Restrict, onUpdate: Restrict)
+  decidedBy Account? @relation("ProjectBudgetApplicationDecider", fields: [decidedById], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, projectId, createdAt])
+  @@index([organizationId, projectId, status])
+  @@map("project_budget_applications")
 }
