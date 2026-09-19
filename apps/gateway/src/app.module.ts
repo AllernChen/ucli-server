@@ -8,6 +8,7 @@ import { GatewayController } from './gateway.controller.js'
 import { GatewayService } from './gateway.service.js'
 import { ModelCatalogService } from '../../../packages/gateway-core/src/model-catalog.service.js'
 import { GroupBudgetService } from '../../../packages/quota/src/group-budget.service.js'
+import { ProjectBudgetService } from '../../../packages/quota/src/project-budget.service.js'
 
-@Module({ controllers: [GatewayController, MetricsController], providers: [PrismaService, AuthGuard, GatewayAuthGuard, GatewayService, RedisQuotaService, ModelCatalogService, GroupBudgetService] })
+@Module({ controllers: [GatewayController, MetricsController], providers: [PrismaService, AuthGuard, GatewayAuthGuard, GatewayService, RedisQuotaService, ModelCatalogService, GroupBudgetService, ProjectBudgetService] })
 export class GatewayModule {}

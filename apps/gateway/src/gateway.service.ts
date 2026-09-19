@@ -21,7 +21,8 @@ import { configuredClientProtocols, upstreamProtocolsForClient } from '../../../
 import { highestReservationCost, resolveChannelCost, type ResolvedCost, type ScheduledCost } from '../../../packages/gateway-core/src/cost-schedule.js'
 import { gatewayUnavailable, logGatewayFailure, type GatewayUnavailableCode } from './gateway-errors.js'
 import { GroupBudgetService } from '../../../packages/quota/src/group-budget.service.js'
-import { relayGroupRequest } from './group-request.js'
+import { ProjectBudgetService } from '../../../packages/quota/src/project-budget.service.js'
+import { relayBudgetedRequest } from './group-request.js'
 
 const PRISMA_PROTOCOL: Record<GatewayProtocol, PrismaProtocol> = {
   openai_responses: 'OPENAI_RESPONSES', openai_chat: 'OPENAI_CHAT', anthropic_messages: 'ANTHROPIC_MESSAGES', gemini: 'GEMINI'
@@ -35,7 +36,8 @@ const PRISMA_TO_PROTOCOL: Record<PrismaProtocol, GatewayProtocol> = {
 export class GatewayService {
   constructor(private readonly prisma: PrismaService, private readonly quota: RedisQuotaService,
     private readonly catalog: ModelCatalogService = new ModelCatalogService(prisma),
-    private readonly budget: GroupBudgetService = new GroupBudgetService(prisma)) {}
+    private readonly budget: GroupBudgetService = new GroupBudgetService(prisma),
+    private readonly projectBudget: ProjectBudgetService = new ProjectBudgetService(prisma)) {}
 
   async models(principal: ModelAccessPrincipal, protocol?: GatewayProtocol) {
     return this.catalog.list(principal, protocol)
@@ -106,6 +108,7 @@ export class GatewayService {
     if (!publicModelId) throw new NotFoundException('Model is required')
     const startedAt = new Date()
     const attribution = { credentialType: principal.credentialType, groupId: principal.groupId,
+      budgetProjectId: principal.projectId ?? null,
       deviceId: principal.deviceId ?? null, apiKeyId: principal.apiKeyId ?? null }
     const model = await this.prisma.publicModel.findFirst({ where: { id: publicModelId, enabled: true, deletedAt: null }, include: {
       policies: true,
@@ -143,7 +146,8 @@ export class GatewayService {
         { organizationId: principal.organizationId, accountId: principal.sub, publicModelId }
       ]
     } })
-    if (principal.groupId) return relayGroupRequest({ prisma: this.prisma, quota: this.quota, budget: this.budget,
+    if (principal.groupId) return relayBudgetedRequest({ prisma: this.prisma, quota: this.quota, budget: this.budget,
+      projectBudget: this.projectBudget,
       protocol, body, headers, principal: { ...principal, groupId: principal.groupId }, response, candidates, policies,
       requestId, startedAt, contextSize: model.contextSize ?? 0 })
     // UTF-8 bytes are a conservative tokenizer-independent upper bound for text requests.

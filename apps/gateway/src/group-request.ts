@@ -6,6 +6,7 @@ import Decimal from 'decimal.js'
 import type { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import type { GatewayIdentity } from '../../../packages/security/src/gateway-auth.js'
 import { GroupBudgetService, type BudgetReservation } from '../../../packages/quota/src/group-budget.service.js'
+import type { ProjectBudgetService } from '../../../packages/quota/src/project-budget.service.js'
 import { RedisQuotaService } from '../../../packages/quota/src/redis-quota.js'
 import { estimateBudgetCost, prepareBudgetRequest } from '../../../packages/quota/src/group-budget.js'
 import { calculateCost } from '../../../packages/gateway-core/src/cost.js'
@@ -14,14 +15,32 @@ import type { GatewayProtocol, NormalizedUsage } from '../../../packages/gateway
 import { StreamUsageCollector } from '../../../packages/gateway-core/src/stream-usage.js'
 import { parseUcliContext } from '../../../packages/gateway-core/src/ucli-context.js'
 
-// Grouped calls share authentication, catalog, routing and pricing with the legacy gateway;
-// only the durable lifecycle differs from the pre-migration device path.
-export async function relayGroupRequest(input: {
-  prisma: PrismaService; quota: RedisQuotaService; budget: GroupBudgetService; protocol: GatewayProtocol; body: Record<string, any>;
+// Budgeted calls share authentication, catalog, routing and pricing; only the durable ledger differs.
+type BudgetReservationRef = Pick<BudgetReservation, 'id' | 'requestId' | 'periodId' | 'reservedCny'>
+
+interface BudgetLifecycle {
+  reserve(input: { requestId: string; identity: GatewayIdentity & { groupId: string; projectId?: string | null };
+    startedAt: Date; estimateCny: string; snapshot: Prisma.InputJsonObject }): Promise<BudgetReservationRef>
+  extend(ref: BudgetReservationRef, additionalCny: string, attemptSnapshot: Prisma.InputJsonObject): Promise<BudgetReservationRef>
+  markDispatched(ref: BudgetReservationRef, leaseUntil: Date, attempt?: Prisma.InputJsonObject): Promise<unknown>
+  settle(ref: BudgetReservationRef, input: { actualCny: string; usage: Prisma.UsageLogUncheckedCreateInput }): Promise<{ exceeded: boolean }>
+  hold(ref: BudgetReservationRef, input: { actualCny: string; unresolvedCny: string;
+    usage: Prisma.UsageLogUncheckedCreateInput; reason: string }): Promise<unknown>
+  release(ref: BudgetReservationRef, reason: string): Promise<unknown>
+  markUncertain(ref: BudgetReservationRef, reason: string): Promise<unknown>
+  syncQuota(ref: BudgetReservationRef, quota: RedisQuotaService): Promise<unknown>
+}
+
+export async function relayBudgetedRequest(input: {
+  prisma: PrismaService; quota: RedisQuotaService; budget: GroupBudgetService;
+  projectBudget?: ProjectBudgetService; protocol: GatewayProtocol; body: Record<string, any>;
   principal: GatewayIdentity & { groupId: string }; response: ClientResponse; candidates: RelayCandidate[]; policies: QuotaPolicy[];
   requestId: string; startedAt: Date; contextSize: number; headers: Record<string, string | string[] | undefined>
 }) {
-  const { prisma, quota, budget, protocol, principal, response, candidates, policies, requestId, startedAt, headers } = input
+  const { prisma, quota, protocol, principal, response, candidates, policies, requestId, startedAt, headers } = input
+  const budgetPrincipal = principal.projectId ? { ...principal, projectId: principal.projectId } : principal
+  if (principal.projectId && !input.projectBudget) throw new Error('Project budget service is required for project credentials')
+  const budget = (principal.projectId ? input.projectBudget : input.budget) as unknown as BudgetLifecycle
   const prepared = prepareBudgetRequest(protocol, input.body, input.contextSize, candidates)
   const { body, inputTokens, outputTokens } = prepared
   const estimateCny = estimateBudgetCost(inputTokens, outputTokens, candidates.map(c => c.cost))
@@ -34,19 +53,24 @@ export async function relayGroupRequest(input: {
   const context = parseUcliContext(headers)
   const actor = await prisma.account.findUniqueOrThrow({ where: { id: principal.sub }, select: { displayName: true } })
   const group = await prisma.usageGroup.findUniqueOrThrow({ where: { id: principal.groupId }, select: { name: true } })
+  const project = principal.projectId ? await prisma.project.findUniqueOrThrow({
+    where: { id: principal.projectId }, select: { name: true }
+  }) : null
   const key = principal.apiKeyId ? await prisma.employeeApiKey.findUniqueOrThrow({ where: { id: principal.apiKeyId }, select: { name: true, secretHint: true } }) : null
   const initial = candidates[0]!
   const usageBase = {
     requestId, organizationId: principal.organizationId, accountId: principal.sub, groupId: principal.groupId,
+    budgetProjectId: budgetPrincipal.projectId ?? null,
     credentialType: principal.credentialType, apiKeyId: principal.apiKeyId ?? null, deviceId: principal.deviceId ?? null,
-    actorSnapshot: { employeeName: actor.displayName, groupName: group.name, ...(key ? { keyName: key.name, keyHint: key.secretHint } : {}) }, ...context,
+    actorSnapshot: { employeeName: actor.displayName, regionName: group.name,
+      ...(project ? { projectName: project.name } : {}), ...(key ? { keyName: key.name, keyHint: key.secretHint } : {}) }, ...context,
     protocol: { openai_chat: 'OPENAI_CHAT', openai_responses: 'OPENAI_RESPONSES', anthropic_messages: 'ANTHROPIC_MESSAGES', gemini: 'GEMINI' }[protocol] as Prisma.UsageLogUncheckedCreateInput['protocol'],
     publicModelId: String(body.model), upstreamModel: initial.upstreamModel, channelId: initial.channelId, channelModelId: initial.channelModelId,
     startedAt, finishedAt: startedAt, durationMs: 0, costUsd: '0.00000000', usageSource: 'ESTIMATED' as const, streaming: body.stream === true,
     statusCode: 503, errorCode: 'RECONCILIATION_REQUIRED', costSnapshot: { ...initial.cost, billingState: 'UNKNOWN' }
   }
   const reservations: Awaited<ReturnType<RedisQuotaService['reserve']>>[] = []
-  let reservation: BudgetReservation
+  let reservation: BudgetReservationRef
   try {
     for (const policy of policies) reservations.push(await quota.reserve({ organizationId: principal.organizationId,
       accountId: policy.accountId ?? '*', model: policy.publicModelId ?? '*', now: startedAt, requestId, policyId: policy.id },
