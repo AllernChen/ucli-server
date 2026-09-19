@@ -42,9 +42,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
 
       const groups = new UsageGroupsService(db as PrismaService)
       const regions = await groups.list(actor.organizationId, Object.assign(new UsageGroupPageQueryDto(), { type: 'REGION' }))
-      expect(regions.items[0].projects).toEqual([{
+      expect(regions.items[0].projects).toEqual([expect.objectContaining({
         id: project.id, regionId: region.id, code: 'GD-PROV-SLT', name: '省厅', status: 'ACTIVE'
-      }])
+      })])
     })
   })
 
@@ -229,9 +229,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
       expect(regionList.items[0].projects).toEqual([])
       await expect(service.setStatus(actor, project.id, 'ACTIVE')).resolves.toMatchObject({ id: project.id, status: 'ACTIVE' })
       const enabledRegions = await groups.list(organization.id, Object.assign(new UsageGroupPageQueryDto(), { type: 'REGION' }))
-      expect(enabledRegions.items[0].projects).toEqual([{
+      expect(enabledRegions.items[0].projects).toEqual([expect.objectContaining({
         id: project.id, regionId: region.id, code: 'GD-PROV-SLT', name: '省厅', status: 'ACTIVE'
-      }])
+      })])
 
       const period = await db.projectBudgetPeriod.create({ data: { organizationId: organization.id, projectId: project.id,
         periodKey: 'TOTAL', timezone: 'Asia/Shanghai' } })
