@@ -16,6 +16,8 @@ type GrantRecord = {
   accountId: string
   groupId?: string | null
   group?: { name: string } | null
+  projectId?: string | null
+  project?: { name: string } | null
   expiresAt: Date | null
   disabledAt: Date | null
   deletedAt: Date | null
@@ -98,6 +100,7 @@ function serializeGrant(grant: GrantRecord, now: Date) {
     id: grant.id,
     accountId: grant.accountId,
     groupId: grant.groupId ?? null, groupName: grant.group?.name ?? null,
+    projectId: grant.projectId ?? null, projectName: grant.project?.name ?? null,
     expiresAt: grant.expiresAt,
     disabledAt: grant.disabledAt,
     deletedAt: grant.deletedAt,
@@ -189,7 +192,8 @@ export class DeviceGrantsService {
     })
   }
 
-  async assignGroups(organizationId: string, actorId: string, mappings: Array<{ grantId: string; accountId: string; groupId: string }>, dryRun = false) {
+  async assignGroups(organizationId: string, actorId: string,
+    mappings: Array<{ grantId: string; accountId: string; groupId: string; projectId?: string }>, dryRun = false) {
     if (!mappings.length || mappings.length > 1000 || new Set(mappings.map(m => m.grantId)).size !== mappings.length) throw new BadRequestException('Use 1–1000 distinct grants')
     return this.prisma.$transaction(async db => {
       await this.lockOrganization(db, organizationId)
@@ -199,8 +203,21 @@ export class DeviceGrantsService {
         if (!grant) throw new NotFoundException('Device grant ownership does not match')
         if (grant.groupId) throw new ConflictException('已归组授权不可改组，请重新签发')
         await assertActiveGroupMember(db, { organizationId, accountId: item.accountId, groupId: item.groupId })
+        const group = await db.usageGroup.findUniqueOrThrow({ where: { id: item.groupId }, select: { type: true } })
+        let projectId: string | null = null
+        if (group.type === 'REGION') {
+          if (!item.projectId) throw new BadRequestException('projectId is required for a region device grant')
+          const project = await db.project.findFirst({
+            where: { id: item.projectId, organizationId, regionId: item.groupId, status: 'ACTIVE' },
+            select: { id: true }
+          })
+          if (!project) throw new NotFoundException('Active project in target region not found')
+          projectId = project.id
+        } else if (item.projectId) {
+          throw new BadRequestException('projectId is only supported for region usage groups')
+        }
         if (!dryRun) {
-          const updated = await db.deviceGrant.updateMany({ where: { id: grant.id, organizationId, accountId: item.accountId, groupId: null, deletedAt: null }, data: { groupId: item.groupId } })
+          const updated = await db.deviceGrant.updateMany({ where: { id: grant.id, organizationId, accountId: item.accountId, groupId: null, deletedAt: null }, data: { groupId: item.groupId, projectId } })
           if (updated.count !== 1) throw new ConflictException('Device grant changed; reload before assigning')
           await this.writeAudit(db, actorId, organizationId, grant.id, 'assign_group', { accountId: item.accountId, before: null, after: item.groupId })
         }
@@ -215,7 +232,21 @@ export class DeviceGrantsService {
     const credential = links.prepareCredential()
     const grant = await this.prisma.$transaction(async transaction => {
       const organization = await this.lockOrganization(transaction, organizationId)
-      if (input.groupId) await lockUsageGroup(transaction, organizationId, input.groupId)
+      let projectId: string | null = null
+      if (input.groupId) {
+        const group = await lockUsageGroup(transaction, organizationId, input.groupId)
+        if (group.type === 'REGION') {
+          if (!input.projectId) throw new BadRequestException('projectId is required for a region device grant')
+          const project = await transaction.project.findFirst({
+            where: { id: input.projectId, organizationId, regionId: input.groupId, status: 'ACTIVE' },
+            select: { id: true }
+          })
+          if (!project) throw new NotFoundException('Active project in target region not found')
+          projectId = project.id
+        } else if (input.projectId) {
+          throw new BadRequestException('projectId is only supported for region usage groups')
+        }
+      }
       await assertDeviceGroup(transaction, { organizationId, accountId, groupId: input.groupId }, organization.requireDeviceGroup)
       const eligibility = await transaction.$queryRaw<Array<{
         membershipStatus: string
@@ -241,13 +272,14 @@ export class DeviceGrantsService {
       const linkExpiresAt = parseLinkExpiry(input.linkExpiresAt, new Date())
       const origin = requirePublicUrl()
       const created = await transaction.deviceGrant.create({ data: {
-        organizationId, accountId, createdById: actorId, expiresAt, groupId: input.groupId
+        organizationId, accountId, createdById: actorId, expiresAt, groupId: input.groupId, projectId
       }, select: { id: true, expiresAt: true } })
       const link = await links.createInTransaction(transaction, {
         organizationId, actorId, grantId: created.id, expiresAt: linkExpiresAt, action: 'create', credential
       })
       await this.writeAudit(transaction, actorId, organizationId, created.id, 'create', {
-        outcome: 'success', secretHint: link.secretHint, expiresAt: created.expiresAt, groupId: input.groupId ?? null
+        outcome: 'success', secretHint: link.secretHint, expiresAt: created.expiresAt,
+        groupId: input.groupId ?? null, projectId
       })
       return { created, link, origin }
     })
@@ -423,7 +455,8 @@ export class DeviceGrantsService {
     const grants = accountIds.length ? await this.prisma.deviceGrant.findMany({
       where: { ...grantWhere, accountId: { in: accountIds } }, orderBy: { createdAt: 'desc' },
       select: {
-        id: true, accountId: true, groupId: true, group: { select: { name: true } }, expiresAt: true, disabledAt: true, deletedAt: true,
+        id: true, accountId: true, groupId: true, group: { select: { name: true } },
+        projectId: true, project: { select: { name: true } }, expiresAt: true, disabledAt: true, deletedAt: true,
         boundAt: true, deviceId: true, createdById: true, createdAt: true, updatedAt: true,
         links: { orderBy: { issuanceOrder: 'desc' }, take: 1, select: {
           id: true, secretHint: true, expiresAt: true, revokedAt: true, consumedAt: true, createdAt: true, issuanceOrder: true

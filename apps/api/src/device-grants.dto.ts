@@ -32,6 +32,7 @@ export class UpdateManagedUserRoleDto {
 
 export class CreateDeviceGrantDto {
   @ValidateIf((_, value) => value !== undefined) @IsUUID() groupId?: string
+  @ValidateIf((_, value) => value !== undefined) @IsUUID() projectId?: string
   @IsOptional() @ValidateIf((_, value) => value !== null)
   @IsDateString({ strict: true }) expiresAt?: string | null
 
@@ -42,6 +43,7 @@ export class CreateDeviceGrantDto {
 export class AssignDeviceGroupDto {
   @IsUUID() groupId!: string
   @IsUUID() accountId!: string
+  @ValidateIf((_, value) => value !== undefined) @IsUUID() projectId?: string
 }
 
 export class DeviceGroupRequirementDto {

@@ -10,6 +10,7 @@ export interface AuthPrincipal {
   organizationId: string
   deviceId?: string
   groupId?: string | null
+  projectId?: string | null
   role: 'PLATFORM_ADMIN' | 'ORG_ADMIN' | 'MEMBER'
   tokenVersion: number
 }
@@ -79,8 +80,20 @@ export class AuthGuard implements CanActivate {
       if (device.revokedAt) throw authorizationFailure('invalid_device')
       const organization = await this.assertActiveMembership(principal, principal.role)
       principal.groupId = device.grant.groupId ?? null
+      principal.projectId = device.grant.projectId ?? null
       if (principal.groupId) {
-        await assertActiveGroupMember(this.prisma, { organizationId: principal.organizationId, accountId: principal.sub, groupId: principal.groupId })
+        const member = await assertActiveGroupMember(this.prisma, { organizationId: principal.organizationId, accountId: principal.sub, groupId: principal.groupId })
+        if (member.group.type === 'REGION') {
+          if (!principal.projectId) {
+            throw new ForbiddenException({ code: 'project_required', message: 'Device must be assigned to a project' })
+          }
+          const project = await this.prisma.project.findFirst({
+            where: { id: principal.projectId, organizationId: principal.organizationId, regionId: principal.groupId, status: 'ACTIVE' }
+          })
+          if (!project) {
+            throw new ForbiddenException({ code: 'project_unavailable', message: 'Device project is unavailable' })
+          }
+        }
       } else if (organization.requireDeviceGroup) {
         throw new ForbiddenException({ code: 'group_required', message: 'Device must be assigned to a usage group' })
       }
