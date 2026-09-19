@@ -77,18 +77,32 @@ export class UsageGroupsService {
       items.sort((a, b) => order.get(a.id)! - order.get(b.id)!)
     }
     const groupId = { in: items.map(group => group.id) }
-    const [budgets, members, keys] = await Promise.all([
+    const regionIds = items.filter(group => group.type === 'REGION').map(group => group.id)
+    const [budgets, members, keys, projects] = await Promise.all([
       readGroupBudgets(this.prisma, organizationId, groupId.in, now),
       this.prisma.groupMember.groupBy({ by: ['groupId'], where: { organizationId, groupId, removedAt: null,
         group: { enabled: true, archivedAt: null, organization: { enabled: true } },
         membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } } }, _count: true }),
       this.prisma.employeeApiKey.groupBy({ by: ['groupId'], where: { organizationId, groupId, revokedAt: null, disabledAt: null, deletedAt: null,
-        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] }, _count: true })
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] }, _count: true }),
+      this.prisma.project.findMany({
+        where: { organizationId, regionId: { in: regionIds }, status: 'ACTIVE' },
+        select: { id: true, regionId: true, code: true, name: true, status: true },
+        orderBy: [{ region: { name: 'asc' } }, { name: 'asc' }]
+      })
     ])
     const memberCounts = new Map(members.map(row => [row.groupId, row._count]))
     const keyCounts = new Map(keys.map(row => [row.groupId, row._count]))
+    const projectsByRegion = new Map<string, typeof projects>()
+    for (const project of projects) {
+      const current = projectsByRegion.get(project.regionId) ?? []
+      current.push(project)
+      projectsByRegion.set(project.regionId, current)
+    }
     return { items: items.map(group => ({ ...group, budget: budgets.get(group.id)!, activeMembers: memberCounts.get(group.id) ?? 0,
-      activeKeys: keyCounts.get(group.id) ?? 0 })), total, limit: query.limit, offset: query.offset }
+      activeKeys: keyCounts.get(group.id) ?? 0,
+      ...(group.type === 'REGION' ? { projects: projectsByRegion.get(group.id) ?? [] } : {}) })),
+      total, limit: query.limit, offset: query.offset }
   }
 
   private async riskPage(organizationId: string, query: UsageGroupPageQueryDto, now: Date) {
