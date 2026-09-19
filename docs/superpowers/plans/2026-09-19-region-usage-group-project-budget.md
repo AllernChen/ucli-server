@@ -632,7 +632,7 @@ git commit -m "feat: 增加项目预算账本与接口"
 - Key summary adds `{ projectId, project: { id, code, name } }`.
 - Produces `EmployeeKeysService.projectOptions(actor, accountId, regionId)`.
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 测试必须覆盖：
 
@@ -656,7 +656,7 @@ expect(created.projectId).toBe(project.id)
 expect(created.secret.startsWith('ucli_sk_')).toBe(true)
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run:
 
@@ -666,7 +666,7 @@ npm test -- test/integration/employee-project-keys.test.ts test/auth/employee-ke
 
 Expected: FAIL，DTO 无 `projectId`。
 
-- [ ] **Step 3: 修改 DTO**
+- [x] **Step 3: 修改 DTO**
 
 ```ts
 export class CreateEmployeeKeyDto {
@@ -685,7 +685,7 @@ export class CreateEmployeeKeyDto {
 @IsOptional() @IsUUID() projectId?: string
 ```
 
-- [ ] **Step 4: 修改创建与列表**
+- [x] **Step 4: 修改创建与列表**
 
 创建事务中锁定区域后校验：
 
@@ -708,7 +708,7 @@ if (!project) throw new NotFoundException('Active project in target region not f
 { accountId: key.accountId, groupId: key.groupId, projectId: key.projectId }
 ```
 
-- [ ] **Step 5: 提供项目选项**
+- [x] **Step 5: 提供项目选项**
 
 新增：
 
@@ -719,7 +719,7 @@ GET /api/v1/me/projects?regionId=...
 
 返回该员工所属活动区域下的活动项目。数据来源是区域成员关系，不查 `ProjectMember`。
 
-- [ ] **Step 6: 运行测试**
+- [x] **Step 6: 运行测试**
 
 Run:
 
@@ -729,7 +729,7 @@ npm test -- test/integration/employee-project-keys.test.ts test/auth/employee-ke
 
 Expected: 全部通过。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add apps/api/src/employee-keys.dto.ts apps/api/src/employee-keys.service.ts apps/api/src/employee-keys.controller.ts test/integration/employee-project-keys.test.ts test/auth/employee-keys.test.ts
