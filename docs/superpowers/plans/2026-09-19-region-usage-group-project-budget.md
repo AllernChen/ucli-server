@@ -1333,7 +1333,7 @@ git commit -m "feat: 提供区域项目迁移与替换 Key 工具"
 
 - Produces release readiness record with migration, API, UI, gateway, rollback, and deployment evidence.
 
-- [ ] **Step 1: 更新领域语言**
+- [x] **Step 1: 更新领域语言**
 
 `CONTEXT.md` 增加：
 
@@ -1345,7 +1345,7 @@ git commit -m "feat: 提供区域项目迁移与替换 Key 工具"
 **项目 Key**：同时绑定员工、区域和项目的员工 API Key；AI CLI 只需配置 Base URL 和 Key。
 ```
 
-- [ ] **Step 2: 跑后端与前端 focused tests**
+- [x] **Step 2: 跑后端与前端 focused tests**
 
 Run:
 
@@ -1356,7 +1356,7 @@ npm test -- test/admin/projects.test.ts test/admin/usage-groups.test.ts
 
 Expected: 全部通过。
 
-- [ ] **Step 3: 跑全量验证**
+- [x] **Step 3: 跑全量验证**
 
 Run:
 
@@ -1366,7 +1366,7 @@ npm run verify
 
 Expected: typecheck、coverage、build、admin build、license gate 全部通过。
 
-- [ ] **Step 4: 本地真库端到端验收**
+- [x] **Step 4: 本地真库端到端验收**
 
 场景：
 
@@ -1381,7 +1381,7 @@ Expected: typecheck、coverage、build、admin build、license gate 全部通过
 9. 伪造 `X-UCLI-Project-Id` 为其它项目，断言归因不变；
 10. 归档项目，断言 Key 拒绝且历史日志仍可查。
 
-- [ ] **Step 5: 记录发布门禁**
+- [x] **Step 5: 记录发布门禁**
 
 `docs/release-0.8.0.md` 必须包含：
 
@@ -1394,7 +1394,7 @@ Expected: typecheck、coverage、build、admin build、license gate 全部通过
 - 公司服务器部署前备份要求；
 - 回滚边界。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add docs/release-0.8.0.md README.md CONTEXT.md
