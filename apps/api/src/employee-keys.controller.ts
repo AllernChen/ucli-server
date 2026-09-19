@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, Header, Param, Patch, Post, Query, Req, 
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { AuthGuard, Roles, type AuthPrincipal } from '../../../packages/security/src/auth.js'
 import { UuidPipe } from '../../../packages/http/src/uuid.pipe.js'
-import { CreateEmployeeKeyDto, EmployeeKeyQueryDto, UpdateEmployeeKeyDto } from './employee-keys.dto.js'
+import { CreateEmployeeKeyDto, EmployeeKeyQueryDto, ProjectOptionQueryDto, UpdateEmployeeKeyDto } from './employee-keys.dto.js'
 import { EmployeeKeysService } from './employee-keys.service.js'
 
 type AuthRequest = { principal: AuthPrincipal }
@@ -14,6 +14,10 @@ export class EmployeeKeysController {
   groups(@Req() req: AuthRequest, @Param('accountId', UuidPipe) accountId: string) { return this.keys.groups(req.principal, accountId) }
   @Get('me/usage-groups') @Header('Cache-Control', 'no-store')
   myGroups(@Req() req: AuthRequest) { return this.keys.groups(req.principal) }
+  @Get('admin/users/:accountId/projects') @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Header('Cache-Control', 'no-store')
+  managedProjects(@Req() req: AuthRequest, @Param('accountId', UuidPipe) accountId: string, @Query() query: ProjectOptionQueryDto) { return this.keys.projectOptions(req.principal, accountId, query.regionId) }
+  @Get('me/projects') @Header('Cache-Control', 'no-store')
+  myProjects(@Req() req: AuthRequest, @Query() query: ProjectOptionQueryDto) { return this.keys.projectOptions(req.principal, undefined, query.regionId) }
   @Get('admin/users/:accountId/api-keys') @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Header('Cache-Control', 'no-store')
   list(@Req() req: AuthRequest, @Param('accountId', UuidPipe) accountId: string, @Query() query: EmployeeKeyQueryDto) { return this.keys.list(req.principal, accountId, query) }
   @Get('admin/employee-api-keys') @Roles('PLATFORM_ADMIN', 'ORG_ADMIN') @Header('Cache-Control', 'no-store')

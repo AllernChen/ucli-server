@@ -8,7 +8,8 @@ import { PageQueryDto } from './catalog.dto.js'
 import { EmployeeKeyQueryDto, type CreateEmployeeKeyDto, type UpdateEmployeeKeyDto } from './employee-keys.dto.js'
 
 const keySummary = Prisma.validator<Prisma.EmployeeApiKeySelect>()({
-  id: true, organizationId: true, accountId: true, groupId: true, name: true, secretHint: true,
+  id: true, organizationId: true, accountId: true, groupId: true, projectId: true,
+  name: true, secretHint: true, project: { select: { id: true, code: true, name: true } },
   createdAt: true, createdById: true, expiresAt: true, disabledAt: true, revokedAt: true, deletedAt: true, lastUsedAt: true
 })
 
@@ -16,6 +17,7 @@ const keyListSummary = Prisma.validator<Prisma.EmployeeApiKeySelect>()({
   ...keySummary,
   membership: { select: { account: { select: { id: true, displayName: true, email: true } } } },
   group: { select: { id: true, name: true } },
+  project: { select: { id: true, code: true, name: true } },
   createdBy: { select: { id: true, displayName: true } }
 })
 
@@ -47,10 +49,28 @@ export class EmployeeKeysService {
     if (actor.deviceId) throw new ForbiddenException('Web login required')
   }
 
-  private audit(db: Prisma.TransactionClient, actor: AuthPrincipal, key: { id: string; accountId: string; groupId: string }, action: string) {
+  private audit(db: Prisma.TransactionClient, actor: AuthPrincipal,
+    key: { id: string; accountId: string; groupId: string; projectId?: string | null }, action: string) {
     return db.auditLog.create({ data: { actorAccountId: actor.sub, organizationId: actor.organizationId,
       action: `employee_api_key.${action}`, resourceType: 'employee_api_key', resourceId: key.id,
-      metadata: { accountId: key.accountId, groupId: key.groupId } } })
+      metadata: { accountId: key.accountId, groupId: key.groupId, projectId: key.projectId ?? null } } })
+  }
+
+  async projectOptions(actor: AuthPrincipal, accountId: string | undefined, regionId: string) {
+    if (accountId !== undefined) this.assertAdmin(actor)
+    else this.assertWebSession(actor)
+    return this.prisma.project.findMany({
+      where: {
+        organizationId: actor.organizationId, regionId, status: 'ACTIVE',
+        region: {
+          type: 'REGION', enabled: true, archivedAt: null,
+          members: { some: { accountId: accountId ?? actor.sub, removedAt: null,
+            membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } } } }
+        }
+      },
+      select: { id: true, code: true, name: true, regionId: true },
+      orderBy: { name: 'asc' }
+    })
   }
 
   async create(actor: AuthPrincipal, accountId: string, input: CreateEmployeeKeyDto) {
@@ -58,10 +78,22 @@ export class EmployeeKeysService {
     const expiresAt = expiry(input.expiresAt)
     const secret = `ucli_sk_${createOpaqueToken()}`
     const key = await this.prisma.$transaction(async db => {
-      await lockUsageGroup(db, actor.organizationId, input.groupId)
+      const region = await lockUsageGroup(db, actor.organizationId, input.groupId)
       await assertActiveGroupMember(db, { organizationId: actor.organizationId, accountId, groupId: input.groupId })
+      let projectId: string | null = null
+      if (region.type === 'REGION') {
+        if (!input.projectId) throw new BadRequestException('projectId is required for a region employee API key')
+        const project = await db.project.findFirst({
+          where: { id: input.projectId, organizationId: actor.organizationId, regionId: input.groupId, status: 'ACTIVE' },
+          select: { id: true }
+        })
+        if (!project) throw new NotFoundException('Active project in target region not found')
+        projectId = project.id
+      } else if (input.projectId) {
+        throw new BadRequestException('projectId is only supported for region usage groups')
+      }
       const created = await db.employeeApiKey.create({ data: { organizationId: actor.organizationId, accountId,
-        groupId: input.groupId, name: input.name, createdById: actor.sub, expiresAt,
+        groupId: input.groupId, projectId, name: input.name, createdById: actor.sub, expiresAt,
         secretHash: hashOpaqueToken(secret), secretHint: opaqueTokenHint(secret) }, select: keySummary })
       await this.audit(db, actor, created, 'create')
       return created
@@ -97,8 +129,8 @@ export class EmployeeKeysService {
         select: { id: true, name: true }, orderBy: { name: 'asc' } }) : Promise.resolve([])
     ])
     return { items: items.map(item => {
-      const { membership, group, createdBy, ...key } = item
-      return { ...key, account: membership.account, group, createdBy }
+      const { membership, group, project, createdBy, ...key } = item
+      return { ...key, account: membership.account, group, project, createdBy }
     }), total, offset: query.offset, limit: query.limit, ...(!managed ? { filterGroups } : {}) }
   }
 
@@ -106,6 +138,7 @@ export class EmployeeKeysService {
     const filters: Prisma.EmployeeApiKeyWhereInput[] = [{ organizationId, deletedAt: null }]
     if (accountId) filters.push({ accountId })
     if (query.groupId) filters.push({ groupId: query.groupId })
+    if (query.projectId) filters.push({ projectId: query.projectId })
     if (query.status) filters.push({
       revoked: { revokedAt: { not: null } },
       disabled: { revokedAt: null, disabledAt: { not: null } },
