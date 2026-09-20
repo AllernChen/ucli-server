@@ -75,6 +75,20 @@ INSERT INTO "target_primary_memberships" VALUES
   ('wang02@ucli.local', '工程部'),
   ('miao01@ucli.local', '工程部');
 
+-- The agreed engineering roster includes 陈程浩, but the 0.8.2 production snapshot has no account for him.
+-- Create the no-password account with the project placeholder convention so organization convergence remains deterministic.
+INSERT INTO "accounts" ("id", "email", "display_name", "status", "token_version", "created_at")
+SELECT gen_random_uuid(), 'chen02@ucli.local', '陈程浩', 'ACTIVE', 1, CURRENT_TIMESTAMP
+WHERE EXISTS (SELECT 1 FROM "organizations")
+  AND NOT EXISTS (SELECT 1 FROM "accounts" WHERE "email" = 'chen02@ucli.local');
+
+INSERT INTO "memberships" ("organization_id", "account_id", "role", "status")
+SELECT g."organization_id", a."id", 'MEMBER', 'ACTIVE'
+FROM "accounts" a
+JOIN "usage_groups" g ON g."name" = '工程部'
+WHERE a."email" = 'chen02@ucli.local'
+ON CONFLICT ("organization_id", "account_id") DO NOTHING;
+
 DO $$
 DECLARE
   missing_targets INTEGER;
