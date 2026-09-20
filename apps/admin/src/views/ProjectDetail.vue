@@ -20,6 +20,16 @@ const tab = ref(String(route.query.tab || 'overview'))
 const id = computed(() => String(route.params.id))
 const members = computed(() => project.value?.members || [])
 const roleLabel = { OWNER: '负责人', CONTRIBUTOR: '成员', VIEWER: '观察者' } as const
+const activeKeys = computed(() => keys.value.items.filter(key => !key.revokedAt && !key.disabledAt && !key.deletedAt))
+const owners = computed(() => members.value.filter(member => member.role === 'OWNER'))
+const budgetProgress = computed(() => {
+  if (!budget.value) return null
+  if (budget.value.unlimited) return null
+  const limit = Number(budget.value.limitCny || 0)
+  if (limit <= 0) return 0
+  const occupied = Number(budget.value.spentCny || 0) + Number(budget.value.reservedCny || 0)
+  return Math.min(100, Math.max(0, Math.round(occupied / limit * 100)))
+})
 const memberForm = reactive({ accountId: '', role: 'CONTRIBUTOR' })
 const budgetForm = reactive({ requestedTotalCny: '', unlimited: false, reason: '' })
 const actionPending = ref(false), actionError = ref('')
@@ -56,7 +66,7 @@ async function load() {
     const loadedProject = await api<Project>(`/api/v1/admin/projects/${id.value}`)
     const [loadedBudget, loadedKeys, loadedApplications, loadedCandidates] = await Promise.all([
       api<ProjectBudget>(`/api/v1/admin/projects/${id.value}/budget`),
-      api<Page<any>>(`/api/v1/admin/employee-api-keys?projectId=${id.value}&limit=50`),
+      api<Page<any>>(`/api/v1/admin/employee-api-keys?projectId=${id.value}&limit=200`),
       api<Page<any>>(`/api/v1/admin/projects/${id.value}/budget-applications?limit=20`),
       api<Page<any>>(`/api/v1/admin/org-units/${loadedProject.regionId}/members?limit=100`)
     ])
@@ -96,7 +106,17 @@ watch(() => route.query.tab, value => { tab.value = String(value || 'overview') 
   <p v-if="error" class="state error" role="alert">{{ error }}</p><p v-if="loading" class="state">正在加载项目…</p>
   <template v-else-if="project">
     <nav class="tabs"><button :class="{ active: tab === 'overview' }" @click="tab = 'overview'">概览</button><button :class="{ active: tab === 'budget' }" data-tab="budget" @click="tab = 'budget'">预算</button><button :class="{ active: tab === 'keys' }" @click="tab = 'keys'">项目 Key</button><button :class="{ active: tab === 'members' }" data-tab="members" @click="tab = 'members'">成员</button></nav>
-    <section v-if="tab === 'overview'" class="panel"><h2>基本信息</h2><p>状态：{{ project.status }}</p><p>项目类型：{{ project.category === 'DEPARTMENT' ? '部门预算项目' : '业务项目' }}</p><p>所属部门：{{ project.region.name }}</p><p>说明：{{ project.description || '—' }}</p><p>预算模式：{{ project.budgetMode === 'TOTAL' ? '项目总额' : '自然月' }}</p></section>
+    <section v-if="tab === 'overview'" class="panel">
+      <h2>项目概述</h2>
+      <div class="detail-grid">
+        <article class="panel metric-block"><span>项目预算</span><strong class="small-strong">{{ budget?.unlimited ? '不限额' : formatCny(budget?.limitCny || '0') }}</strong><small>预算模式：{{ project.budgetMode === 'TOTAL' ? '项目总额' : '自然月' }}</small></article>
+        <article class="panel metric-block"><span>已用 / 预占</span><strong class="small-strong">{{ formatCny(budget?.spentCny || '0') }} / {{ formatCny(budget?.reservedCny || '0') }}</strong><small>可用：{{ budget?.unlimited ? '不限额' : formatCny(budget?.availableCny || '0') }}</small></article>
+        <article class="panel metric-block"><span>人员情况</span><strong class="small-strong">{{ members.length }}</strong><small>负责人 {{ owners.length }} · {{ owners.map(owner => owner.membership?.account.displayName).join('、') || '未设置' }}</small></article>
+        <article class="panel metric-block"><span>有效项目 Key</span><strong class="small-strong">{{ activeKeys.length }}</strong><small>共 {{ keys.total }} 把历史 Key</small></article>
+      </div>
+      <progress v-if="budgetProgress != null" :value="budgetProgress" max="100" aria-label="项目预算使用率"></progress><span v-if="budgetProgress != null">{{ budgetProgress }}%</span>
+      <p>状态：{{ project.status }}</p><p>项目类型：{{ project.category === 'DEPARTMENT' ? '部门预算项目' : '业务项目' }}</p><p>所属部门：{{ project.region.name }}</p><p>说明：{{ project.description || '—' }}</p><p>预算模式：{{ project.budgetMode === 'TOTAL' ? '项目总额' : '自然月' }}</p>
+    </section>
     <section v-if="tab === 'budget'" class="panel"><h2>项目预算</h2><template v-if="budget"><p>额度：{{ budget.unlimited ? '不限额' : formatCny(budget.limitCny) }}</p><p>已用：{{ formatCny(budget.spentCny) }} · 预占：{{ formatCny(budget.reservedCny) }}</p><p>可用：{{ budget.unlimited ? '不限额' : formatCny(budget.availableCny || '0') }}</p></template>
       <h3>预算申请</h3><p class="muted">填写批复后项目总额度；平台管理员可本人申请并批复。</p>
       <form class="form-row" @submit.prevent="submitAndApprove"><label>申请后项目总额<input v-model="budgetForm.requestedTotalCny" aria-label="申请后项目总额" inputmode="decimal" required></label><label>原因<input v-model="budgetForm.reason" aria-label="预算申请原因" required maxlength="2000"></label><button type="button" data-action="submit-and-approve" :disabled="actionPending || !budgetForm.requestedTotalCny || !budgetForm.reason.trim()" @click="submitAndApprove">提交并批复</button></form>

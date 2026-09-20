@@ -5,12 +5,21 @@ import { api } from '../api'
 import { createRequestLifecycle, type Page } from '../device-grants'
 import Pagination from '../components/Pagination.vue'
 import Drawer from '../components/Drawer.vue'
+import { formatCny } from '../currency'
 
 type OrgUnitKind = 'EXECUTIVE' | 'FUNCTIONAL' | 'REGION' | 'LEGACY_PROJECT'
 type OrgUnit = {
   id: string; name: string; orgType: OrgUnitKind; description?: string; enabled: boolean; archivedAt: string | null
   memberCount: number; activeKeyCount: number; activeProjectCount: number; modelCount: number
   departmentProject?: { id: string; name: string; category: 'DEPARTMENT' } | null
+  budget?: {
+    projectCount: number; totalLimitCny: string; spentCny: string; reservedCny: string
+    occupiedCny: string; availableCny: string | null; usagePercent: number | null
+    unlimitedProjectCount: number; alertProjectCount: number
+  }
+  usage?: {
+    requests: number; totalTokens: string; costCny: string; activeAccounts: number; lastUsedAt: string | null
+  }
 }
 
 const router = useRouter(), lifecycle = createRequestLifecycle()
@@ -26,6 +35,7 @@ const kindOptions = [
 const kindLabel = computed(() => ({
   EXECUTIVE: '经营层', FUNCTIONAL: '职能部门', REGION: '区域部门', LEGACY_PROJECT: '历史项目组'
 } as Record<OrgUnitKind, string>))
+const tokens = (value: string | number | null | undefined) => value == null ? '—' : BigInt(value).toLocaleString('zh-CN')
 function query() {
   const params = new URLSearchParams({ status: 'active', offset: String(filters.offset), limit: '20' })
   if (filters.kind) params.set('kind', filters.kind)
@@ -62,12 +72,23 @@ watch(filters, () => void load(), { immediate: true, deep: true })
   <p v-if="error" class="state error" role="alert">{{ error }}</p>
   <p v-if="loading" class="state">正在加载组织…</p>
   <section v-else class="panel table-panel">
-    <table v-if="rows.items.length"><thead><tr><th>组织</th><th>类型</th><th>负责人 / 成员</th><th>项目</th><th>模型 / Key</th><th>部门预算项目</th><th>操作</th></tr></thead>
+    <table v-if="rows.items.length"><thead><tr><th>组织</th><th>类型</th><th>负责人 / 成员</th><th>项目</th><th>预算进度</th><th>模型 / Key</th><th>部门预算项目</th><th>操作</th></tr></thead>
       <tbody><tr v-for="org in rows.items" :key="org.id">
         <td><button class="back-link" @click="router.push(`/org-units/${org.id}`)">{{ org.name }}</button><small>{{ org.description || '—' }}</small></td>
         <td>{{ kindLabel[org.orgType] }}</td>
         <td>成员 {{ org.memberCount }}</td>
-        <td>{{ org.activeProjectCount }}</td>
+        <td>{{ org.activeProjectCount }}<small>预算 {{ org.budget?.projectCount ?? 0 }}</small></td>
+        <td>
+          <template v-if="org.budget">
+            <strong>{{ formatCny(org.budget.occupiedCny) }} / {{ org.budget.availableCny == null ? '不限额' : formatCny(org.budget.totalLimitCny) }}</strong>
+            <small>已用 {{ formatCny(org.budget.spentCny) }} · 预占 {{ formatCny(org.budget.reservedCny) }}</small>
+            <progress v-if="org.budget.usagePercent != null" :value="org.budget.usagePercent" max="100" aria-label="组织预算使用率"></progress>
+            <small v-if="org.budget.usagePercent != null">{{ org.budget.usagePercent }}%</small>
+            <small v-if="org.budget.unlimitedProjectCount">包含不限额项目 {{ org.budget.unlimitedProjectCount }}</small>
+            <small v-if="org.budget.alertProjectCount">{{ org.budget.alertProjectCount }} 个项目接近或达到预算</small>
+          </template>
+          <span v-else>—</span>
+        </td>
         <td>{{ org.modelCount }} / {{ org.activeKeyCount }}</td>
         <td>{{ org.departmentProject?.name || '—' }}</td>
         <td><button @click="router.push(`/org-units/${org.id}`)">详情</button></td>

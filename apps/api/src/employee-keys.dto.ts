@@ -36,3 +36,9 @@ export class RevealEmployeeKeyDto {
   @Length(1, 200)
   password!: string
 }
+
+export class RevealOwnEmployeeKeyDto {
+  @IsString()
+  @Length(1, 200)
+  password!: string
+}
