@@ -84,13 +84,13 @@ it('shows led groups with budget cards, drills into usage, and submits applicati
 it('tells members without leadership that the led-groups tab is empty', async () => {
   const { w } = await render('led-groups')
   expect(state.api).toHaveBeenCalledWith('/api/v1/me/led-groups')
-  expect(w.text()).toContain('您还不是任何用量组的负责人')
+  expect(w.text()).toContain('您还不是任何组织的负责人')
 })
 
 it('keeps group errors distinct from an empty list and previews models only on demand', async () => {
   state.api.mockRejectedValueOnce(new Error('无法连接'))
   const { w } = await render('groups')
-  expect(w.text()).toContain('无法连接'); expect(w.text()).not.toContain('暂无用量组')
+  expect(w.text()).toContain('无法连接'); expect(w.text()).not.toContain('暂无组织')
   state.api.mockResolvedValueOnce([{ id: 'g', name: '研发', type: 'PROJECT', enabled: true, archivedAt: null, joinedAt: '2026-09-01T00:00:00Z' }])
   await w.get('[data-retry]').trigger('click'); await flushPromises()
   expect(w.text()).toContain('研发')
@@ -120,5 +120,5 @@ it('does not display stale group results after changing tabs and identity', asyn
   expect(w.get<HTMLInputElement>('[aria-label="显示名称"]').element.value).toBe('另一人')
   state.api.mockResolvedValueOnce([])
   await router.push('/profile?tab=groups'); await flushPromises()
-  expect(w.text()).toContain('暂无用量组')
+  expect(w.text()).toContain('暂无组织')
 })

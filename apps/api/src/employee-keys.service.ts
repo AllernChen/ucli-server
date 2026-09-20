@@ -73,7 +73,7 @@ export class EmployeeKeysService {
       where: {
         organizationId: actor.organizationId, regionId, status: 'ACTIVE',
         region: {
-          type: 'REGION', enabled: true, archivedAt: null,
+          orgType: { in: ['REGION', 'FUNCTIONAL', 'EXECUTIVE'] }, enabled: true, archivedAt: null,
           members: { some: { accountId: accountId ?? actor.sub, removedAt: null,
             membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } } } }
         }

@@ -18,17 +18,17 @@ export class MeProjectsService {
         status: 'ACTIVE',
         ...(regionId ? { regionId } : {}),
         region: {
-          type: 'REGION',
+          orgType: { in: ['REGION', 'FUNCTIONAL', 'EXECUTIVE'] },
           enabled: true,
           archivedAt: null,
-          members: {
-            some: {
-              accountId: actor.sub,
-              removedAt: null,
-              membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } }
-            }
-          }
-        }
+          organization: { enabled: true }
+        },
+        OR: [
+          { members: { some: { accountId: actor.sub,
+            membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } } } } },
+          { region: { members: { some: { accountId: actor.sub, removedAt: null,
+            membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } } } } } }
+        ]
       },
       select: {
         id: true,
@@ -36,6 +36,7 @@ export class MeProjectsService {
         name: true,
         description: true,
         status: true,
+        category: true,
         region: { select: { id: true, name: true } }
       },
       orderBy: [{ region: { name: 'asc' } }, { name: 'asc' }]
