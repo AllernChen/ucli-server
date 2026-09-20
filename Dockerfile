@@ -13,6 +13,7 @@ RUN npm config set fetch-retries 10 && npm config set fetch-retry-mintimeout 200
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=build /app/prisma ./prisma
+COPY --from=build /app/scripts ./scripts
 USER node
 CMD ["node", "dist/apps/api/src/main.js"]
 
