@@ -1,8 +1,10 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { OrgUnitType, Prisma, type UsageGroup } from '@prisma/client'
 import { randomUUID } from 'node:crypto'
+import Decimal from 'decimal.js'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import type { AuthPrincipal } from '../../../packages/security/src/auth.js'
+import { readProjectBudgets } from '../../../packages/quota/src/project-budget-read.js'
 import { PageQueryDto } from './catalog.dto.js'
 import { OrgUnitPageQueryDto, type CreateOrgUnitDto, type UpdateOrgUnitDto } from './org-units.dto.js'
 
@@ -62,15 +64,17 @@ export class OrgUnitsService {
             models: true,
             keys: { where: { revokedAt: null, disabledAt: null, deletedAt: null } }
           } },
-          projects: { where: { category: 'DEPARTMENT', status: 'ACTIVE' },
-            select: { id: true, code: true, name: true, status: true, category: true } }
+          projects: { where: { status: 'ACTIVE' },
+            select: { id: true, category: true } }
         } }),
       this.prisma.usageGroup.count({ where })
     ])
+    const summaries = await this.summarizeOrganizations(organizationId, groups)
     return { items: groups.map(group => {
       const departmentProject = group.projects.find(project => project.category === 'DEPARTMENT') ?? null
       return { ...group, projects: undefined, departmentProject,
-        memberCount: group._count.members, modelCount: group._count.models, activeKeyCount: group._count.keys }
+        memberCount: group._count.members, modelCount: group._count.models, activeKeyCount: group._count.keys,
+        budget: summaries.get(group.id)?.budget, usage: summaries.get(group.id)?.usage }
     }), total, limit: query.limit, offset: query.offset }
   }
 
@@ -86,12 +90,85 @@ export class OrgUnitsService {
         projects: { where: { status: 'ACTIVE' }, orderBy: [{ category: 'asc' }, { name: 'asc' }],
           select: { id: true, code: true, name: true, status: true, category: true,
             _count: { select: { members: true, employeeKeys: { where: { revokedAt: null, disabledAt: null, deletedAt: null } } } } } }
-      } })
+    } })
     if (!group) throw new NotFoundException('Organization unit not found')
     const { projects, _count, ...summary } = group
+    const summaries = await this.summarizeOrganizations(organizationId, [group])
     return { ...summary, projects, memberCount: _count.members, modelCount: _count.models,
       activeKeyCount: _count.keys, activeProjectCount: _count.projects,
+      budget: summaries.get(id)?.budget, usage: summaries.get(id)?.usage,
       departmentProject: projects.find(project => project.category === 'DEPARTMENT') ?? null }
+  }
+
+  private async summarizeOrganizations(organizationId: string, groups: UsageGroup[]) {
+    const organizationsById = new Map(groups.map(group => [group.id, group]))
+    const projects = await this.prisma.project.findMany({ where: {
+      organizationId, regionId: { in: [...organizationsById.keys()] }, status: 'ACTIVE'
+    }, select: { id: true, regionId: true, status: true, category: true } })
+    const projectIds = projects.map(project => project.id)
+    const since = new Date(Date.now() - 30 * 86_400_000)
+    const budgets = await readProjectBudgets(this.prisma, organizationId, projectIds)
+    const usageWhere = {
+      organizationId, budgetProjectId: { in: projectIds }, startedAt: { gte: since }
+    }
+    const usageRows = projectIds.length ? await this.prisma.usageLog.groupBy({
+      by: ['budgetProjectId'], where: usageWhere,
+      _count: { _all: true },
+      _sum: { inputTokens: true, outputTokens: true, costUsd: true },
+      _max: { startedAt: true }
+    }) : []
+    const activeAccountRows = projectIds.length ? await this.prisma.usageLog.findMany({
+      where: usageWhere, select: { budgetProjectId: true, accountId: true }, distinct: ['budgetProjectId', 'accountId']
+    }) : []
+    const usageByProject = new Map(usageRows.filter(row => row.budgetProjectId).map(row => [row.budgetProjectId, {
+      requests: row._count._all,
+      totalTokens: ((row._sum.inputTokens ?? 0n) + (row._sum.outputTokens ?? 0n)).toString(),
+      costCny: new Decimal(row._sum.costUsd ?? 0).toFixed(8),
+      activeAccounts: activeAccountRows.filter(item => item.budgetProjectId === row.budgetProjectId).length,
+      lastUsedAt: row._max.startedAt
+    }]))
+    return new Map(groups.map(group => {
+      const owned = projects.filter(project => project.regionId === group.id)
+      const summaries = owned.map(project => ({ project, budget: budgets.get(project.id) }))
+      const unlimitedCount = summaries.filter(item => item.budget?.unlimited).length
+      const totalLimit = summaries.reduce((sum, item) => sum.plus(item.budget?.limitCny || 0), new Decimal(0))
+      const spent = summaries.reduce((sum, item) => sum.plus(item.budget?.spentCny || 0), new Decimal(0))
+      const reserved = summaries.reduce((sum, item) => sum.plus(item.budget?.reservedCny || 0), new Decimal(0))
+      const occupied = spent.plus(reserved)
+      const available = summaries.some(item => item.budget?.unlimited) ? null : Decimal.max(totalLimit.minus(occupied), 0)
+      const alertCount = summaries.filter(item => {
+        if (!item.budget || item.budget.unlimited) return false
+        const limit = new Decimal(item.budget.limitCny)
+        const used = new Decimal(item.budget.spentCny).plus(item.budget.reservedCny)
+        return limit.greaterThan(0) && used.dividedBy(limit).greaterThanOrEqualTo(0.8)
+      }).length
+      const usage = owned.reduce((sum, project) => {
+        const value = usageByProject.get(project.id)
+        if (!value) return sum
+        return {
+          requests: sum.requests + value.requests,
+          totalTokens: (BigInt(sum.totalTokens) + BigInt(value.totalTokens)).toString(),
+          costCny: new Decimal(sum.costCny).plus(value.costCny).toFixed(8),
+          activeAccounts: sum.activeAccounts + value.activeAccounts,
+          lastUsedAt: !sum.lastUsedAt || (value.lastUsedAt && value.lastUsedAt > new Date(sum.lastUsedAt)) ? value.lastUsedAt?.toISOString() ?? sum.lastUsedAt : sum.lastUsedAt
+        }
+      }, { requests: 0, totalTokens: '0', costCny: '0.00000000', activeAccounts: 0, lastUsedAt: null as string | null })
+      return [group.id, {
+        budget: {
+          projectCount: owned.length,
+          budgetProjectCount: owned.filter(project => project.category === 'DEPARTMENT').length,
+          unlimitedProjectCount: unlimitedCount,
+          totalLimitCny: totalLimit.toFixed(8),
+          spentCny: spent.toFixed(8),
+          reservedCny: reserved.toFixed(8),
+          occupiedCny: occupied.toFixed(8),
+          availableCny: available?.toFixed(8) ?? null,
+          usagePercent: !unlimitedCount && totalLimit.greaterThan(0) ? Number(occupied.dividedBy(totalLimit).times(100).toFixed(2)) : null,
+          alertProjectCount: alertCount
+        },
+        usage
+      }]
+    }))
   }
 
   update(actor: AuthPrincipal, id: string, input: UpdateOrgUnitDto) {
