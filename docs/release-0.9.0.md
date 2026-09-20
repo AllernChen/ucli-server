@@ -1,6 +1,6 @@
 # 0.9.0 — 组织、部门预算项目与项目 Key 收敛
 
-状态：2026-09-20 代码与隔离迁移演练完成，待发布公司服务器。实现源提交 `4f46311b6bfb37ed288465fb819f5cc4d8e27d28`。
+状态：2026-09-20 已部署公司服务器并通过基础设施、组织数据、项目 Key 与预算烟测。代码完成提交 `4f46311b6bfb37ed288465fb819f5cc4d8e27d28`，发布源提交 `ec2f014253e1a74771363b32a4074a58fe626352`，main 合并提交 `8736f512fb7bc1b057943d970e0b694b6fe24af3`，CI run `35495502573` 三 Job 全绿。
 
 ## 变更范围
 
@@ -97,26 +97,94 @@ LEGACY_PROJECT organizations = 14
 
 ## 发布件
 
-待最终打包后补充：
+- 离线包：`ucli-server_0.9.0_20260920_ec2f014.tar.gz`
+- 包 SHA-256：`d68cf072a887bc95da7ab3a0e87fc36e726744cec5184df1efb7e6fa8e294148`
+- 包大小：208,848,337 bytes
+- 包内 8 项 `SHA256SUMS` 全部通过；
+- 未包含 `.env`、凭据、私钥或数据库备份；
+- runtime 镜像 ID：`sha256:57f959b0d6a0ca667f5d4ac1c60c5f35c0894bf194fdb60b857ef2008361b1ed`
+- web 镜像 ID：`sha256:52c2443d2e3a11c0fdacbaf7002037b6644c4da464ecf75fb896b063fa0fba51`
 
-- 离线包路径；
-- 包 SHA-256；
-- runtime 镜像 ID；
-- web 镜像 ID；
-- `SHA256SUMS` 校验结果。
+## 公司服务器部署记录（2026-09-20）
 
-## 公司服务器部署记录
+- 升级前版本：0.8.2，源提交 `71abff660f3b5d17d7ee2e719beb4d3cb2ee0037`
+- 升级前备份：
+  - `/data/ucli-server/backups/production-082-71abff6-before-090-8736f5-20260920/`
+  - 数据库备份 SHA-256：`3ee3d0db8a002d145ad57bd5cea330f92ab77adc4a275bec8ca41acf6ea862f8`
+  - 0.8.2 双镜像归档 SHA-256：`15bd33ff75bdfb50894cd50cb9094cbb884ca1c9da32f2e8d9ba963a6ae618f5`
+  - 备份内 7 项 `SHA256SUMS` 全部通过。
+- `conf/.env` 仅替换 `VERSION=0.8.2` → `0.9.0`；`MASTER_KEY` 未读取、未展示、未修改。
+- `./install.sh update` 先执行迁移，再重建应用容器。
+- 迁移 `202609200001_org_project_convergence` 成功应用；当前共 21 条迁移，无待应用迁移。
+- 部署后 API / Gateway 健康，PostgreSQL / Redis 均 `ok`，Worker 与 Web 正常运行。
+- 四个应用容器均运行 `RELEASE` 中记录的 0.9.0 镜像 ID。
+- 外部页面 HTTP 200。
 
-待部署后补充：
+## 生产组织与项目验收
 
-- 升级前备份路径与哈希；
-- 迁移执行结果；
-- 容器健康检查；
-- 组织快照；
-- 部门预算批复记录；
-- 替换 Key 数量；
-- 旧 Key 撤销结果；
-- 浏览器验收结果。
+组织快照：
+
+```text
+公司经营层 | EXECUTIVE | 3 名成员
+工程部 | FUNCTIONAL | 4 名成员
+研发部 | FUNCTIONAL | 4 名成员
+北京-GAB区域 | REGION
+广东-东莞区域 | REGION
+广东-市局区域 | REGION
+广东-省厅区域 | REGION
+广东-花都区域 | REGION
+江苏-苏州区域 | REGION
+贵州区域 | REGION
+研发验收组 | LEGACY_PROJECT
+```
+
+部门预算项目：
+
+```text
+公司经营层-部门预算 | 3 名成员
+工程部-部门预算 | 4 名成员
+研发部-部门预算 | 4 名成员
+```
+
+平台管理员已通过“提交并批复”为三个部门项目设置初始总额 ¥100：
+
+```text
+公司经营层-部门预算：¥100，selfApproved=true
+工程部-部门预算：¥100，selfApproved=true
+研发部-部门预算：¥100，selfApproved=true
+```
+
+## 协议与项目 Key 验收
+
+- 为 `deepseek-v4-flash` 增加 `OPENAI_CHAT` 渠道映射，并配置全天基础价、上午高峰价、下午高峰价。
+- 为 11 名部门成员签发部门预算项目 Key：
+  - 公司经营层：李健、罗晰伊、王宇；
+  - 研发部：陈旭均、姚依林、何雪岚、石教帅；
+  - 工程部：曹庆杰、陈程浩、汪立波、苗美静。
+- 使用公司经营层新项目 Key 通过 `/gateway/v1/chat/completions` 发起最小 `OPENAI_CHAT` 请求：
+  - HTTP 200；
+  - 项目预算已结算 ¥0.00003600；
+  - 预占为 ¥0；
+  - 完整 Key 未输出到日志或回复。
+- 撤销最后一把仍活跃且未绑定项目的旧 Key `c69d7cba-0fa2-416b-87af-365c9fff9b64`。
+- 当前活跃且未绑定项目的旧 Key 数量为 0。
+
+## 浏览器验收状态
+
+已完成：
+
+- 外部 Web 页面 HTTP 200；
+- 管理端构建通过；
+- 组织、项目、预算、Key 组件测试通过；
+- 生产只读 API 验收通过。
+
+仍建议管理员在浏览器中抽查：
+
+- `/org-units` 组织列表与详情；
+- 项目成员添加/移除；
+- 项目 Key 查看/复制；
+- 预算申请与“提交并批复”记录；
+- 员工详情的组织与项目展示。
 
 ## 回滚要求
 
