@@ -25,6 +25,8 @@ const keyListSummary = Prisma.validator<Prisma.EmployeeApiKeySelect>()({
   createdBy: { select: { id: true, displayName: true } }
 })
 
+const revealAttempts = new Map<string, { count: number; resetAt: number }>()
+
 function expiry(value: string | null | undefined): Date | null | undefined {
   if (value === null || value === undefined) return value
   const date = new Date(value)
@@ -177,6 +179,42 @@ export class EmployeeKeysService {
       throw new ConflictException('Stored key cannot be decrypted with the current MASTER_KEY')
     }
     await this.prisma.$transaction(db => this.audit(db, actor, key, 'reveal'))
+    return { id: key.id, secret }
+  }
+
+  async revealOwn(actor: AuthPrincipal, id: string, input: { password: string }) {
+    this.assertWebSession(actor)
+    const throttleKey = `${actor.organizationId}:${actor.sub}`
+    const attempts = revealAttempts.get(throttleKey)
+    if (attempts && attempts.count >= 5 && attempts.resetAt > Date.now()) {
+      throw new UnauthorizedException('Too many reveal attempts; try again later')
+    }
+    const account = await this.prisma.account.findUnique({ where: { id: actor.sub },
+      select: { status: true, passwordHash: true } })
+    if (!account || account.status !== 'ACTIVE' || !account.passwordHash ||
+        !await argon2.verify(account.passwordHash, input.password)) {
+      const next = attempts && attempts.resetAt > Date.now() ? attempts : { count: 0, resetAt: Date.now() + 300_000 }
+      revealAttempts.set(throttleKey, { count: next.count + 1, resetAt: next.resetAt })
+      throw new UnauthorizedException('Current password is incorrect')
+    }
+    revealAttempts.delete(throttleKey)
+    const key = await this.prisma.employeeApiKey.findFirst({ where: {
+      id, organizationId: actor.organizationId, accountId: actor.sub, deletedAt: null
+    }, select: { id: true, name: true, secretCiphertext: true, secretIv: true, secretTag: true } })
+    if (!key) throw new NotFoundException('Employee API key not found')
+    if (!key.secretCiphertext || !key.secretIv || !key.secretTag) {
+      throw new ConflictException('This legacy key has no recoverable secret; issue a replacement key')
+    }
+    let secret: string
+    try {
+      secret = decryptSecret({ algorithm: 'aes-256-gcm', ciphertext: key.secretCiphertext, iv: key.secretIv, tag: key.secretTag }, loadMasterKey())
+    } catch {
+      throw new ConflictException('Stored key cannot be decrypted with the current MASTER_KEY')
+    }
+    await this.prisma.$transaction(db => db.auditLog.create({ data: {
+      organizationId: actor.organizationId, actorAccountId: actor.sub, action: 'employee_api_key.self_reveal',
+      resourceType: 'employee_api_key', resourceId: key.id, metadata: { name: key.name }
+    } }))
     return { id: key.id, secret }
   }
 

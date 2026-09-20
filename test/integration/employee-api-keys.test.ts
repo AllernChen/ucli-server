@@ -250,4 +250,31 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('employee API keys (PostgreSQL)'
       expect(await db.employeeApiKey.count({ where: { groupId: group.id, revokedAt: null } })).toBe(0)
     })
   })
+
+  it('lets the owner reveal a recoverable project key only with the current password', async () => {
+    vi.stubEnv('MASTER_KEY', Buffer.alloc(32, 31).toString('base64'))
+    await withTestDatabase(async db => {
+      const { actor, account } = await createOrganization(db)
+      await db.account.update({ where: { id: account.id }, data: { passwordHash: await argon2.hash('own-password') } })
+      const groups = new UsageGroupsService(db as PrismaService)
+      const service = new EmployeeKeysService(db as PrismaService)
+      const group = await groups.create(actor, { name: 'Own reveal keys', type: 'REGION' })
+      await groups.addMember(actor, group.id, account.id)
+      const projects = new (await import('../../apps/api/src/projects.service.js')).ProjectsService(db as PrismaService)
+      const project = await projects.create(actor, { regionId: group.id, code: 'OWN', name: 'Own project' })
+      await projects.addMember(actor, project.id, { accountId: account.id, role: 'CONTRIBUTOR' })
+      const created = await service.create(actor, account.id, { name: 'Own CLI', projectId: project.id })
+
+      await expect(service.revealOwn(actor, created.id, { password: 'wrong-password' }))
+        .rejects.toMatchObject({ status: 401 })
+      await expect(service.revealOwn({ ...actor, deviceId: 'device' }, created.id, { password: 'own-password' }))
+        .rejects.toMatchObject({ status: 403 })
+      await expect(service.revealOwn(actor, created.id, { password: 'own-password' }))
+        .resolves.toMatchObject({ id: created.id, secret: created.secret })
+      const audit = await db.auditLog.findFirstOrThrow({ where: {
+        resourceId: created.id, action: 'employee_api_key.self_reveal'
+      } })
+      expect(JSON.stringify(audit)).not.toContain(created.secret)
+    })
+  })
 })

@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, Header, HttpCode, Param, Patch, Post, Qu
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { AuthGuard, Roles, type AuthPrincipal } from '../../../packages/security/src/auth.js'
 import { UuidPipe } from '../../../packages/http/src/uuid.pipe.js'
-import { CreateEmployeeKeyDto, EmployeeKeyQueryDto, ProjectOptionQueryDto, RevealEmployeeKeyDto, UpdateEmployeeKeyDto } from './employee-keys.dto.js'
+import { CreateEmployeeKeyDto, EmployeeKeyQueryDto, ProjectOptionQueryDto, RevealEmployeeKeyDto, RevealOwnEmployeeKeyDto, UpdateEmployeeKeyDto } from './employee-keys.dto.js'
 import { EmployeeKeysService } from './employee-keys.service.js'
 
 type AuthRequest = { principal: AuthPrincipal }
@@ -42,4 +42,8 @@ export class EmployeeKeysController {
   mine(@Req() req: AuthRequest, @Query() query: EmployeeKeyQueryDto) { return this.keys.listMine(req.principal, query) }
   @Post('me/api-keys/:id/revoke')
   revokeMine(@Req() req: AuthRequest, @Param('id', UuidPipe) id: string) { return this.keys.revoke(req.principal, id, true) }
+  @Post('me/api-keys/:id/reveal') @Header('Cache-Control', 'no-store')
+  revealMine(@Req() req: AuthRequest, @Param('id', UuidPipe) id: string, @Body() body: RevealOwnEmployeeKeyDto) {
+    return this.keys.revealOwn(req.principal, id, body)
+  }
 }
