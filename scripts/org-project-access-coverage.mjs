@@ -137,26 +137,18 @@ async function main() {
         organizationId: organization.organizationId,
         name: organization.name,
         projects: organizationProjects.map(project => ({ id: project.id, name: project.name })),
-        members: organizationMembers.map(member => ({ accountId: member.accountId })),
-        existingProjectMembers: [],
-        existingActiveKeys: []
+        members: organizationMembers.map(member => ({ accountId: member.accountId }))
       })
     }
     const projectMembers = await prisma.projectMember.findMany({ select: { projectId: true, accountId: true } })
     const activeKeys = await prisma.employeeApiKey.findMany({ where: {
       revokedAt: null, disabledAt: null, deletedAt: null
     }, select: { projectId: true, accountId: true } })
-    for (const organization of inputOrganizations) {
-      organization.existingProjectMembers = projectMembers
-      organization.existingActiveKeys = activeKeys
-    }
-    const plan = plannedCoverage(inputOrganizations.flatMap(organization => ({
-      ...organization,
-      existingProjectMembers: organization.existingProjectMembers.filter(item =>
-        inputOrganizations.some(target => target.id === organization.id)),
-      existingActiveKeys: organization.existingActiveKeys.filter(item =>
-        inputOrganizations.some(target => target.id === organization.id))
-    })))
+    const plan = plannedCoverage({
+      organizations: inputOrganizations,
+      existingProjectMembers: projectMembers,
+      existingActiveKeys: activeKeys
+    })
     console.log(JSON.stringify({
       mode: apply ? 'apply' : 'dry-run',
       targetRelations: plan.targetRelations,
