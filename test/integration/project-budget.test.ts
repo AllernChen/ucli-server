@@ -6,6 +6,7 @@ import type { PrismaClient } from '@prisma/client'
 import { PrismaService } from '../../packages/database/src/prisma.service.js'
 import { ProjectBudgetService } from '../../packages/quota/src/project-budget.service.js'
 import { readProjectBudgets } from '../../packages/quota/src/project-budget-read.js'
+import { OrgUnitsService } from '../../apps/api/src/org-units.service.js'
 import { createOrganization, withTestDatabase } from './database.js'
 
 async function fixture(db: PrismaClient, limit = '1') {
@@ -80,6 +81,60 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project budget (PostgreSQL)', (
       await expect(db.projectBudgetEntry.findUniqueOrThrow({ where: { id: transient.id } })).resolves.toMatchObject({ status: 'RELEASED' })
     })
   }, 30_000)
+
+  it('lets project owners and department heads submit applications', async () => {
+    await withTestDatabase(async db => {
+      const f = await fixture(db, '10')
+      await db.projectMember.updateMany({ where: { projectId: f.project.id, accountId: f.actor.sub }, data: { role: 'OWNER' } })
+      const owner = { ...f.actor, sub: f.actor.sub, role: 'MEMBER' as const }
+      await expect(f.service.createApplication(owner, f.project.id, {
+        requestedCny: '20', reason: '业务项目需要追加预算'
+      })).resolves.toMatchObject({ status: 'REGISTERED', selfApproved: false })
+
+      const contributorEmail = `contributor-${randomUUID()}@example.invalid`
+      const contributorAccount = await db.account.create({ data: { email: contributorEmail, displayName: 'Contributor' } })
+      await db.membership.create({ data: { organizationId: f.organization.id, accountId: contributorAccount.id, role: 'MEMBER' } })
+      await db.projectMember.create({ data: { organizationId: f.organization.id, projectId: f.project.id, accountId: contributorAccount.id } })
+      const contributor = { ...owner, sub: contributorAccount.id }
+      await expect(f.service.createApplication(contributor, f.project.id, {
+        requestedCny: '20', reason: '普通成员不能申请'
+      })).rejects.toMatchObject({ status: 403 })
+
+      const organizations = new OrgUnitsService(db as PrismaService)
+      const research = await organizations.create(f.actor, { name: '研发部', kind: 'FUNCTIONAL' })
+      await organizations.addMember(f.actor, research.id, contributorAccount.id)
+      await organizations.setHead(f.actor, research.id, contributorAccount.id)
+      const departmentProject = await db.project.findFirstOrThrow({ where: { regionId: research.id, category: 'DEPARTMENT' } })
+      await expect(f.service.createApplication(contributor, departmentProject.id, {
+        requestedCny: '30', reason: '研发部日常预算'
+      })).resolves.toMatchObject({ status: 'REGISTERED' })
+    })
+  })
+
+  it('marks platform-administrator self-approval and supports submit-and-approve', async () => {
+    await withTestDatabase(async db => {
+      const f = await fixture(db, '10')
+      const application = await f.service.createApplication(f.actor, f.project.id, {
+        requestedCny: '20', reason: '管理员申请项目预算'
+      })
+      const entry = await f.service.adjust(f.actor, f.project.id, {
+        operationId: randomUUID(), limitCny: '20', unlimited: false,
+        reason: '管理员批复', applicationId: application.id
+      })
+      const linked = await db.projectBudgetApplication.findUniqueOrThrow({ where: { id: application.id } })
+      expect(linked).toMatchObject({ status: 'LINKED', selfApproved: true, linkedEntryId: entry.id })
+      expect(linked.approvedCny!.toString()).toBe('20')
+
+      const platformAdmin = { ...f.actor, role: 'PLATFORM_ADMIN' as const }
+      const oneClickEntry = await f.service.submitAndApprove(platformAdmin, f.project.id, {
+        operationId: randomUUID(), requestedTotalCny: '30', unlimited: false, reason: '本人申请并批复'
+      })
+      const oneClick = await db.projectBudgetApplication.findFirstOrThrow({ where: { linkedEntryId: oneClickEntry.id } })
+      expect(oneClick).toMatchObject({ applicantAccountId: f.actor.sub, decidedById: f.actor.sub, selfApproved: true })
+      expect(oneClick.approvedCny!.toString()).toBe('30')
+      expect(await f.service.summary(f.actor, f.project.id)).toMatchObject({ limitCny: '30.00000000' })
+    })
+  })
 
   it('rejects insufficient funds with a project-specific 429 and deduplicates retries', async () => {
     await withTestDatabase(async db => {

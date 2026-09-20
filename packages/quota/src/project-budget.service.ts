@@ -12,7 +12,9 @@ import { readProjectBudgets } from './project-budget-read.js'
 export type ProjectBudgetReservation = { id: string; requestId: string; periodId: string; projectId: string; reservedCny: string }
 export type ProjectGatewayIdentity = GatewayIdentity & { projectId: string; groupId: string }
 type Db = Prisma.TransactionClient
-type ProjectWithRegion = Project & { region: { id: string; type: string; enabled: boolean; archivedAt: Date | null } }
+type ProjectWithRegion = Project & { region: {
+  id: string; type: string; orgType: string; enabled: boolean; archivedAt: Date | null
+} }
 
 const object = (value: Prisma.JsonValue) => value as Prisma.JsonObject
 // The same canonical fingerprint rules as the group ledger: retries are comparable without retaining bodies or secrets.
@@ -41,14 +43,35 @@ export class ProjectBudgetService {
     `
     if (!rows.length) throw new NotFoundException('Project not found')
     return db.project.findUniqueOrThrow({ where: { id: projectId }, include: {
-      region: { select: { id: true, type: true, enabled: true, archivedAt: true } }
+      region: { select: { id: true, type: true, orgType: true, enabled: true, archivedAt: true } }
     } }) as Promise<ProjectWithRegion>
   }
 
   private assertReservable(project: ProjectWithRegion) {
-    if (project.status !== 'ACTIVE' || project.region.type !== 'REGION' || !project.region.enabled || project.region.archivedAt) {
+    const ownerValid = project.category === 'DEPARTMENT'
+      ? ['FUNCTIONAL', 'EXECUTIVE'].includes(project.region.orgType)
+      : project.region.type === 'REGION'
+    if (project.status !== 'ACTIVE' || !ownerValid || !project.region.enabled || project.region.archivedAt) {
       throw new ForbiddenException({ code: 'project_unavailable', message: 'Project is unavailable' })
     }
+  }
+
+  private async assertCanApply(db: Db, actor: AuthPrincipal, project: ProjectWithRegion) {
+    if (['PLATFORM_ADMIN', 'ORG_ADMIN'].includes(actor.role)) return
+    const projectMember = await db.projectMember.findFirst({ where: {
+      projectId: project.id, accountId: actor.sub,
+      ...(project.category === 'DEPARTMENT' ? {} : { role: 'OWNER' as const }),
+      membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } }
+    }, select: { projectId: true } })
+    if (projectMember) return
+    if (project.category === 'DEPARTMENT') {
+      const head = await db.groupMember.findFirst({ where: {
+        groupId: project.regionId, accountId: actor.sub, role: 'LEADER', removedAt: null,
+        membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } }
+      }, select: { groupId: true } })
+      if (head) return
+    }
+    throw new ForbiddenException({ code: 'budget_applicant_forbidden', message: 'Project owner or department head required' })
   }
 
   async summary(actor: AuthPrincipal, projectId: string) {
@@ -97,37 +120,43 @@ export class ProjectBudgetService {
     this.assertAdmin(actor)
     const amount = cny(input.limitCny)
     if (typeof input.unlimited !== 'boolean') throw new BadRequestException('Invalid unlimited flag')
-    return this.prisma.$transaction(async db => {
-      const project = await this.lockProject(db, actor.organizationId, projectId)
-      const operation = await this.operation(db, actor, projectId, input, { ...input, limitCny: amount })
-      if (operation.existing) return operation.existing
-      if (project.status === 'ARCHIVED') throw conflict()
-      let application: { id: string } | null = null
-      if (input.applicationId) {
-        application = await db.projectBudgetApplication.findFirst({ where: {
-          id: input.applicationId, organizationId: actor.organizationId, projectId
-        }, select: { id: true } })
-        if (!application) throw new NotFoundException('Budget application not found')
-        const decided = await db.projectBudgetApplication.findUnique({ where: { id: application.id }, select: { status: true } })
-        if (decided?.status !== 'REGISTERED') throw conflict()
-      }
-      const period = await this.period(db, project, new Date())
-      await db.$queryRaw`SELECT id FROM project_budget_periods WHERE id = ${period.id}::uuid FOR UPDATE`
-      const before = { limitCny: period.limitCny.toFixed(8), unlimited: period.unlimited }
-      if (!input.unlimited && new Decimal(amount).lt(new Decimal(period.spentCny.toString()).plus(period.reservedCny.toString()))) {
-        throw conflict()
-      }
-      await db.projectBudgetPeriod.update({ where: { id: period.id }, data: { limitCny: amount, unlimited: input.unlimited } })
-      await this.alert(db, period.id)
-      const entry = await this.adjustment(db, actor, period, input, { operationFingerprint: operation.hash,
-        before, after: { limitCny: amount, unlimited: input.unlimited }, ...(input.applicationId ? { applicationId: input.applicationId } : {}) })
-      if (application) {
-        await db.projectBudgetApplication.update({ where: { id: application.id }, data: {
-          status: 'LINKED', approvedCny: amount, decidedById: actor.sub, decidedAt: new Date(), linkedEntryId: entry.id
-        } })
-      }
-      return entry
-    }, { timeout: 15_000 })
+ return this.prisma.$transaction(async db => this.adjustInTransaction(db, actor, projectId, input), { timeout: 15_000 })
+  }
+
+  private async adjustInTransaction(db: Db, actor: AuthPrincipal, projectId: string, input: {
+    operationId: string; limitCny: string; unlimited: boolean; reason: string; applicationId?: string
+  }) {
+    const amount = cny(input.limitCny)
+    const project = await this.lockProject(db, actor.organizationId, projectId)
+    const operation = await this.operation(db, actor, projectId, input, { ...input, limitCny: amount })
+    if (operation.existing) return operation.existing
+    if (project.status === 'ARCHIVED') throw conflict()
+    let application: { id: string; applicantAccountId: string } | null = null
+    if (input.applicationId) {
+      application = await db.projectBudgetApplication.findFirst({ where: {
+        id: input.applicationId, organizationId: actor.organizationId, projectId
+      }, select: { id: true, applicantAccountId: true } })
+      if (!application) throw new NotFoundException('Budget application not found')
+      const decided = await db.projectBudgetApplication.findUnique({ where: { id: application.id }, select: { status: true } })
+      if (decided?.status !== 'REGISTERED') throw conflict()
+    }
+    const period = await this.period(db, project, new Date())
+    await db.$queryRaw`SELECT id FROM project_budget_periods WHERE id = ${period.id}::uuid FOR UPDATE`
+    const before = { limitCny: period.limitCny.toFixed(8), unlimited: period.unlimited }
+    if (!input.unlimited && new Decimal(amount).lt(new Decimal(period.spentCny.toString()).plus(period.reservedCny.toString()))) {
+      throw conflict()
+    }
+    await db.projectBudgetPeriod.update({ where: { id: period.id }, data: { limitCny: amount, unlimited: input.unlimited } })
+    await this.alert(db, period.id)
+    const entry = await this.adjustment(db, actor, period, input, { operationFingerprint: operation.hash,
+      before, after: { limitCny: amount, unlimited: input.unlimited }, ...(input.applicationId ? { applicationId: input.applicationId } : {}) })
+    if (application) {
+      await db.projectBudgetApplication.update({ where: { id: application.id }, data: {
+        status: 'LINKED', approvedCny: amount, decidedById: actor.sub, decidedAt: new Date(),
+        linkedEntryId: entry.id, selfApproved: application.applicantAccountId === actor.sub
+      } })
+    }
+    return entry
   }
 
   async applications(actor: AuthPrincipal, projectId: string, query: { offset: number; limit: number }) {
@@ -147,13 +176,13 @@ export class ProjectBudgetService {
   async createApplication(actor: AuthPrincipal, projectId: string, input: {
     requestedCny: string; reason: string; applicantAccountId?: string
   }) {
-    this.assertAdmin(actor)
     const amount = cny(input.requestedCny)
     if (new Decimal(amount).lte(0)) throw new BadRequestException('Requested amount must be greater than zero')
     if (!input.reason?.trim() || input.reason.length > 2000) throw new BadRequestException('Reason (1–2000 characters) is required')
     return this.prisma.$transaction(async db => {
       const project = await this.lockProject(db, actor.organizationId, projectId)
       if (project.status === 'ARCHIVED') throw conflict()
+      await this.assertCanApply(db, actor, project)
       const applicantAccountId = input.applicantAccountId || actor.sub
       const applicant = await db.membership.findFirst({ where: {
         organizationId: actor.organizationId, accountId: applicantAccountId, status: 'ACTIVE'
@@ -167,6 +196,28 @@ export class ProjectBudgetService {
         resourceId: application.id, metadata: { projectId, requestedCny: amount } } })
       return application
     })
+  }
+
+  async submitAndApprove(actor: AuthPrincipal, projectId: string, input: {
+    operationId: string; requestedTotalCny: string; unlimited: boolean; reason: string
+  }) {
+    if (actor.role !== 'PLATFORM_ADMIN') throw new ForbiddenException('Platform administrator required')
+    const amount = cny(input.requestedTotalCny)
+    if (new Decimal(amount).lte(0)) throw new BadRequestException('Requested total must be greater than zero')
+    return this.prisma.$transaction(async db => {
+      const project = await this.lockProject(db, actor.organizationId, projectId)
+      if (project.status === 'ARCHIVED') throw conflict()
+      const application = await db.projectBudgetApplication.create({ data: {
+        organizationId: actor.organizationId, projectId, applicantAccountId: actor.sub,
+        requestedCny: amount, reason: input.reason
+      } })
+      await db.auditLog.create({ data: { organizationId: actor.organizationId, actorAccountId: actor.sub,
+        action: 'PROJECT_BUDGET_APPLICATION_REGISTER', resourceType: 'project_budget_application',
+        resourceId: application.id, metadata: { projectId, requestedCny: amount, selfApproved: true } } })
+      return this.adjustInTransaction(db, actor, projectId, {
+        ...input, limitCny: amount, applicationId: application.id
+      })
+    }, { timeout: 15_000 })
   }
 
   async rejectApplication(actor: AuthPrincipal, projectId: string, applicationId: string, note?: string) {

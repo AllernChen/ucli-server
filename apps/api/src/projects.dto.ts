@@ -63,6 +63,14 @@ export class CreateProjectBudgetApplicationDto {
   @IsOptional() @IsUUID() applicantAccountId?: string
 }
 
+export class SubmitAndApproveProjectBudgetDto {
+  @IsUUID() operationId!: string
+  @IsString() @Matches(/^(0|[1-9]\d{0,11})(\.\d{1,8})?$/) requestedTotalCny!: string
+  @IsBoolean() unlimited!: boolean
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @Length(1, 2000) reason!: string
+}
+
 export class ProjectBudgetApplicationDecisionDto {
   @IsOptional() @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString() @Length(0, 2000) note?: string
