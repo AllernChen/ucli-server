@@ -117,7 +117,7 @@ export class GatewayService {
     } })
     if (!model) throw new NotFoundException('Model is unavailable')
     await this.catalog.assertAllowed({ organizationId: principal.organizationId, accountId: principal.sub,
-      role: principal.role, groupId: principal.groupId }, model)
+      role: principal.role, groupId: principal.groupId, projectId: principal.projectId ?? null }, model)
     const requestId = randomUUID()
     response.setHeader('x-ucli-request-id', requestId)
     response.setHeader('cache-control', 'no-store')

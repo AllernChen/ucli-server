@@ -18,9 +18,7 @@ export class EmployeeKeyQueryDto extends PageQueryDto {
 export class CreateEmployeeKeyDto {
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString() @Length(1, 120) name!: string
-  @IsUUID() groupId!: string
-  @ValidateIf((_, value) => value !== undefined && value !== null)
-  @IsUUID() projectId?: string
+  @IsUUID() projectId!: string
   @ValidateIf((_, value) => value !== undefined && value !== null)
   @IsDateString({ strict: true }) expiresAt?: string | null
 }

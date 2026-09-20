@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { PrismaService } from '../../packages/database/src/prisma.service.js'
 import { EmployeeKeysService } from '../../apps/api/src/employee-keys.service.js'
+import { ProjectsService } from '../../apps/api/src/projects.service.js'
 import { UsageGroupsService } from '../../apps/api/src/usage-groups.service.js'
 import { createOrganization, withTestDatabase } from '../integration/database.js'
 import { backfillEmployeeKeySecrets, loadSecretCsv } from '../../scripts/backfill-employee-key-secrets.mjs'
@@ -25,9 +26,12 @@ describe('employee key secret backfill', () => {
       const { actor, account } = await createOrganization(db)
       const groups = new UsageGroupsService(db as PrismaService)
       const keys = new EmployeeKeysService(db as PrismaService)
-      const group = await groups.create(actor, { name: 'Backfill keys', type: 'PROJECT' })
+      const group = await groups.create(actor, { name: 'Backfill keys', type: 'REGION' })
       await groups.addMember(actor, group.id, account.id)
-      const created = await keys.create(actor, account.id, { name: 'CLI', groupId: group.id })
+      const projects = new ProjectsService(db as PrismaService)
+      const project = await projects.create(actor, { regionId: group.id, code: 'BF', name: 'Backfill' })
+      await projects.addMember(actor, project.id, { accountId: account.id, role: 'CONTRIBUTOR' })
+      const created = await keys.create(actor, account.id, { name: 'CLI', projectId: project.id })
       await db.employeeApiKey.update({ where: { id: created.id }, data: { secretCiphertext: null, secretIv: null, secretTag: null } })
 
       const result = await backfillEmployeeKeySecrets(db as PrismaService, [

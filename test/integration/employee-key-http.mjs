@@ -26,6 +26,8 @@ import { DeviceGrantsService } from '../../dist/apps/api/src/device-grants.servi
 import { DeviceGrantLinksService } from '../../dist/apps/api/src/device-grant-links.service.js'
 import { DeviceGrantsController } from '../../dist/apps/api/src/device-grants.controller.js'
 import { UsageGroupsController } from '../../dist/apps/api/src/usage-groups.controller.js'
+import { ProjectsController } from '../../dist/apps/api/src/projects.controller.js'
+import { ProjectsService } from '../../dist/apps/api/src/projects.service.js'
 import { UsersController } from '../../dist/apps/api/src/users.controller.js'
 import { UsersService } from '../../dist/apps/api/src/users.service.js'
 import { UsageController } from '../../dist/apps/api/src/usage.controller.js'
@@ -72,8 +74,8 @@ const upstream = createServer(async (req, res) => {
   }
 })
 class KeyTestModule {}
-Module({ controllers: [AuthController, DeviceGrantsController, UsageGroupsController, UsersController, UsageController, AnalyticsController, EmployeeKeysController, GatewayController], providers: [AuthService, DeviceGrantsService, DeviceGrantLinksService, UsersService, AnalyticsService, AuthGuard, GatewayAuthGuard,
-  EmployeeKeysService, UsageGroupsService, ModelCatalogService, GatewayService, GroupBudgetService, ProjectBudgetService, { provide: PrismaService, useValue: db },
+Module({ controllers: [AuthController, DeviceGrantsController, UsageGroupsController, ProjectsController, UsersController, UsageController, AnalyticsController, EmployeeKeysController, GatewayController], providers: [AuthService, DeviceGrantsService, DeviceGrantLinksService, UsersService, AnalyticsService, AuthGuard, GatewayAuthGuard,
+  EmployeeKeysService, UsageGroupsService, ProjectsService, ModelCatalogService, GatewayService, GroupBudgetService, ProjectBudgetService, { provide: PrismaService, useValue: db },
   RedisQuotaService] })(KeyTestModule)
 const app = await NestFactory.create(KeyTestModule, { logger: false })
 const cliRequests = []
@@ -98,10 +100,15 @@ try {
   assert.ok(employee.id)
   const employeeToken = signAccessToken({ ...a.actor, sub: employee.id, role: 'MEMBER', tokenVersion: 1 })
   const groups = app.get(UsageGroupsService)
-  const group = (await request('/api/v1/admin/usage-groups', 'POST', { name: 'Key HTTP', type: 'PROJECT' })).body
-  const otherGroup = (await request('/api/v1/admin/usage-groups', 'POST', { name: 'Other', type: 'PROJECT' })).body
+  const group = (await request('/api/v1/admin/usage-groups', 'POST', { name: 'Key HTTP', type: 'REGION' })).body
+  const otherGroup = (await request('/api/v1/admin/usage-groups', 'POST', { name: 'Other', type: 'REGION' })).body
   await request(`/api/v1/admin/usage-groups/${group.id}/members`, 'POST', { accountId: employee.id })
-  await request(`/api/v1/admin/usage-groups/${otherGroup.id}/members`, 'POST', { accountId: employee.id })
+  const project = await db.project.create({ data: { organizationId: a.organization.id, regionId: group.id,
+    code: 'KEY-HTTP', name: 'Key HTTP project' } })
+  const otherProject = await db.project.create({ data: { organizationId: a.organization.id, regionId: otherGroup.id,
+    code: 'KEY-OTHER', name: 'Other project' } })
+  await db.projectMember.create({ data: { organizationId: a.organization.id, projectId: project.id, accountId: employee.id } })
+  await db.projectMember.create({ data: { organizationId: a.organization.id, projectId: otherProject.id, accountId: employee.id } })
   await db.quotaPolicy.create({ data: { organizationId: a.organization.id, accountId: employee.id, dailyTokens: 1000000n, concurrency: 64 } })
   const encrypted = encryptSecret('upstream-only-test-secret', Buffer.alloc(32, 4))
   const channel = await db.channel.create({ data: { name: 'Local HTTP mock', provider: 'test', protocol: 'OPENAI', maxRetries: 0,
@@ -121,7 +128,7 @@ try {
     return { status: response.status, headers: response.headers, body: response.headers.get('content-type')?.includes('application/json') ? JSON.parse(text) : text }
   }
   const createPath = `/api/v1/admin/users/${employee.id}/api-keys`
-  const created = await request(createPath, 'POST', { name: 'CLI', groupId: group.id })
+  const created = await request(createPath, 'POST', { name: 'CLI', projectId: project.id })
   assert.equal(created.status, 201)
   assert.equal(created.headers.get('cache-control'), 'no-store')
   const key = created.body
@@ -131,7 +138,7 @@ try {
   assert.deepEqual(me.body, { id: employee.id, displayName: 'Employee', email: employeeEmail, status: 'ACTIVE',
     pendingCredentialChange: false, organizationId: a.organization.id, organizationName: a.organization.name, role: 'MEMBER' })
   assert.equal((await request('/api/v1/auth/me', 'GET', undefined, key.secret)).status, 401)
-  assert.deepEqual((await request('/api/v1/me/usage-groups', 'GET', undefined, employeeToken)).body.map(g => g.id).sort(), [group.id, otherGroup.id].sort())
+  assert.deepEqual((await request('/api/v1/me/usage-groups', 'GET', undefined, employeeToken)).body.map(g => g.id), [group.id])
   assert.equal((await request(`/api/v1/admin/users/${a.account.id}/usage-groups`, 'GET', undefined, employeeToken)).status, 401)
   assert.match(key.secret, /^ucli_sk_/)
   assert.equal((await request('/v1/models', 'GET', undefined, key.secret)).status, 403) // default off
@@ -151,7 +158,7 @@ try {
   assert.equal((await request('/v1/models', 'GET', undefined, adminToken)).status, 401)
   assert.equal((await request(createPath, 'GET', undefined, key.secret)).status, 401)
   assert.equal((await request('/api/v1/me/api-keys', 'GET', undefined, key.secret)).status, 401)
-  assert.equal((await request(createPath, 'POST', { name: 'Forbidden', groupId: group.id }, employeeToken)).status, 401)
+  assert.equal((await request(createPath, 'POST', { name: 'Forbidden', projectId: project.id }, employeeToken)).status, 401)
   const mine = await request('/api/v1/me/api-keys', 'GET', undefined, employeeToken)
   assert.deepEqual(mine.body.items.map(item => item.id), [key.id])
   assert.ok(!JSON.stringify(mine).includes(key.secret))
@@ -168,21 +175,23 @@ try {
   const legacyGrant = await db.deviceGrant.create({ data: { organizationId: a.organization.id, accountId: employee.id, createdById: a.account.id, deviceId: device.id } })
   const deviceToken = signAccessToken({ ...a.actor, sub: employee.id, role: 'MEMBER', deviceId: device.id, tokenVersion: 1 })
   assert.equal((await request('/api/v1/admin/device-grants/group-requirement', 'PATCH', { required: true })).status, 409)
-  assert.equal((await request(`/api/v1/admin/device-grants/${legacyGrant.id}/group`, 'PATCH', { groupId: group.id, accountId: employee.id })).status, 200)
+  assert.equal((await request(`/api/v1/admin/device-grants/${legacyGrant.id}/group`, 'PATCH', { groupId: group.id, accountId: employee.id, projectId: project.id })).status, 200)
   assert.equal((await request('/api/v1/admin/device-grants/group-requirement', 'PATCH', { required: true })).status, 200)
   assert.equal((await request(`/api/v1/admin/users/${employee.id}/device-grants`, 'POST', {})).status, 403)
   assert.equal((await request('/api/v1/me/api-keys', 'GET', undefined, deviceToken)).status, 403)
   assert.equal((await request('/v1/models', 'GET', undefined, deviceToken)).status, 200)
   assert.equal((await request('/anthropic/v1/models', 'GET', undefined, deviceToken)).status, 200)
   assert.equal((await request(`/api/v1/admin/employee-api-keys/${key.id}`, 'PATCH', { groupId: otherGroup.id })).status, 400)
-  const otherKey = (await request(createPath, 'POST', { name: 'Other', groupId: otherGroup.id })).body
+  const otherCreated = await request(createPath, 'POST', { name: 'Other', projectId: otherProject.id })
+  assert.equal(otherCreated.status, 201)
+  const otherKey = otherCreated.body
   assert.deepEqual((await request('/v1/models', 'GET', undefined, otherKey.secret)).body.data, [])
   assert.equal((await request('/v1/chat/completions', 'POST', { model: models[0].id, messages: [] }, otherKey.secret)).status, 403)
   assert.equal(received.length, 0)
   const validChat = { model: models[0].id, messages: [{ role: 'user', content: 'Hi' }], max_tokens: 16 }
   assert.equal((await request('/v1/chat/completions', 'POST', validChat, key.secret)).status, 429)
   assert.equal(received.length, 0)
-  assert.equal((await request(`/api/v1/admin/usage-groups/${group.id}/budget-adjustments`, 'POST', { operationId: randomUUID(), scope: 'CURRENT', limitCny: '1', unlimited: false, reason: 'Local HTTP test budget' })).status, 201)
+  assert.equal((await request(`/api/v1/admin/projects/${project.id}/budget-adjustments`, 'POST', { operationId: randomUUID(), limitCny: '1', unlimited: false, reason: 'Local HTTP test project budget' })).status, 201)
   for (const [index, path, stream] of [[0, '/v1/chat/completions', false], [1, '/v1/responses', false],
     [2, '/anthropic/v1/messages', false], [0, '/v1/chat/completions', true], [1, '/v1/responses', true], [2, '/anthropic/v1/messages', true]]) {
     const body = { model: models[index].id, stream, ...(index === 1 ? { input: 'Hi', max_output_tokens: 16 }
@@ -225,18 +234,18 @@ try {
   assert.equal(logResponse.body.length, 13)
   assert.equal(logResponse.body[0].employeeName, 'Employee')
   const overview = (await request(`/api/v1/analytics/overview?groupId=${group.id}`, 'GET', undefined, employeeToken)).body
-  const balance = (await request(`/api/v1/admin/usage-groups/${group.id}/budget`)).body
+  const balance = (await request(`/api/v1/admin/projects/${project.id}/budget`)).body
   assert.equal(overview.costCny, '0.00009100')
   assert.equal(balance.spentCny, overview.costCny)
   // Concurrent requests compete for pre-dispatch budget, not a post-hoc counter.
   await groups.replaceModels(a.actor, otherGroup.id, [models[0].id])
-  await app.get(GroupBudgetService).adjust(a.actor, otherGroup.id, { operationId: randomUUID(), scope: 'CURRENT', limitCny: '0.00050000', unlimited: false, reason: 'Concurrent admission' })
+  assert.equal((await request(`/api/v1/admin/projects/${otherProject.id}/budget-adjustments`, 'POST', { operationId: randomUUID(), limitCny: '0.00050000', unlimited: false, reason: 'Concurrent admission' })).status, 201)
   upstreamDelay = 300
   const parallel = await Promise.all(Array.from({ length: 8 }, () => request('/v1/chat/completions', 'POST', validChat, otherKey.secret)))
   upstreamDelay = 0
   assert.equal(parallel.filter(r => r.status === 200).length, 1)
   assert.equal(parallel.filter(r => r.status === 429).length, 7)
-  await app.get(GroupBudgetService).adjust(a.actor, otherGroup.id, { operationId: randomUUID(), scope: 'CURRENT', limitCny: '0.00000700', unlimited: false, reason: 'Exhausted budget' })
+  assert.equal((await request(`/api/v1/admin/projects/${otherProject.id}/budget-adjustments`, 'POST', { operationId: randomUUID(), limitCny: '0.00000700', unlimited: false, reason: 'Exhausted budget' })).status, 201)
   assert.equal((await request('/v1/chat/completions', 'POST', validChat, otherKey.secret)).status, 429)
   assert.equal(await redis.get(`concurrency:${a.organization.id}:${employee.id}:*`), '0')
   if (process.env.UCLI_TEST_REAL_CLI === '1') {

@@ -17,6 +17,9 @@ async function fixture(db: PrismaClient, limit = '1') {
   const project = await db.project.create({ data: {
     organizationId: organization.id, regionId: region.id, code: 'AI-PLATFORM', name: 'AI 平台', budgetMode: 'TOTAL'
   } })
+  await db.projectMember.create({ data: {
+    organizationId: organization.id, projectId: project.id, accountId: account.id, role: 'CONTRIBUTOR'
+  } })
   const key = await db.employeeApiKey.create({ data: {
     organizationId: organization.id, groupId: region.id, projectId: project.id, accountId: account.id,
     name: '项目 Key', secretHash: randomUUID(), secretHint: '…test', createdById: account.id

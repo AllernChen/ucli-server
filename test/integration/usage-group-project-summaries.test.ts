@@ -24,7 +24,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('usage group project summaries (
         timezone: 'Asia/Shanghai', limitCny: '1800', spentCny: '200', reservedCny: '100'
       } })
       await keys.create(actor, account.id, {
-        name: '广东-市局区域-越秀-负责人', groupId: region.id, projectId: yuexiu.id
+        name: '广东-市局区域-越秀-负责人', projectId: yuexiu.id
       })
 
       const result = await groups.list(actor.organizationId, Object.assign(new UsageGroupPageQueryDto(), { type: 'REGION' }))
@@ -58,7 +58,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('usage group project summaries (
       const yuexiu = await projects.create(actor, { regionId: region.id, code: 'GZ-YX', name: '云岩' })
       const huangpu = await projects.create(actor, { regionId: region.id, code: 'GZ-HB', name: '花溪' })
       await projects.addMember(actor, yuexiu.id, { accountId: account.id, role: 'OWNER' })
-      const key = await keys.create(actor, account.id, { name: '花溪 Key', groupId: region.id, projectId: huangpu.id })
+      await projects.addMember(actor, huangpu.id, { accountId: account.id, role: 'CONTRIBUTOR' })
+      const key = await keys.create(actor, account.id, { name: '花溪 Key', projectId: huangpu.id })
 
       const channel = await db.channel.create({ data: { name: 'Usage channel', provider: 'test', protocol: 'OPENAI', baseUrl: 'https://upstream.example' } })
       const model = await db.publicModel.create({ data: { id: randomUUID(), displayName: 'Usage model' } })
@@ -81,8 +82,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('usage group project summaries (
       expect(memberResult.items).toHaveLength(1)
       expect(memberResult.items[0].accountId).toBe(account.id)
       expect(memberResult.items[0].projects).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: yuexiu.id, sources: ['MEMBER'] }),
-        expect.objectContaining({ id: huangpu.id, sources: ['KEY'] })
+        expect.objectContaining({ id: yuexiu.id, sources: expect.arrayContaining(['MEMBER']) }),
+        expect.objectContaining({ id: huangpu.id, sources: expect.arrayContaining(['KEY']) })
       ]))
       expect(memberResult.items[0].usage).toMatchObject({ requests: 1, totalTokens: '15', costCny: '1.50000000' })
     })

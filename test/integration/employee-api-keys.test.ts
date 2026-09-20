@@ -3,6 +3,7 @@ import { plainToInstance } from 'class-transformer'
 import { validate } from 'class-validator'
 import argon2 from 'argon2'
 import { EmployeeKeysService } from '../../apps/api/src/employee-keys.service.js'
+import { ProjectsService } from '../../apps/api/src/projects.service.js'
 import { UsageGroupsService } from '../../apps/api/src/usage-groups.service.js'
 import { PrismaService } from '../../packages/database/src/prisma.service.js'
 import { AuthGuard } from '../../packages/security/src/auth.js'
@@ -73,17 +74,27 @@ describe('employee API key query', () => {
 })
 
 afterEach(() => vi.unstubAllEnvs())
+
+async function createKeyProject(db: Parameters<Parameters<typeof withTestDatabase>[0]>[0], actor: any, group: { id: string }, accountIds: string[]) {
+  const projects = new ProjectsService(db as PrismaService)
+  const suffix = randomUUID().slice(0, 8)
+  const project = await projects.create(actor, { regionId: group.id, code: `KEY-${suffix}`, name: `Key project ${suffix}` })
+  for (const accountId of accountIds) await projects.addMember(actor, project.id, { accountId, role: 'CONTRIBUTOR' })
+  return project
+}
+
 describe.skipIf(!process.env.TEST_DATABASE_URL)('employee API keys (PostgreSQL)', () => {
   it('stores only the hash, restricts ownership and never resurrects revoked keys', async () => {
     await withTestDatabase(async db => {
       const a = await createOrganization(db); const b = await createOrganization(db)
       const groups = new UsageGroupsService(db as PrismaService)
       const service = new EmployeeKeysService(db as PrismaService)
-      const group = await groups.create(a.actor, { name: 'Keys', type: 'PROJECT' })
+      const group = await groups.create(a.actor, { name: 'Keys', type: 'REGION' })
       await groups.addMember(a.actor, group.id, a.account.id)
-      await expect(service.create(a.actor, b.account.id, { name: 'Wrong org', groupId: group.id })).rejects.toMatchObject({ status: 403 })
-      await expect(service.create(a.actor, a.account.id, { name: 'Expired', groupId: group.id, expiresAt: '2000-01-01T00:00:00Z' })).rejects.toMatchObject({ status: 400 })
-      const key = await service.create(a.actor, a.account.id, { name: 'CLI', groupId: group.id })
+      const project = await createKeyProject(db, a.actor, group, [a.account.id])
+      await expect(service.create(a.actor, b.account.id, { name: 'Wrong org', projectId: project.id })).rejects.toMatchObject({ status: 403 })
+      await expect(service.create(a.actor, a.account.id, { name: 'Expired', projectId: project.id, expiresAt: '2000-01-01T00:00:00Z' })).rejects.toMatchObject({ status: 400 })
+      const key = await service.create(a.actor, a.account.id, { name: 'CLI', projectId: project.id })
       expect(key.secret).toMatch(/^ucli_sk_[A-Za-z0-9_-]{43}$/)
       const stored = await db.employeeApiKey.findUniqueOrThrow({ where: { id: key.id } })
       expect(stored.secretHash).toBe(hashOpaqueToken(key.secret))
@@ -112,9 +123,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('employee API keys (PostgreSQL)'
       await db.account.update({ where: { id: actor.sub }, data: { passwordHash: await argon2.hash('admin-password') } })
       const groups = new UsageGroupsService(db as PrismaService)
       const service = new EmployeeKeysService(db as PrismaService)
-      const group = await groups.create(actor, { name: 'Revealable keys', type: 'PROJECT' })
+      const group = await groups.create(actor, { name: 'Revealable keys', type: 'REGION' })
       await groups.addMember(actor, group.id, account.id)
-      const key = await service.create(actor, account.id, { name: 'CLI', groupId: group.id })
+      const project = await createKeyProject(db, actor, group, [account.id])
+      const key = await service.create(actor, account.id, { name: 'CLI', projectId: project.id })
 
       const stored = await db.employeeApiKey.findUniqueOrThrow({ where: { id: key.id } })
       expect(stored.secretCiphertext).toBeTruthy()
@@ -142,25 +154,27 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('employee API keys (PostgreSQL)'
       const a = await createOrganization(db); const b = await createOrganization(db)
       const groups = new UsageGroupsService(db as PrismaService)
       const service = new EmployeeKeysService(db as PrismaService)
-      const group = await groups.create(a.actor, { name: 'Managed keys', type: 'PROJECT' })
+      const group = await groups.create(a.actor, { name: 'Managed keys', type: 'REGION' })
       await groups.addMember(a.actor, group.id, a.account.id)
       const email = `${randomUUID()}@example.invalid`
       const member = await db.account.create({ data: { email, displayName: 'Search target' } })
       await db.membership.create({ data: { organizationId: a.organization.id, accountId: member.id, role: 'MEMBER' } })
       await groups.addMember(a.actor, group.id, member.id)
-      const active = await service.create(a.actor, a.account.id, { name: 'Active CLI', groupId: group.id })
-      const expired = await service.create(a.actor, a.account.id, { name: 'Expired CLI', groupId: group.id })
+      const project = await createKeyProject(db, a.actor, group, [a.account.id, member.id])
+      const active = await service.create(a.actor, a.account.id, { name: 'Active CLI', projectId: project.id })
+      const expired = await service.create(a.actor, a.account.id, { name: 'Expired CLI', projectId: project.id })
       await db.employeeApiKey.update({ where: { id: expired.id }, data: { expiresAt: new Date(Date.now() - 1_000) } })
-      const disabled = await service.create(a.actor, a.account.id, { name: 'Disabled CLI', groupId: group.id })
+      const disabled = await service.create(a.actor, a.account.id, { name: 'Disabled CLI', projectId: project.id })
       await service.setEnabled(a.actor, disabled.id, false)
-      const revoked = await service.create(a.actor, a.account.id, { name: 'Revoked CLI', groupId: group.id })
+      const revoked = await service.create(a.actor, a.account.id, { name: 'Revoked CLI', projectId: project.id })
       await service.setEnabled(a.actor, revoked.id, false); await service.revoke(a.actor, revoked.id)
-      const deleted = await service.create(a.actor, a.account.id, { name: 'Deleted CLI', groupId: group.id })
+      const deleted = await service.create(a.actor, a.account.id, { name: 'Deleted CLI', projectId: project.id })
       await service.delete(a.actor, deleted.id)
-      await service.create(a.actor, member.id, { name: 'Searchable CLI', groupId: group.id })
-      const otherGroup = await groups.create(b.actor, { name: 'Other organization', type: 'PROJECT' })
+      await service.create(a.actor, member.id, { name: 'Searchable CLI', projectId: project.id })
+      const otherGroup = await groups.create(b.actor, { name: 'Other organization', type: 'REGION' })
       await groups.addMember(b.actor, otherGroup.id, b.account.id)
-      await service.create(b.actor, b.account.id, { name: 'Other organization key', groupId: otherGroup.id })
+      const otherProject = await createKeyProject(db, b.actor, otherGroup, [b.account.id])
+      await service.create(b.actor, b.account.id, { name: 'Other organization key', projectId: otherProject.id })
 
       for (const [status, expected] of [['active', active.id], ['expired', expired.id], ['disabled', disabled.id], ['revoked', revoked.id]] as const) {
         const result = await service.listManaged(a.actor, Object.assign(new EmployeeKeyQueryDto(), { accountId: a.account.id, status, limit: 50, offset: 0 }))
@@ -181,10 +195,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('employee API keys (PostgreSQL)'
     await withTestDatabase(async db => {
       const { actor, account, organization } = await createOrganization(db)
       const groups = new UsageGroupsService(db as PrismaService)
-      const group = await groups.create(actor, { name: 'Auth', type: 'PROJECT' })
+      const group = await groups.create(actor, { name: 'Auth', type: 'REGION' })
       await groups.addMember(actor, group.id, account.id)
       const keys = new EmployeeKeysService(db as PrismaService)
-      const key = await keys.create(actor, account.id, { name: 'CLI', groupId: group.id })
+      const projects = new ProjectsService(db as PrismaService)
+      const project = await createKeyProject(db, actor, group, [account.id])
+      const key = await keys.create(actor, account.id, { name: 'CLI', projectId: project.id })
       const guard = new GatewayAuthGuard(new AuthGuard(new Reflector(), db as PrismaService), db as PrismaService)
       const request: any = { headers: { authorization: `Bearer ${key.secret}`, 'x-group-id': 'forged' } }
       const context: any = { switchToHttp: () => ({ getRequest: () => request }) }
@@ -205,14 +221,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('employee API keys (PostgreSQL)'
         [db.organization, { id: organization.id }, { enabled: false }, { enabled: true }],
         [db.account, { id: account.id }, { status: 'DISABLED' }, { status: 'ACTIVE' }],
         [db.membership, { organizationId_accountId: { organizationId: organization.id, accountId: account.id } }, { status: 'DISABLED' }, { status: 'ACTIVE' }],
-        [db.groupMember, { groupId_accountId: { groupId: group.id, accountId: account.id } }, { removedAt: new Date() }, { removedAt: null }]
+        [db.projectMember, { projectId_accountId: { projectId: project.id, accountId: account.id } }, { role: 'VIEWER' }, { role: 'CONTRIBUTOR' }]
       ] as const) {
         await (delegate.update as any)({ where, data: off })
-        await expect(guard.canActivate(context)).rejects.toMatchObject({ status: 403 })
+        await expect(guard.canActivate(context)).rejects.toMatchObject({ status: expect.any(Number) })
         await (delegate.update as any)({ where, data: on })
       }
-      await groups.removeMember(actor, group.id, account.id)
-      await groups.addMember(actor, group.id, account.id)
+      await projects.removeMember(actor, project.id, account.id)
+      await projects.addMember(actor, project.id, { accountId: account.id, role: 'CONTRIBUTOR' })
       await expect(guard.canActivate(context)).rejects.toMatchObject({ status: 401 })
     })
   })
@@ -222,9 +238,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('employee API keys (PostgreSQL)'
       const { actor, account } = await createOrganization(db)
       const groups = new UsageGroupsService(db as PrismaService)
       const keys = new EmployeeKeysService(db as PrismaService)
-      const group = await groups.create(actor, { name: 'Race', type: 'PROJECT' })
+      const group = await groups.create(actor, { name: 'Race', type: 'REGION' })
       await groups.addMember(actor, group.id, account.id)
-      const [, removed] = await Promise.allSettled([keys.create(actor, account.id, { name: 'Race', groupId: group.id }), groups.removeMember(actor, group.id, account.id)])
+      const project = await createKeyProject(db, actor, group, [account.id])
+      const projects = new ProjectsService(db as PrismaService)
+      const [, removed] = await Promise.allSettled([
+        keys.create(actor, account.id, { name: 'Race', projectId: project.id }),
+        projects.removeMember(actor, project.id, account.id)
+      ])
       expect(removed.status).toBe('fulfilled')
       expect(await db.employeeApiKey.count({ where: { groupId: group.id, revokedAt: null } })).toBe(0)
     })

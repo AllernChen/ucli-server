@@ -3,7 +3,6 @@ import { Prisma, type Project, type ProjectBudgetEntry, type ProjectBudgetPeriod
 import { createHash } from 'node:crypto'
 import Decimal from 'decimal.js'
 import { PrismaService } from '../../database/src/prisma.service.js'
-import { assertActiveGroupMember } from '../../security/src/group-access.js'
 import type { GatewayIdentity } from '../../security/src/gateway-auth.js'
 import type { AuthPrincipal } from '../../security/src/auth.js'
 import { availableCny, budgetPeriodKey, cny } from './group-budget.js'
@@ -245,7 +244,11 @@ export class ProjectBudgetService {
       const project = await this.lockProject(db, identity.organizationId, identity.projectId)
       this.assertReservable(project)
       if (project.regionId !== identity.groupId) throw new ForbiddenException({ code: 'project_unavailable', message: 'Project is unavailable' })
-      await assertActiveGroupMember(db, { organizationId: identity.organizationId, groupId: project.regionId, accountId: identity.sub })
+      const projectMember = await db.projectMember.findFirst({ where: {
+        projectId: project.id, accountId: identity.sub, role: { not: 'VIEWER' },
+        membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } }
+      }, select: { projectId: true } })
+      if (!projectMember) throw new ForbiddenException({ code: 'project_member_required', message: 'Active project member required' })
       if (identity.credentialType === 'API_KEY') {
         const key = await db.employeeApiKey.findFirst({ where: {
           id: identity.apiKeyId, organizationId: identity.organizationId, accountId: identity.sub,

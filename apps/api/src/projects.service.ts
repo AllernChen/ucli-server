@@ -188,6 +188,8 @@ export class ProjectsService {
       const result = await db.projectMember.deleteMany({ where: { organizationId: actor.organizationId,
         projectId: id, accountId } })
       if (!result.count) throw new NotFoundException('Project member not found')
+      await db.employeeApiKey.updateMany({ where: { organizationId: actor.organizationId,
+        projectId: id, accountId, deletedAt: null }, data: { revokedAt: new Date() } })
       return { accountId }
     }, { accountId })
   }

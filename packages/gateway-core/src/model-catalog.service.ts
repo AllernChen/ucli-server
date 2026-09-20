@@ -1,7 +1,6 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../database/src/prisma.service.js'
-import { assertActiveGroupMember } from '../../security/src/group-access.js'
 import { canAccessGroupModel, canAccessModel, type ModelAccessPolicy, type ModelAccessPrincipal } from './access-policy.js'
 import { configuredClientProtocols } from './model-capabilities.js'
 import type { GatewayProtocol } from './protocol.js'
@@ -17,8 +16,21 @@ export class ModelCatalogService {
 
   private async allowedModels(identity: ModelAccessPrincipal): Promise<string[] | null> {
     if (!identity.groupId) return null
-    const member = await assertActiveGroupMember(this.prisma, { ...identity, groupId: identity.groupId })
-    return member.group.models.map(item => item.publicModelId)
+    const group = await this.prisma.usageGroup.findFirst({ where: {
+      id: identity.groupId, organizationId: identity.organizationId, enabled: true, archivedAt: null,
+      organization: { enabled: true }
+    }, select: { models: { select: { publicModelId: true } } } })
+    if (!group) return []
+    const organizationMember = await this.prisma.groupMember.findFirst({ where: {
+      groupId: identity.groupId, accountId: identity.accountId, removedAt: null,
+      membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } }
+    }, select: { groupId: true } })
+    const projectMember = identity.projectId ? await this.prisma.projectMember.findFirst({ where: {
+      projectId: identity.projectId, accountId: identity.accountId, role: { not: 'VIEWER' },
+      membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } }
+    }, select: { projectId: true } }) : null
+    if (!organizationMember && !projectMember) return []
+    return group.models.map(item => item.publicModelId)
   }
 
   async list(identity: ModelAccessPrincipal, protocol?: GatewayProtocol) {
