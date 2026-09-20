@@ -109,6 +109,97 @@ export class OrgUnitsService {
     })
   }
 
+  addMember(actor: AuthPrincipal, id: string, accountId: string) {
+    this.assertAdmin(actor)
+    return this.prisma.$transaction(async db => {
+      const group = await db.usageGroup.findFirst({ where: { id, organizationId: actor.organizationId } })
+      if (!group) throw new NotFoundException('Organization unit not found')
+      this.assertMutable(group)
+      const member = await db.membership.findFirst({ where: {
+        organizationId: actor.organizationId, accountId, status: 'ACTIVE', account: { status: 'ACTIVE' }
+      } })
+      if (!member) throw new ForbiddenException('Active organization member required')
+      const now = new Date()
+      const currentPrimary = await db.groupMember.findFirst({ where: {
+        organizationId: actor.organizationId, accountId, removedAt: null, isPrimary: true
+      }, include: { group: { select: { id: true, orgType: true } } } })
+      if (currentPrimary && ['FUNCTIONAL', 'EXECUTIVE'].includes(currentPrimary.group.orgType)) {
+        await db.projectMember.deleteMany({ where: { organizationId: actor.organizationId,
+          project: { regionId: currentPrimary.groupId, category: 'DEPARTMENT' }, accountId } })
+      }
+      await db.groupMember.updateMany({ where: {
+        organizationId: actor.organizationId, accountId, removedAt: null, isPrimary: true
+      }, data: { removedAt: now, isPrimary: false } })
+      const updated = await db.groupMember.upsert({ where: { groupId_accountId: { groupId: id, accountId } },
+        create: { organizationId: actor.organizationId, groupId: id, accountId, isPrimary: true, joinedAt: now },
+        update: { removedAt: null, isPrimary: true, joinedAt: now },
+        include: { membership: { select: { status: true, role: true,
+          account: { select: { id: true, displayName: true, email: true, status: true } } } } } })
+      if (group.orgType === 'FUNCTIONAL' || group.orgType === 'EXECUTIVE') {
+        const departmentProject = await db.project.findFirst({ where: {
+          organizationId: actor.organizationId, regionId: id, category: 'DEPARTMENT', status: 'ACTIVE'
+        }, select: { id: true } })
+        if (departmentProject) {
+          await db.projectMember.upsert({ where: { projectId_accountId: {
+            projectId: departmentProject.id, accountId
+          } }, create: { organizationId: actor.organizationId, projectId: departmentProject.id, accountId },
+            update: {} })
+        }
+      }
+      await this.audit(db, actor, id, 'member_add', { accountId })
+      return updated
+    })
+  }
+
+  async removeMember(actor: AuthPrincipal, id: string, accountId: string) {
+    this.assertAdmin(actor)
+    return this.prisma.$transaction(async db => {
+      const group = await db.usageGroup.findFirst({ where: { id, organizationId: actor.organizationId } })
+      if (!group) throw new NotFoundException('Organization unit not found')
+      this.assertMutable(group)
+      const existing = await db.groupMember.findFirst({ where: {
+        organizationId: actor.organizationId, groupId: id, accountId, removedAt: null
+      } })
+      if (!existing) throw new NotFoundException('Organization member not found')
+      const now = new Date()
+      await db.groupMember.update({ where: { groupId_accountId: { groupId: id, accountId } },
+        data: { removedAt: now, isPrimary: false } })
+      let revokedDepartmentKeyCount = 0
+      if (group.orgType === 'FUNCTIONAL' || group.orgType === 'EXECUTIVE') {
+        const departmentProject = await db.project.findFirst({ where: {
+          organizationId: actor.organizationId, regionId: id, category: 'DEPARTMENT'
+        }, select: { id: true } })
+        if (departmentProject) {
+          await db.projectMember.deleteMany({ where: { organizationId: actor.organizationId,
+            projectId: departmentProject.id, accountId } })
+          revokedDepartmentKeyCount = await db.employeeApiKey.updateMany({ where: {
+            organizationId: actor.organizationId, projectId: departmentProject.id, accountId, deletedAt: null
+          }, data: { revokedAt: now } }).then(result => result.count)
+        }
+      }
+      await this.audit(db, actor, id, 'member_remove', { accountId, revokedDepartmentKeyCount })
+      return { accountId, revokedDepartmentKeyCount }
+    })
+  }
+
+  async setHead(actor: AuthPrincipal, id: string, accountId: string) {
+    this.assertAdmin(actor)
+    return this.prisma.$transaction(async db => {
+      const group = await db.usageGroup.findFirst({ where: { id, organizationId: actor.organizationId } })
+      if (!group) throw new NotFoundException('Organization unit not found')
+      this.assertMutable(group)
+      const member = await db.groupMember.findFirst({ where: {
+        organizationId: actor.organizationId, groupId: id, accountId, removedAt: null
+      } })
+      if (!member) throw new NotFoundException('Organization member not found')
+      await db.groupMember.updateMany({ where: { organizationId: actor.organizationId, groupId: id, removedAt: null },
+        data: { role: 'MEMBER' } })
+      await db.groupMember.update({ where: { groupId_accountId: { groupId: id, accountId } }, data: { role: 'LEADER' } })
+      await this.audit(db, actor, id, 'set_head', { accountId })
+      return { accountId, role: 'LEADER' as const }
+    })
+  }
+
   async members(organizationId: string, id: string, query = new PageQueryDto()) {
     await this.detail(organizationId, id)
     const where = { organizationId, groupId: id, removedAt: null }

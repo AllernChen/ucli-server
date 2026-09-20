@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { AuthGuard, Roles, type AuthPrincipal } from '../../../packages/security/src/auth.js'
 import { UuidPipe } from '../../../packages/http/src/uuid.pipe.js'
@@ -25,6 +25,15 @@ export class OrgUnitsController {
   }
   @Get(':id/members') members(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Query() query: PageQueryDto) {
     return this.organizations.members(req.principal.organizationId, id, query)
+  }
+  @Post(':id/members') addMember(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Body() body: AddOrgUnitMemberDto) {
+    return this.organizations.addMember(req.principal, id, body.accountId)
+  }
+  @Delete(':id/members/:accountId') removeMember(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Param('accountId', UuidPipe) accountId: string) {
+    return this.organizations.removeMember(req.principal, id, accountId)
+  }
+  @Post(':id/head') setHead(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Body() body: AddOrgUnitMemberDto) {
+    return this.organizations.setHead(req.principal, id, body.accountId)
   }
   @Get(':id/projects') projects(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string) {
     return this.organizations.projects(req.principal.organizationId, id)
