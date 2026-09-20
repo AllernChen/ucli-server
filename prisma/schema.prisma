@@ -24,6 +24,13 @@ enum UsageGroupType {
   REGION
 }
 
+enum OrgUnitType {
+  EXECUTIVE
+  FUNCTIONAL
+  REGION
+  LEGACY_PROJECT
+}
+
 enum GroupBudgetMode {
   TOTAL
   MONTHLY
@@ -33,6 +40,11 @@ enum ProjectStatus {
   ACTIVE
   SUSPENDED
   ARCHIVED
+}
+
+enum ProjectCategory {
+  BUSINESS
+  DEPARTMENT
 }
 
 enum ProjectMemberRole {
@@ -675,6 +687,7 @@ model UsageGroup {
   organizationId String @map("organization_id") @db.Uuid
   name String
   type UsageGroupType
+  orgType OrgUnitType @default(LEGACY_PROJECT) @map("org_type")
   description String @default("")
   enabled Boolean @default(true)
   archivedAt DateTime? @map("archived_at")
@@ -705,6 +718,7 @@ model GroupMember {
   role GroupMemberRole @default(MEMBER)
   joinedAt DateTime @default(now()) @map("joined_at")
   removedAt DateTime? @map("removed_at")
+  isPrimary Boolean @default(true) @map("is_primary")
   group UsageGroup @relation(fields: [groupId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
   membership Membership @relation(fields: [organizationId, accountId], references: [organizationId, accountId], onDelete: Restrict, onUpdate: Restrict)
   @@id([groupId, accountId])
@@ -730,6 +744,7 @@ model Project {
   name String
   description String @default("")
   status ProjectStatus @default(ACTIVE)
+  category ProjectCategory @default(BUSINESS)
   sourceGroupId String? @unique @map("source_group_id") @db.Uuid
   budgetMode GroupBudgetMode @default(TOTAL) @map("budget_mode")
   budgetTimezone String @default("Asia/Shanghai") @map("budget_timezone")
@@ -925,6 +940,7 @@ model ProjectBudgetApplication {
   applicantAccountId String @map("applicant_account_id") @db.Uuid
   requestedCny Decimal @map("requested_cny") @db.Decimal(20, 8)
   reason String
+  selfApproved Boolean @default(false) @map("self_approved")
   status BudgetApplicationStatus @default(REGISTERED)
   approvedCny Decimal? @map("approved_cny") @db.Decimal(20, 8)
   decidedById String? @map("decided_by_id") @db.Uuid
