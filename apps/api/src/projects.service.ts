@@ -1,11 +1,11 @@
-import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { Prisma, type Project } from '@prisma/client'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import type { AuthPrincipal } from '../../../packages/security/src/auth.js'
 import { CreateProjectDto, ProjectPageQueryDto, UpdateProjectDto, type ProjectMemberRole } from './projects.dto.js'
 
 const projectSelect = Prisma.validator<Prisma.ProjectSelect>()({
-  id: true, organizationId: true, regionId: true, code: true, name: true, description: true,
+  id: true, organizationId: true, regionId: true, category: true, code: true, name: true, description: true,
   status: true, sourceGroupId: true, budgetMode: true, budgetTimezone: true, createdAt: true, updatedAt: true,
   region: { select: { id: true, name: true } },
   members: { orderBy: { accountId: 'asc' }, include: { membership: { select: {
@@ -57,7 +57,8 @@ export class ProjectsService {
       organizationId: actor.organizationId,
       region: this.visibleRegions(actor),
       status: page.status ?? 'ACTIVE',
-      ...(page.regionId ? { regionId: page.regionId } : {}),
+      ...((page.regionId ?? page.ownerOrgUnitId) ? { regionId: page.regionId ?? page.ownerOrgUnitId } : {}),
+      ...(page.category ? { category: page.category } : {}),
       ...(page.q ? { OR: [
         { code: { contains: page.q, mode: 'insensitive' } },
         { name: { contains: page.q, mode: 'insensitive' } }
@@ -75,12 +76,15 @@ export class ProjectsService {
     this.assertAdmin(actor)
     try {
       return await this.prisma.$transaction(async db => {
-        await this.region(db, actor.organizationId, input.regionId)
+        if (input.category === 'DEPARTMENT') throw new ConflictException('Department projects are created automatically by their organization')
+        const ownerOrgUnitId = input.ownerOrgUnitId ?? input.regionId
+        if (!ownerOrgUnitId) throw new BadRequestException('ownerOrgUnitId is required')
+        await this.region(db, actor.organizationId, ownerOrgUnitId)
         const project = await db.project.create({ data: { organizationId: actor.organizationId,
-          regionId: input.regionId, code: input.code, name: input.name, description: input.description,
+          regionId: ownerOrgUnitId, category: input.category ?? 'BUSINESS', code: input.code, name: input.name, description: input.description,
           ...(input.sourceGroupId ? { sourceGroupId: input.sourceGroupId } : {}) },
           select: projectSelect })
-        await this.audit(db, actor, project.id, 'create', { regionId: input.regionId, code: input.code, name: input.name })
+        await this.audit(db, actor, project.id, 'create', { ownerOrgUnitId, code: input.code, name: input.name })
         return project
       }, { timeout: 15_000 })
     } catch (error) {
@@ -151,12 +155,13 @@ export class ProjectsService {
   addMember(actor: AuthPrincipal, id: string, input: { accountId: string; role: ProjectMemberRole }) {
     return this.mutate(actor, id, 'add_member', async (db, project) => {
       if (project.status === 'ARCHIVED') throw new ConflictException('Archived projects cannot be modified')
-      const regionMember = await db.groupMember.findFirst({ where: {
-        organizationId: actor.organizationId, groupId: project.regionId, accountId: input.accountId, removedAt: null,
+      if (project.category === 'DEPARTMENT') throw new ConflictException('Department project members are synchronized from the organization')
+      const organizationMember = await db.groupMember.findFirst({ where: {
+        organizationId: actor.organizationId, accountId: input.accountId, removedAt: null,
         group: { enabled: true, archivedAt: null, organization: { enabled: true } },
         membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } }
       } })
-      if (!regionMember) throw new ForbiddenException('Active region member required')
+      if (!organizationMember) throw new ForbiddenException('Active organization member required')
       return db.projectMember.upsert({ where: { projectId_accountId: { projectId: id, accountId: input.accountId } },
         create: { organizationId: actor.organizationId, projectId: id, accountId: input.accountId, role: input.role },
         update: { role: input.role }, include: { membership: { select: {
@@ -168,6 +173,7 @@ export class ProjectsService {
   setMemberRole(actor: AuthPrincipal, id: string, accountId: string, role: ProjectMemberRole) {
     return this.mutate(actor, id, 'set_member_role', async (db, project) => {
       if (project.status === 'ARCHIVED') throw new ConflictException('Archived projects cannot be modified')
+      if (project.category === 'DEPARTMENT') throw new ConflictException('Department project members are synchronized from the organization')
       const result = await db.projectMember.updateMany({ where: { organizationId: actor.organizationId,
         projectId: id, accountId }, data: { role } })
       if (!result.count) throw new NotFoundException('Project member not found')
@@ -178,6 +184,7 @@ export class ProjectsService {
   removeMember(actor: AuthPrincipal, id: string, accountId: string) {
     return this.mutate(actor, id, 'remove_member', async (db, project) => {
       if (project.status === 'ARCHIVED') throw new ConflictException('Archived projects cannot be modified')
+      if (project.category === 'DEPARTMENT') throw new ConflictException('Department project members are synchronized from the organization')
       const result = await db.projectMember.deleteMany({ where: { organizationId: actor.organizationId,
         projectId: id, accountId } })
       if (!result.count) throw new NotFoundException('Project member not found')
