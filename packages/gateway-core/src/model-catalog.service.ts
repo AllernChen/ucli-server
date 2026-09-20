@@ -16,21 +16,23 @@ export class ModelCatalogService {
 
   private async allowedModels(identity: ModelAccessPrincipal): Promise<string[] | null> {
     if (!identity.groupId) return null
+    const organizationMember = await this.prisma.groupMember.findFirst({ where: {
+      organizationId: identity.organizationId, groupId: identity.groupId, accountId: identity.accountId, removedAt: null,
+      group: { enabled: true, archivedAt: null, organization: { enabled: true } },
+      membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } }
+    }, select: { group: { select: { models: { select: { publicModelId: true } } } } } })
+    if (organizationMember) return organizationMember.group.models.map(item => item.publicModelId)
+    if (!identity.projectId) return []
+    const projectMember = await this.prisma.projectMember.findFirst({ where: {
+      projectId: identity.projectId, accountId: identity.accountId, role: { not: 'VIEWER' },
+      membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } }
+    }, select: { projectId: true } })
+    if (!projectMember) return []
     const group = await this.prisma.usageGroup.findFirst({ where: {
       id: identity.groupId, organizationId: identity.organizationId, enabled: true, archivedAt: null,
       organization: { enabled: true }
     }, select: { models: { select: { publicModelId: true } } } })
-    if (!group) return []
-    const organizationMember = await this.prisma.groupMember.findFirst({ where: {
-      groupId: identity.groupId, accountId: identity.accountId, removedAt: null,
-      membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } }
-    }, select: { groupId: true } })
-    const projectMember = identity.projectId ? await this.prisma.projectMember.findFirst({ where: {
-      projectId: identity.projectId, accountId: identity.accountId, role: { not: 'VIEWER' },
-      membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } }
-    }, select: { projectId: true } }) : null
-    if (!organizationMember && !projectMember) return []
-    return group.models.map(item => item.publicModelId)
+    return group?.models.map(item => item.publicModelId) ?? []
   }
 
   async list(identity: ModelAccessPrincipal, protocol?: GatewayProtocol) {
