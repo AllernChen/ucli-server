@@ -23,7 +23,10 @@ it('lists organization kinds and department projects', async () => {
     items: [
       { id: 'org-1', name: '研发部', orgType: 'FUNCTIONAL', enabled: true, archivedAt: null,
         memberCount: 4, activeKeyCount: 3, activeProjectCount: 0,
-        departmentProject: { id: 'project-1', name: '研发部-部门预算', category: 'DEPARTMENT' } },
+        departmentProject: { id: 'project-1', name: '研发部-部门预算', category: 'DEPARTMENT' },
+        budget: { projectCount: 1, totalLimitCny: '100', spentCny: '20', reservedCny: '10',
+          occupiedCny: '30', availableCny: '70', usagePercent: 30, unlimitedProjectCount: 0, alertProjectCount: 0 },
+        usage: { requests: 12, totalTokens: '345', costCny: '1.23000000', activeAccounts: 2, lastUsedAt: '2026-09-20T00:00:00Z' } },
       { id: 'org-2', name: '广东-市局', orgType: 'REGION', enabled: true, archivedAt: null,
         memberCount: 12, activeKeyCount: 8, activeProjectCount: 2, departmentProject: null }
     ], total: 2, offset: 0, limit: 20
@@ -34,6 +37,9 @@ it('lists organization kinds and department projects', async () => {
   expect(wrapper.text()).toContain('职能部门')
   expect(wrapper.text()).toContain('区域部门')
   expect(wrapper.text()).toContain('研发部-部门预算')
+  expect(wrapper.text()).toContain('预算进度')
+  expect(wrapper.text()).toContain('¥30 / ¥100')
+  expect(wrapper.text()).toContain('30%')
   expect(wrapper.text()).not.toContain('用量组')
 })
 
@@ -46,12 +52,17 @@ it('shows organization members, projects, and department budget entry', async ()
     if (url.endsWith('/model-access')) return [{ publicModel: { id: 'deepseek', displayName: 'DeepSeek' } }]
     return { id: 'org-1', name: '研发部', orgType: 'FUNCTIONAL', description: '', enabled: true, archivedAt: null,
       memberCount: 1, modelCount: 1, activeKeyCount: 2, activeProjectCount: 1,
-      departmentProject: { id: 'project-1', name: '研发部-部门预算', category: 'DEPARTMENT' } }
+      departmentProject: { id: 'project-1', name: '研发部-部门预算', category: 'DEPARTMENT' },
+      budget: { projectCount: 1, totalLimitCny: '100', spentCny: '20', reservedCny: '10',
+        occupiedCny: '30', availableCny: '70', usagePercent: 30, unlimitedProjectCount: 0, alertProjectCount: 0 },
+      usage: { requests: 20, totalTokens: '300', costCny: '2.50000000', activeAccounts: 1, lastUsedAt: '2026-09-20T00:00:00Z' } }
   })
   const wrapper = render(OrgUnitDetail)
   await flushPromises()
   expect(wrapper.text()).toContain('研发部')
   expect(wrapper.text()).toContain('部门预算项目')
+  expect(wrapper.text()).toContain('近 30 天采购成本')
+  expect(wrapper.text()).toContain('¥2.50')
   await wrapper.get('[data-tab="members"]').trigger('click')
   await flushPromises()
   expect(wrapper.text()).toContain('负责人')
