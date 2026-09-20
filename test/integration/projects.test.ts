@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ProjectsService } from '../../apps/api/src/projects.service.js'
 import { UsageGroupsService } from '../../apps/api/src/usage-groups.service.js'
+import { OrgUnitsService } from '../../apps/api/src/org-units.service.js'
 import { UsageGroupPageQueryDto } from '../../apps/api/src/usage-groups.dto.js'
 import { PrismaService } from '../../packages/database/src/prisma.service.js'
 import { createOrganization, withTestDatabase } from './database.js'
@@ -45,6 +46,35 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
       expect(regions.items[0].projects).toEqual([expect.objectContaining({
         id: project.id, regionId: region.id, code: 'GD-PROV-SLT', name: '省厅', status: 'ACTIVE'
       })])
+    })
+  })
+
+  it('uses an organization owner, filters categories, and allows explicit cross-department collaborators', async () => {
+    await withTestDatabase(async db => {
+      const { actor, account } = await createOrganization(db)
+      const organizations = new OrgUnitsService(db as PrismaService)
+      const projects = new ProjectsService(db as PrismaService)
+      const region = await organizations.create(actor, { name: '广东-市局', kind: 'REGION' })
+      const engineering = await organizations.create(actor, { name: '工程部', kind: 'FUNCTIONAL' })
+
+      const project = await projects.create(actor, {
+        ownerOrgUnitId: region.id, category: 'BUSINESS', code: 'ORG-OWNER', name: '组织归属项目'
+      })
+      expect(project).toMatchObject({ regionId: region.id, category: 'BUSINESS' })
+      expect((await projects.list(actor, { ownerOrgUnitId: region.id, category: 'BUSINESS' })).items.map(item => item.id))
+        .toEqual([project.id])
+
+      await expect(projects.create(actor, {
+        ownerOrgUnitId: engineering.id, category: 'DEPARTMENT', code: 'MANUAL-DEPT', name: '手工部门项目'
+      })).rejects.toMatchObject({ status: 409 })
+
+      await organizations.addMember(actor, engineering.id, account.id)
+      await projects.addMember(actor, project.id, { accountId: account.id, role: 'CONTRIBUTOR' })
+      const detail = await projects.detail(actor, project.id)
+      expect(detail.members).toHaveLength(1)
+      await expect(projects.addMember(actor, (await db.project.findFirstOrThrow({
+        where: { regionId: engineering.id, category: 'DEPARTMENT' }
+      })).id, { accountId: account.id, role: 'CONTRIBUTOR' })).rejects.toMatchObject({ status: 409 })
     })
   })
 

@@ -17,7 +17,7 @@ import type { AnalyticsOverview } from '../../../../packages/usage/src/analytics
 const props = defineProps<{ principal: { id: string; displayName: string; email?: string; organizationId: string; organizationName?: string; role: string; status?: string } }>()
 const emit = defineEmits<{ 'profile-updated': []; 'password-changed': []; logout: [] }>()
 const route = useRoute(), router = useRouter()
-const tabs = [['basic', '基本资料'], ['security', '账号安全'], ['api-keys', 'API Keys'], ['groups', '我的用量组'], ['led-groups', '我负责的组'], ['usage', '我的用量']]
+const tabs = [['basic', '基本资料'], ['security', '账号安全'], ['api-keys', 'API Keys'], ['groups', '我的组织'], ['led-groups', '我负责的组织'], ['usage', '我的用量']]
 const tab = computed(() => tabs.some(([key]) => key === route.query.tab) ? String(route.query.tab) : 'basic')
 const admin = computed(() => ['PLATFORM_ADMIN', 'ORG_ADMIN'].includes(props.principal.role))
 const roleLabel = computed(() => ({ PLATFORM_ADMIN: '平台管理员', ORG_ADMIN: '组织管理员', MEMBER: '员工' }[props.principal.role] || props.principal.role))
@@ -175,13 +175,13 @@ onUnmounted(() => { reads.dispose(); mutations.dispose(); modelReads.dispose(); 
     <Drawer :open="helpOpen" title="客户端接入说明" @close="helpOpen = false"><KeyConnectionHelp /></Drawer>
   </section>
   <section v-else-if="tab === 'groups'" class="panel profile-section">
-    <div class="section-header"><h2>我的用量组</h2><button :disabled="loading" @click="load">刷新</button></div>
-    <p v-if="loading" class="state" role="status">正在加载用量组…</p><div v-else-if="error" role="alert"><p class="state error">{{ error }}</p><button data-retry @click="load">重试</button></div>
-    <template v-else><table v-if="groups.length"><thead><tr><th>用量组</th><th>类型</th><th>状态</th><th>加入时间</th><th>模型</th></tr></thead><tbody><tr v-for="group in groups" :key="group.id"><td>{{ group.name }}</td><td>{{ group.type === 'PROJECT' ? '项目组' : '部门组' }}</td><td>{{ group.archivedAt ? '已归档' : group.enabled ? '正常' : '已停用' }}</td><td>{{ date(group.joinedAt) }}</td><td><button data-models :disabled="!group.enabled || Boolean(group.archivedAt)" @click="showModels(group)">查看可用模型</button></td></tr></tbody></table><p v-else class="empty">暂无用量组，请联系管理员添加。</p></template>
+    <div class="section-header"><h2>我的组织</h2><button :disabled="loading" @click="load">刷新</button></div>
+    <p v-if="loading" class="state" role="status">正在加载组织…</p><div v-else-if="error" role="alert"><p class="state error">{{ error }}</p><button data-retry @click="load">重试</button></div>
+    <template v-else><table v-if="groups.length"><thead><tr><th>组织</th><th>类型</th><th>状态</th><th>加入时间</th><th>模型</th></tr></thead><tbody><tr v-for="group in groups" :key="group.id"><td>{{ group.name }}</td><td>{{ group.type === 'PROJECT' ? '项目组' : '部门组' }}</td><td>{{ group.archivedAt ? '已归档' : group.enabled ? '正常' : '已停用' }}</td><td>{{ date(group.joinedAt) }}</td><td><button data-models :disabled="!group.enabled || Boolean(group.archivedAt)" @click="showModels(group)">查看可用模型</button></td></tr></tbody></table><p v-else class="empty">暂无组织，请联系管理员添加。</p></template>
     <Drawer :open="Boolean(selectedGroup)" :title="`${selectedGroup?.name || ''} · 可用模型`" @close="closeModels"><p v-if="modelsLoading" role="status">正在加载模型…</p><div v-else-if="modelsError" role="alert"><p class="state error">{{ modelsError }}</p><button @click="selectedGroup && showModels(selectedGroup)">重试</button></div><template v-else><p class="muted">目录表示当前模型权限和协议，实际调用还受组预算与服务可用性限制。</p><ul v-if="models.length" class="model-list"><li v-for="model in models" :key="model.id"><strong>{{ model.displayName }}</strong><small>{{ model.id }} · {{ model.protocols.join(' / ') }}</small></li></ul><p v-else class="empty">当前组没有可用模型。</p></template></Drawer>
   </section>
   <section v-else-if="tab === 'led-groups'" class="panel profile-section">
-    <div class="section-header"><h2>{{ ledSelected ? `${ledGroupName} · 预算与用量` : '我负责的组' }}</h2><div class="actions"><button v-if="ledSelected" data-back @click="backToLedGroups">返回组列表</button><button :disabled="loading" @click="load">刷新</button></div></div>
+    <div class="section-header"><h2>{{ ledSelected ? `${ledGroupName} · 预算与用量` : '我负责的组织' }}</h2><div class="actions"><button v-if="ledSelected" data-back @click="backToLedGroups">返回组列表</button><button :disabled="loading" @click="load">刷新</button></div></div>
     <p v-if="loading" class="state" role="status">正在加载…</p><div v-else-if="error" role="alert"><p class="state error">{{ error }}</p><button data-retry @click="load">重试</button></div>
     <template v-else-if="!ledSelected">
       <div v-if="ledGroups.length" class="detail-grid">
@@ -193,7 +193,7 @@ onUnmounted(() => { reads.dispose(); mutations.dispose(); modelReads.dispose(); 
           <button data-open-led @click="openLedGroup(g.id)">查看预算与用量</button>
         </article>
       </div>
-      <p v-else class="empty">您还不是任何用量组的负责人；负责人由管理员在组详情中设置。</p>
+      <p v-else class="empty">您还不是任何组织的负责人；负责人由管理员在组详情中设置。</p>
     </template>
     <template v-else-if="ledUsage">
       <div class="detail-grid">
@@ -222,7 +222,7 @@ onUnmounted(() => { reads.dispose(); mutations.dispose(); modelReads.dispose(); 
     <template v-else-if="usage"><div class="profile-metrics"><div><small>请求数</small><strong>{{ usage.overview.requests }}</strong></div><div><small>输入 + 输出 Token</small><strong>{{ totalTokens }}</strong></div><div><small>人民币成本</small><strong>{{ formatCny(usage.overview.costCny) }}</strong></div></div>
       <p class="muted">其中估算成本 {{ formatCny(usage.overview.estimatedCostCny) }} · 待核对 {{ usage.overview.unsettledRequests }} 次</p><p v-if="usage.overview.tokenUsageIncomplete" class="state">部分请求未提供完整 Token 用量。</p>
       <div class="actions"><button data-usage-logs @click="usageLink('/usage')">我的使用日志</button><button @click="usageLink('/analytics')">查看统计分析</button></div>
-      <table v-if="usage.groups.items.length"><thead><tr><th>用量组</th><th>请求数</th><th>Token</th><th>个人成本</th><th>明细</th></tr></thead><tbody><tr v-for="group in usage.groups.items" :key="group.id || 'ungrouped'"><td>{{ group.name || '历史未分组' }}</td><td>{{ group.requests }}</td><td>{{ group.totalTokens }}</td><td>{{ formatCny(group.costCny) }}<small v-if="group.estimatedCostCny">估算 {{ formatCny(group.estimatedCostCny) }}</small><small v-if="group.unsettledRequests">待核对 {{ group.unsettledRequests }} 次</small></td><td><button @click="usageLink('/usage', group)">查看</button></td></tr></tbody></table><p v-else class="empty">所选时间内暂无使用记录。</p>
+      <table v-if="usage.groups.items.length"><thead><tr><th>组织</th><th>请求数</th><th>Token</th><th>个人成本</th><th>明细</th></tr></thead><tbody><tr v-for="group in usage.groups.items" :key="group.id || 'ungrouped'"><td>{{ group.name || '历史未分组' }}</td><td>{{ group.requests }}</td><td>{{ group.totalTokens }}</td><td>{{ formatCny(group.costCny) }}<small v-if="group.estimatedCostCny">估算 {{ formatCny(group.estimatedCostCny) }}</small><small v-if="group.unsettledRequests">待核对 {{ group.unsettledRequests }} 次</small></td><td><button @click="usageLink('/usage', group)">查看</button></td></tr></tbody></table><p v-else class="empty">所选时间内暂无使用记录。</p>
       <Pagination :total="usage.groups.total" :limit="usage.groups.limit" :offset="usage.groups.offset" @change="changePage" />
     </template>
   </section>

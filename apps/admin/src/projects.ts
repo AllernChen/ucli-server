@@ -6,6 +6,7 @@ export interface Project {
   name: string
   description: string
   status: 'ACTIVE' | 'SUSPENDED' | 'ARCHIVED'
+  category: 'BUSINESS' | 'DEPARTMENT'
   budgetMode: 'TOTAL' | 'MONTHLY'
   budgetTimezone: string
   region: { id: string; name: string }

@@ -1,5 +1,6 @@
 export interface ModelAccessPrincipal {
   groupId?: string | null
+  projectId?: string | null
   organizationId: string
   accountId: string
   role: 'PLATFORM_ADMIN' | 'ORG_ADMIN' | 'MEMBER'

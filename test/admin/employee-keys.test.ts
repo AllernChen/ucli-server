@@ -14,6 +14,7 @@ it('requires an employee group, shows secret once, and retries failed creation w
   let fail = true
   state.api.mockImplementation(async (url, init) => {
     if (url.endsWith('/usage-groups')) return [{ id: 'group-a', name: '研发组' }]
+    if (url.includes('/projects')) return [{ id: 'project-a', name: '项目A', code: 'PA' }]
     if (init?.method === 'POST') { if (fail) throw new Error('暂时失败'); return { id: 'key', secret: 'ucli_sk_only_once' } }
     return page
   })
@@ -21,12 +22,13 @@ it('requires an employee group, shows secret once, and retries failed creation w
   await w.get('[data-action="create-key"]').trigger('click')
   await w.get('[aria-label="Key 名称"]').setValue('CLI')
   expect(w.get('[data-action="save-key"]').attributes('disabled')).toBeDefined()
-  await w.get('[aria-label="Key 所属组"]').setValue('group-a')
+  await w.get('[aria-label="Key 所属组织"]').setValue('group-a')
+  await w.get('[aria-label="项目"]').setValue('project-a')
   await w.get('#employee-key-form').trigger('submit'); await flushPromises()
   expect(w.text()).toContain('暂时失败')
   fail = false
   await w.get('#employee-key-form').trigger('submit'); await flushPromises()
-  expect(state.api).toHaveBeenCalledWith('/api/v1/admin/users/employee-a/api-keys', expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'CLI', groupId: 'group-a', projectId: null, expiresAt: null }) }))
+  expect(state.api).toHaveBeenCalledWith('/api/v1/admin/users/employee-a/api-keys', expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'CLI', projectId: 'project-a', expiresAt: null }) }))
   expect(w.get<HTMLTextAreaElement>('[aria-label="完整 API Key"]').element.value).toBe('ucli_sk_only_once')
   expect(localStorage.length).toBe(0)
   await w.get('[data-action="close-secret"]').trigger('click')
@@ -47,7 +49,7 @@ it('own mode only requests own endpoints and offers no create/edit/enable action
 it('filters own keys on the server and offers historical groups beyond the loaded page', async () => {
   state.api.mockImplementation(async (url: string) => url.endsWith('/usage-groups') ? [{ id: 'active', name: '当前组' }] : { ...page, items: [{ id: 'current', name: '当前 Key', groupId: 'active', secretHint: '…now', revokedAt: null, disabledAt: null, expiresAt: null, lastUsedAt: null, group: { id: 'active', name: '当前组' } }], filterGroups: [{ id: 'archived', name: '历史组' }] })
   const w = render(); await flushPromises()
-  expect(w.get('[aria-label="筛选用量组"]').text()).toContain('历史组')
+  expect(w.get('[aria-label="筛选组织"]').text()).toContain('历史组')
   await w.get('[aria-label="搜索 Key"]').setValue('旧')
   await w.get('[aria-label="Key 状态"]').setValue('active'); await flushPromises()
   expect(state.api.mock.calls.some(([url]) => url === '/api/v1/me/api-keys?limit=20&offset=0&q=%E6%97%A7&status=active')).toBe(true)
@@ -57,12 +59,14 @@ it('does not display a late secret after changing employee or unmounting', async
   let resolve!: (v: unknown) => void
   state.api.mockImplementation(async (url, init) => {
     if (init?.method === 'POST') return new Promise(r => { resolve = r })
+    if (url.includes('/projects')) return [{ id: 'project-late', name: '项目', code: 'P' }]
     return url.endsWith('usage-groups') ? [{ id: 'g', name: '组' }] : page
   })
   const w = render({ accountId: 'first' }); await flushPromises()
   await w.get('[data-action="create-key"]').trigger('click')
   await w.get('[aria-label="Key 名称"]').setValue('CLI')
-  await w.get('[aria-label="Key 所属组"]').setValue('g')
+  await w.get('[aria-label="Key 所属组织"]').setValue('g')
+  await w.get('[aria-label="项目"]').setValue('project-late')
   await w.get('#employee-key-form').trigger('submit')
   await w.setProps({ accountId: 'second' }); await flushPromises()
   resolve({ secret: 'ucli_sk_old_employee' }); await flushPromises()
@@ -94,6 +98,7 @@ it('loads the selected employee groups before creating an organization key', asy
     if (url.startsWith('/api/v1/admin/users?')) return { ...page, items: [{ id: 'employee-b', displayName: '李四', email: 'li@example.invalid' }] }
     if (url.startsWith('/api/v1/admin/usage-groups?')) return { ...page, items: [] }
     if (url === '/api/v1/admin/users/employee-b/usage-groups') return [{ id: 'group-b', name: '产品组' }]
+    if (url.includes('/projects')) return [{ id: 'project-b', name: '项目B', code: 'PB' }]
     if (init?.method === 'POST') return { id: 'key-b', secret: 'ucli_sk_only_once' }
     return page
   })
@@ -102,9 +107,10 @@ it('loads the selected employee groups before creating an organization key', asy
   await w.get('[aria-label="Key 员工"]').setValue('employee-b'); await flushPromises()
   expect(state.api).toHaveBeenCalledWith('/api/v1/admin/users/employee-b/usage-groups')
   await w.get('[aria-label="Key 名称"]').setValue('CLI')
-  await w.get('[aria-label="Key 所属组"]').setValue('group-b')
+  await w.get('[aria-label="Key 所属组织"]').setValue('group-b')
+  await w.get('[aria-label="项目"]').setValue('project-b')
   await w.get('#employee-key-form').trigger('submit'); await flushPromises()
-  expect(state.api).toHaveBeenCalledWith('/api/v1/admin/users/employee-b/api-keys', expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'CLI', groupId: 'group-b', projectId: null, expiresAt: null }) }))
+  expect(state.api).toHaveBeenCalledWith('/api/v1/admin/users/employee-b/api-keys', expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'CLI', projectId: 'project-b', expiresAt: null }) }))
 })
 
 it('searches employee pages inside the create drawer and keeps the selected employee', async () => {

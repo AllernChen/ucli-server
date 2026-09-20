@@ -38,29 +38,38 @@ export class GatewayAuthGuard implements CanActivate {
         where: { secretHash: hashOpaqueToken(token) },
         include: {
           membership: true,
-          group: { select: { type: true } },
-          project: { select: { id: true, regionId: true, status: true } }
+          group: { select: { id: true, type: true, orgType: true, enabled: true, archivedAt: true, organization: { select: { enabled: true } } } },
+          project: { select: { id: true, regionId: true, status: true, category: true,
+            members: { where: { role: { not: 'VIEWER' } }, select: {
+              accountId: true, membership: { select: { status: true, account: { select: { status: true } } } }
+            } } } }
         }
       })
       const now = new Date()
       const invalid = () => new UnauthorizedException({ code: 'invalid_api_key', message: 'Employee API key is invalid or inactive' })
       if (!key || key.disabledAt || key.deletedAt || key.revokedAt || (key.expiresAt && key.expiresAt <= now)) throw invalid()
-      await assertActiveGroupMember(this.prisma, key)
+      const project = key.project
+      if (project) {
+        if (project.status !== 'ACTIVE' || !key.group.enabled || key.group.archivedAt || !key.group.organization.enabled) throw invalid()
+        const member = project.members.find(item =>
+          item.accountId === key.accountId && item.membership.status === 'ACTIVE' && item.membership.account.status === 'ACTIVE')
+        if (!member) throw invalid()
+      } else {
+        if (key.group.type !== 'PROJECT') throw invalid()
+        await assertActiveGroupMember(this.prisma, key)
+      }
       const used = await this.prisma.employeeApiKey.updateMany({ where: { id: key.id, disabledAt: null, deletedAt: null, revokedAt: null,
         OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] }, data: { lastUsedAt: now } })
       if (!used.count) throw invalid()
-      let projectId: string | null = null
-      if (key.group.type === 'REGION') {
-        if (!key.project || key.project.regionId !== key.groupId || key.project.status !== 'ACTIVE') throw invalid()
-        projectId = key.project.id
-      }
+      const projectId = project?.id ?? null
       identity = { credentialType: 'API_KEY', apiKeyId: key.id, sub: key.accountId, organizationId: key.organizationId,
         groupId: key.groupId, projectId, role: key.membership.role }
     } else {
       const principal = await this.auth.authenticateToken(token)
       if (!principal.deviceId) throw new UnauthorizedException('A device token or employee API key is required')
       identity = { credentialType: 'DEVICE', deviceId: principal.deviceId, sub: principal.sub,
-        organizationId: principal.organizationId, groupId: principal.groupId ?? null, projectId: null, role: principal.role }
+        organizationId: principal.organizationId, groupId: principal.groupId ?? null,
+        projectId: principal.projectId ?? null, role: principal.role }
     }
     request.principal = identity
     return true

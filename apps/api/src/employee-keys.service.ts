@@ -73,7 +73,7 @@ export class EmployeeKeysService {
       where: {
         organizationId: actor.organizationId, regionId, status: 'ACTIVE',
         region: {
-          type: 'REGION', enabled: true, archivedAt: null,
+          orgType: { in: ['REGION', 'FUNCTIONAL', 'EXECUTIVE'] }, enabled: true, archivedAt: null,
           members: { some: { accountId: accountId ?? actor.sub, removedAt: null,
             membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } } } }
         }
@@ -85,26 +85,34 @@ export class EmployeeKeysService {
 
   async create(actor: AuthPrincipal, accountId: string, input: CreateEmployeeKeyDto) {
     this.assertAdmin(actor)
+    if ('groupId' in input) throw new BadRequestException('projectId is required; groupId is no longer accepted')
+    if (!input.projectId) throw new BadRequestException('projectId is required')
     const expiresAt = expiry(input.expiresAt)
     const secret = `ucli_sk_${createOpaqueToken()}`
     const encrypted = encryptSecret(secret, loadMasterKey())
     const key = await this.prisma.$transaction(async db => {
-      const region = await lockUsageGroup(db, actor.organizationId, input.groupId)
-      await assertActiveGroupMember(db, { organizationId: actor.organizationId, accountId, groupId: input.groupId })
-      let projectId: string | null = null
-      if (region.type === 'REGION') {
-        if (!input.projectId) throw new BadRequestException('projectId is required for a region employee API key')
-        const project = await db.project.findFirst({
-          where: { id: input.projectId, organizationId: actor.organizationId, regionId: input.groupId, status: 'ACTIVE' },
-          select: { id: true }
-        })
-        if (!project) throw new NotFoundException('Active project in target region not found')
-        projectId = project.id
-      } else if (input.projectId) {
-        throw new BadRequestException('projectId is only supported for region usage groups')
-      }
+      const locked = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT id FROM projects
+        WHERE id = ${input.projectId}::uuid AND organization_id = ${actor.organizationId}::uuid
+        FOR UPDATE
+      `)
+      if (!locked.length) throw new NotFoundException('Active project not found')
+      const project = await db.project.findFirst({
+        where: {
+          id: input.projectId, organizationId: actor.organizationId, status: 'ACTIVE',
+          region: { enabled: true, archivedAt: null, organization: { enabled: true }, orgType: { in: ['REGION', 'FUNCTIONAL', 'EXECUTIVE'] } }
+        },
+        select: { id: true, regionId: true, category: true }
+      })
+      if (!project) throw new NotFoundException('Active project not found')
+      const projectMember = await db.projectMember.findFirst({ where: {
+        projectId: project.id, accountId, role: { not: 'VIEWER' },
+        membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } }
+      }, select: { projectId: true, accountId: true } })
+      if (!projectMember) throw new ForbiddenException('Active project member required')
+      await lockUsageGroup(db, actor.organizationId, project.regionId)
       const created = await db.employeeApiKey.create({ data: { organizationId: actor.organizationId, accountId,
-        groupId: input.groupId, projectId, name: input.name, createdById: actor.sub, expiresAt,
+        groupId: project.regionId, projectId: project.id, name: input.name, createdById: actor.sub, expiresAt,
         secretHash: hashOpaqueToken(secret), secretHint: opaqueTokenHint(secret),
         secretCiphertext: encrypted.ciphertext, secretIv: encrypted.iv, secretTag: encrypted.tag }, select: keySummary })
       await this.audit(db, actor, created, 'create')
@@ -225,7 +233,13 @@ export class EmployeeKeysService {
   setEnabled(actor: AuthPrincipal, id: string, enabled: boolean) {
     return this.mutate(actor, id, enabled ? 'enable' : 'disable', async (key, db) => {
       this.assertMutable(key)
-      if (enabled) await assertActiveGroupMember(db, key)
+      if (enabled && key.projectId) {
+        const projectMember = await db.projectMember.findFirst({ where: {
+          projectId: key.projectId, accountId: key.accountId, role: { not: 'VIEWER' },
+          membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } }
+        }, select: { projectId: true, accountId: true } })
+        if (!projectMember) throw new ForbiddenException('Active project member required')
+      } else if (enabled) await assertActiveGroupMember(db, key)
       return { disabledAt: enabled ? null : new Date() }
     })
   }

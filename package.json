@@ -1,6 +1,6 @@
 {
   "name": "ucli-server",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "private": true,
   "description": "Private UCLI control plane and model gateway",
   "license": "UNLICENSED",
@@ -20,6 +20,7 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
+    "org:verify": "node scripts/verify-org-convergence.mjs",
     "admin:dev": "vite --config apps/admin/vite.config.ts",
     "admin:build": "vite build --config apps/admin/vite.config.ts",
     "licenses:check": "node scripts/check-licenses.mjs",

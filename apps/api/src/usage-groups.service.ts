@@ -54,6 +54,7 @@ export class UsageGroupsService {
     return this.prisma.$transaction(async db => {
       const group = await db.usageGroup.create({ data: { organizationId: actor.organizationId,
         name: input.name, type: input.type, description: input.description,
+        orgType: input.type === 'REGION' ? 'REGION' : input.type === 'DEPARTMENT' ? 'FUNCTIONAL' : 'LEGACY_PROJECT',
         budgetMode: input.type === 'DEPARTMENT' ? 'MONTHLY' : 'TOTAL' } })
       await this.audit(db, actor, group.id, 'create', { name: input.name, type: input.type })
       return group
@@ -284,12 +285,18 @@ export class UsageGroupsService {
   }
 
   addMember(actor: AuthPrincipal, id: string, accountId: string) {
-    return this.mutate(actor, id, 'add_member', async db => {
+    return this.mutate(actor, id, 'add_member', async (db, group) => {
       const member = await db.membership.findFirst({ where: { organizationId: actor.organizationId, accountId,
         status: 'ACTIVE', account: { status: 'ACTIVE' } } })
       if (!member) throw new ForbiddenException('Active organization member required')
+      const isPrimary = group.orgType !== 'LEGACY_PROJECT'
+      if (isPrimary) {
+        await db.groupMember.updateMany({ where: { organizationId: actor.organizationId, accountId,
+          removedAt: null, isPrimary: true }, data: { isPrimary: false } })
+      }
       return db.groupMember.upsert({ where: { groupId_accountId: { groupId: id, accountId } },
-        create: { organizationId: actor.organizationId, groupId: id, accountId }, update: { removedAt: null, joinedAt: new Date() } })
+        create: { organizationId: actor.organizationId, groupId: id, accountId, isPrimary },
+        update: { removedAt: null, joinedAt: new Date(), isPrimary } })
     }, { accountId })
   }
 

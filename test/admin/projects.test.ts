@@ -82,3 +82,43 @@ it('shows project keys masked by default and reveals the secret after password v
   expect(wrapper.text()).not.toContain('ucli_sk_revealed_secret')
   expect(wrapper.text()).toContain('…efgh')
 })
+
+it('supports member management and platform administrator submit-and-approve', async () => {
+  window.history.replaceState({}, '', '/projects/project-1?tab=members')
+  state.api.mockImplementation(async (url: string, init?: any) => {
+    if (url.includes('/budget-applications') && init?.method === 'POST') return { id: 'entry-1' }
+    if (url.includes('/members') && init?.method === 'POST') return {}
+    if (url.includes('/members')) return { items: [
+      { accountId: 'employee-2', role: 'MEMBER', membership: { status: 'ACTIVE',
+        account: { id: 'employee-2', displayName: '区域成员', email: 'member@example.invalid' } } }
+    ], total: 1, offset: 0, limit: 100 }
+    if (url.includes('/budget-applications')) return { items: [], total: 0, offset: 0, limit: 20 }
+    if (url.includes('/budget')) return { projectId: 'project-1', periodId: 'period', periodKey: 'TOTAL',
+      budgetMode: 'TOTAL', budgetTimezone: 'Asia/Shanghai', unlimited: false, limitCny: '100',
+      spentCny: '20', reservedCny: '5', uncertainCny: '0', availableCny: '75' }
+    if (url.includes('api-keys')) return { ...page, items: [] }
+    return { id: 'project-1', organizationId: 'org', regionId: 'region-1', category: 'BUSINESS',
+      code: 'GD-YX', name: '越秀', description: '', status: 'ACTIVE', budgetMode: 'TOTAL',
+      budgetTimezone: 'Asia/Shanghai', region: { id: 'region-1', name: '广东-市局' },
+      members: [{ accountId: 'employee-1', role: 'OWNER', membership: { account: { displayName: '负责人', email: 'owner@example.invalid' } } }] }
+  })
+  const wrapper = render(ProjectDetail)
+  await flushPromises()
+  expect(wrapper.text()).toContain('所属部门')
+  await wrapper.get('[data-tab="members"]').trigger('click')
+  await flushPromises()
+  await wrapper.get('[aria-label="选择项目成员"]').setValue('employee-2')
+  await wrapper.get('[data-action="add-project-member"]').trigger('click')
+  await flushPromises()
+  expect(state.api.mock.calls.find(([url, init]) => url.endsWith('/members') && init?.method === 'POST')?.[1].body)
+    .toBe(JSON.stringify({ accountId: 'employee-2', role: 'CONTRIBUTOR' }))
+
+  await wrapper.get('[data-tab="budget"]').trigger('click')
+  await wrapper.get('[aria-label="申请后项目总额"]').setValue('150')
+  await wrapper.get('[aria-label="预算申请原因"]').setValue('平台管理员批复项目预算')
+  await wrapper.get('[data-action="submit-and-approve"]').trigger('click')
+  await flushPromises()
+  const body = JSON.parse(state.api.mock.calls.find(([url, init]) => url.includes('/budget-applications/submit-and-approve'))?.[1].body)
+  expect(body).toMatchObject({ requestedTotalCny: '150', unlimited: false, reason: '平台管理员批复项目预算' })
+  expect(body.operationId).toMatch(/^[0-9a-f-]{36}$/)
+})

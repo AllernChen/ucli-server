@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuard
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { AuthGuard, Roles, type AuthPrincipal } from '../../../packages/security/src/auth.js'
 import { UuidPipe } from '../../../packages/http/src/uuid.pipe.js'
-import { AddProjectMemberDto, CreateProjectBudgetApplicationDto, CreateProjectDto, ProjectBudgetAdjustmentDto, ProjectBudgetApplicationDecisionDto, ProjectPageQueryDto, SetProjectMemberRoleDto, UpdateProjectDto } from './projects.dto.js'
+import { AddProjectMemberDto, CreateProjectBudgetApplicationDto, CreateProjectDto, ProjectBudgetAdjustmentDto, ProjectBudgetApplicationDecisionDto, ProjectPageQueryDto, SetProjectMemberRoleDto, SubmitAndApproveProjectBudgetDto, UpdateProjectDto } from './projects.dto.js'
 import { PageQueryDto } from './catalog.dto.js'
 import { ProjectsService } from './projects.service.js'
 import { ProjectBudgetService } from '../../../packages/quota/src/project-budget.service.js'
@@ -25,7 +25,9 @@ export class ProjectsController {
   @Post(':id/budget-adjustments') budgetAdjust(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Body() body: ProjectBudgetAdjustmentDto) { return this.budget.adjust(req.principal, id, body) }
   @Get(':id/budget-entries') budgetEntries(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Query() query: PageQueryDto) { return this.budget.entries(req.principal, id, query) }
   @Get(':id/budget-applications') budgetApplications(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Query() query: PageQueryDto) { return this.budget.applications(req.principal, id, query) }
+  @Roles('PLATFORM_ADMIN', 'ORG_ADMIN', 'MEMBER')
   @Post(':id/budget-applications') createBudgetApplication(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Body() body: CreateProjectBudgetApplicationDto) { return this.budget.createApplication(req.principal, id, body) }
+  @Post(':id/budget-applications/submit-and-approve') submitAndApproveBudgetApplication(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Body() body: SubmitAndApproveProjectBudgetDto) { return this.budget.submitAndApprove(req.principal, id, body) }
   @Post(':id/budget-applications/:applicationId/decision') rejectBudgetApplication(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Param('applicationId', UuidPipe) applicationId: string, @Body() body: ProjectBudgetApplicationDecisionDto) { return this.budget.rejectApplication(req.principal, id, applicationId, body.note) }
   @Get(':id/members') members(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string) { return this.projects.members(req.principal, id) }
   @Post(':id/members') addMember(@Req() req: AdminRequest, @Param('id', UuidPipe) id: string, @Body() body: AddProjectMemberDto) { return this.projects.addMember(req.principal, id, body) }
