@@ -16,13 +16,13 @@ const allNavigation = [
   ['overview', '服务总览'], ['channels', '渠道管理'], ['models', '模型目录'], ['procurement-costs', '采购成本'], ['model-test', '模型测试'],
   ['usage', '使用日志'], ['skills', '技能超市'], ['reports', '运营报告'],
   ['analytics', '统计分析'],
-  ['usage-groups', '用量组'], ['projects', '项目管理'], ['users', '用户管理'], ['device-grants', '授权令牌'],
-  ['governance', '治理'], ['organizations', '组织']
+  ['org-units', '组织管理'], ['projects', '项目管理'], ['users', '用户管理'], ['device-grants', '授权令牌'],
+  ['governance', '治理'], ['organizations', '租户管理']
 ]
 const navigation = computed(() => principal.value?.role === 'PLATFORM_ADMIN' ? allNavigation : allNavigation.filter(([name]) =>
-  (principal.value?.role === 'ORG_ADMIN' ? ['usage-groups', 'usage', 'analytics', 'users', 'device-grants'] : ['usage', 'analytics']).includes(name)))
+  (principal.value?.role === 'ORG_ADMIN' ? ['org-units', 'projects', 'usage', 'analytics', 'users', 'device-grants'] : ['usage', 'analytics']).includes(name)))
 const routeAllowed = computed(() => principal.value && (['profile', 'my-access'].includes(String(route.name)) || navigation.value.some(([name]) => route.name === name ||
-  (name === 'usage-groups' && route.name === 'usage-group-detail') || (name === 'projects' && route.name === 'project-detail') ||
+  (name === 'org-units' && route.name === 'org-unit-detail') || (name === 'projects' && route.name === 'project-detail') ||
   (name === 'users' && route.name === 'user-detail') ||
   (name === 'channels' && route.name === 'channel-detail') || (name === 'models' && route.name === 'model-detail'))))
 let sessionGeneration = 0
