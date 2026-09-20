@@ -9,6 +9,8 @@ import { loadMasterKey } from '../../../packages/security/src/master-key.js'
 import { createOpaqueToken, hashOpaqueToken, opaqueTokenHint } from '../../../packages/security/src/tokens.js'
 import { PageQueryDto } from './catalog.dto.js'
 import { EmployeeKeyQueryDto, type CreateEmployeeKeyDto, type UpdateEmployeeKeyDto } from './employee-keys.dto.js'
+import { readProjectBudgets } from '../../../packages/quota/src/project-budget-read.js'
+import Decimal from 'decimal.js'
 
 const keySummary = Prisma.validator<Prisma.EmployeeApiKeySelect>()({
   id: true, organizationId: true, accountId: true, groupId: true, projectId: true,
@@ -150,9 +152,43 @@ export class EmployeeKeysService {
       !managed && accountId ? this.prisma.usageGroup.findMany({ where: { organizationId, keys: { some: { organizationId, accountId, deletedAt: null } } },
         select: { id: true, name: true }, orderBy: { name: 'asc' } }) : Promise.resolve([])
     ])
+    const keyIds = items.map(item => item.id)
+    const projectIds = [...new Set(items.flatMap(item => item.projectId ? [item.projectId] : []))].filter((value): value is string => Boolean(value))
+    const [usageRows, budgets] = await Promise.all([
+      keyIds.length && this.prisma.usageLog?.groupBy ? this.prisma.usageLog.groupBy({ by: ['apiKeyId'], where: {
+        organizationId, apiKeyId: { in: keyIds }
+      }, _count: { _all: true }, _sum: { inputTokens: true, outputTokens: true, costUsd: true } }) : Promise.resolve([]),
+      projectIds.length ? readProjectBudgets(this.prisma, organizationId, projectIds) : Promise.resolve(new Map())
+    ])
+    const usageByKey = new Map(usageRows.filter(row => row.apiKeyId).map(row => [row.apiKeyId, {
+      requests: row._count._all,
+      totalTokens: ((row._sum.inputTokens ?? 0n) + (row._sum.outputTokens ?? 0n)).toString(),
+      costCny: new Decimal(row._sum.costUsd ?? 0).toFixed(8)
+    }]))
+    const projectCost = new Map<string, Decimal>()
+    for (const item of items) {
+      if (!item.projectId) continue
+      const cost = new Decimal(usageByKey.get(item.id)?.costCny || 0)
+      projectCost.set(item.projectId, (projectCost.get(item.projectId) ?? new Decimal(0)).plus(cost))
+    }
     return { items: items.map(item => {
       const { membership, group, project, createdBy, ...key } = item
-      return { ...publicSummary(key), account: membership.account, group, project, createdBy }
+      const usage = usageByKey.get(item.id)
+      const keyCost = new Decimal(usage?.costCny || 0)
+      const projectId = item.projectId
+      const budget = projectId ? budgets.get(projectId) : undefined
+      const projectKeyCost = projectId ? projectCost.get(projectId) ?? new Decimal(0) : new Decimal(0)
+      return { ...publicSummary(key), account: membership.account, group, project, createdBy,
+        usage: { requests: usage?.requests ?? 0, totalTokens: usage?.totalTokens ?? '0',
+          costCny: keyCost.toFixed(8), lastUsedAt: item.lastUsedAt },
+        budget: budget ? {
+          limitCny: budget.limitCny, spentCny: budget.spentCny, reservedCny: budget.reservedCny,
+          availableCny: budget.availableCny, unlimited: budget.unlimited,
+          keyCostSharePercent: budget.unlimited || new Decimal(budget.limitCny).isZero() ? null :
+            Number(keyCost.dividedBy(budget.limitCny).times(100).toFixed(2)),
+          projectUsageSharePercent: projectKeyCost.greaterThan(0) ?
+            Number(keyCost.dividedBy(projectKeyCost).times(100).toFixed(2)) : null
+        } : null }
     }), total, offset: query.offset, limit: query.limit, ...(!managed ? { filterGroups } : {}) }
   }
 

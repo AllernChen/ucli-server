@@ -280,13 +280,51 @@ export class OrgUnitsService {
   async members(organizationId: string, id: string, query = new PageQueryDto()) {
     await this.detail(organizationId, id)
     const where = { organizationId, groupId: id, removedAt: null }
-    const [items, total] = await Promise.all([
+    const [items, total, organizationProjects, organizationKeys, usageRows] = await Promise.all([
       this.prisma.groupMember.findMany({ where, skip: query.offset, take: query.limit, orderBy: { accountId: 'asc' },
         include: { membership: { select: { status: true, role: true,
           account: { select: { id: true, displayName: true, email: true, status: true } } } } } }),
-      this.prisma.groupMember.count({ where })
+      this.prisma.groupMember.count({ where }),
+      this.prisma.project.findMany({ where: { organizationId, regionId: id, status: 'ACTIVE' }, select: { id: true } }),
+      this.prisma.employeeApiKey.groupBy({ by: ['accountId'], where: {
+        organizationId, groupId: id, deletedAt: null, revokedAt: null, disabledAt: null
+      }, _count: { _all: true } }),
+      this.prisma.usageLog.groupBy({ by: ['accountId'], where: {
+        organizationId, groupId: id, startedAt: { gte: new Date(Date.now() - 30 * 86_400_000) }
+      }, _count: { _all: true }, _sum: { inputTokens: true, outputTokens: true, costUsd: true }, _max: { startedAt: true } })
     ])
-    return { items, total, limit: query.limit, offset: query.offset }
+    const accountIds = items.map(item => item.accountId)
+    const projectMemberRows = accountIds.length ? await this.prisma.projectMember.findMany({ where: {
+      organizationId, accountId: { in: accountIds }, project: { regionId: id, status: 'ACTIVE' }
+    }, select: { accountId: true, projectId: true } }) : []
+    const totalCost = usageRows.reduce((sum, row) => sum.plus(row._sum.costUsd ?? 0), new Decimal(0))
+    const budgets = await readProjectBudgets(this.prisma, organizationId, organizationProjects.map(project => project.id))
+    const budgetLimit = organizationProjects.reduce((sum, project) => sum.plus(budgets.get(project.id)?.limitCny || 0), new Decimal(0))
+    const budgetOccupied = organizationProjects.reduce((sum, project) => sum.plus(
+      new Decimal(budgets.get(project.id)?.spentCny || 0).plus(budgets.get(project.id)?.reservedCny || 0)
+    ), new Decimal(0))
+    return { items: items.map(item => {
+      const usage = usageRows.find(row => row.accountId === item.accountId)
+      const cost = new Decimal(usage?._sum.costUsd ?? 0)
+      const activeProjectIds = new Set(projectMemberRows.filter(row => row.accountId === item.accountId).map(row => row.projectId))
+      const activeKeyCount = organizationKeys.find(row => row.accountId === item.accountId)?._count._all ?? 0
+      return { ...item, activeProjectCount: activeProjectIds.size, activeKeyCount,
+        usage: {
+          requests: usage?._count._all ?? 0,
+          totalTokens: ((usage?._sum.inputTokens ?? 0n) + (usage?._sum.outputTokens ?? 0n)).toString(),
+          costCny: cost.toFixed(8),
+          lastUsedAt: usage?._max.startedAt ?? null,
+          usageSharePercent: totalCost.greaterThan(0) ? Number(cost.dividedBy(totalCost).times(100).toFixed(2)) : 0,
+          budgetSharePercent: budgetOccupied.greaterThan(0) ? Number(cost.dividedBy(budgetOccupied).times(100).toFixed(2)) : 0
+        },
+        budget: {
+          totalLimitCny: budgetLimit.toFixed(8),
+          occupiedCny: budgetOccupied.toFixed(8),
+          availableCny: budgetLimit.minus(budgetOccupied).toFixed(8),
+          usagePercent: budgetLimit.greaterThan(0) ? Number(budgetOccupied.dividedBy(budgetLimit).times(100).toFixed(2)) : null
+        }
+      }
+    }), total, limit: query.limit, offset: query.offset }
   }
 
   async projects(organizationId: string, id: string) {

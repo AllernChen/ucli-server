@@ -171,7 +171,7 @@ onUnmounted(() => { reads.dispose(); mutations.dispose(); modelReads.dispose(); 
   <section v-else-if="tab === 'api-keys'" class="profile-keys">
     <div class="section-header"><div class="actions"><button data-scope="mine" :class="{ primary: !managed }" :aria-pressed="!managed" @click="managed = false">我的 Key</button><button v-if="admin" data-scope="organization" :class="{ primary: managed }" :aria-pressed="managed" @click="managed = true">组织 Key</button></div><button @click="helpOpen = true">接入说明</button></div>
     <p v-if="managed" class="muted">管理当前组织内的员工 Key。</p>
-    <EmployeeKeysPanel :key="`${principal.organizationId}:${principal.id}:${managed}`" :managed="admin && managed" :account-id="admin && !managed ? principal.id : undefined" />
+    <EmployeeKeysPanel :key="`${principal.organizationId}:${principal.id}:${managed}`" :managed="admin && managed" :account-id="admin && !managed ? principal.id : undefined" :self-account-id="principal.id" />
     <Drawer :open="helpOpen" title="客户端接入说明" @close="helpOpen = false"><KeyConnectionHelp /></Drawer>
   </section>
   <section v-else-if="tab === 'groups'" class="panel profile-section">

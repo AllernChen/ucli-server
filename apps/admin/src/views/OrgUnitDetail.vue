@@ -73,7 +73,7 @@ watch(id, () => void load(), { immediate: true })
       <p v-else>部门预算项目：区域部门的预算由业务项目承载。</p>
     </section>
     <section v-if="tab === 'members'" class="panel table-panel"><h2>组织成员</h2>
-      <table v-if="members.items.length"><thead><tr><th>成员</th><th>组织角色</th><th>状态</th></tr></thead><tbody><tr v-for="member in members.items" :key="member.accountId"><td>{{ member.membership.account.displayName }}<small>{{ member.membership.account.email }}</small></td><td>{{ member.role === 'LEADER' ? '负责人' : '成员' }}</td><td>{{ member.membership.status }}</td></tr></tbody></table>
+      <table v-if="members.items.length"><thead><tr><th>成员</th><th>组织角色</th><th>关联项目 / Key</th><th>近 30 天 Token</th><th>近 30 天成本 / 占比</th><th>预算使用</th><th>状态</th></tr></thead><tbody><tr v-for="member in members.items" :key="member.accountId"><td>{{ member.membership.account.displayName }}<small>{{ member.membership.account.email }}</small></td><td>{{ member.role === 'LEADER' ? '负责人' : '成员' }}</td><td>{{ member.activeProjectCount ?? 0 }} / {{ member.activeKeyCount ?? 0 }}</td><td>{{ tokens(member.usage?.totalTokens) }}</td><td>{{ formatCny(member.usage?.costCny || '0') }}<small>{{ member.usage?.usageSharePercent ?? 0 }}% / 预算 {{ member.usage?.budgetSharePercent ?? 0 }}%</small></td><td>{{ formatCny(member.budget?.occupiedCny || '0') }} / {{ formatCny(member.budget?.totalLimitCny || '0') }}<small>{{ member.budget?.usagePercent == null ? '不限额' : `${member.budget.usagePercent}%` }}</small></td><td>{{ member.membership.status }}</td></tr></tbody></table>
       <p v-else class="empty">暂无成员</p>
     </section>
     <section v-if="tab === 'projects'" class="panel table-panel"><h2>关联项目</h2>
