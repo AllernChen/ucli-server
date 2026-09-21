@@ -116,7 +116,7 @@ function onPasswordChanged() { logout(); passwordChanged.value = true }
   <div v-else class="shell">
     <aside><header><div class="brand-mark">U</div><div><strong>UCLI</strong><small>Server Console</small></div></header>
       <nav><button v-for="item in navigation" :key="item[0]" :class="{active: route.name === item[0] || (item[0] !== 'model-test' && String(route.name || '').startsWith(`${item[0].replace(/s$/, '')}-`))}" @click="router.push(item[0] === 'overview' ? '/' : `/${item[0]}`)">{{ item[1] }}</button></nav>
-      <button class="logout" :aria-current="route.name === 'profile' ? 'page' : undefined" @click="router.push('/profile')">个人中心 · {{ principal.displayName }}</button>
+      <button class="logout account" :aria-current="route.name === 'profile' ? 'page' : undefined" @click="router.push('/profile')">个人中心 · {{ principal.displayName }}</button>
       <button class="logout" @click="logout">退出登录</button>
     </aside>
     <section class="content"><RouterView v-if="routeAllowed" v-slot="{ Component }"><component :is="Component" v-if="route.name === 'profile'" :principal="principal" @profile-updated="loadIdentity" @password-changed="onPasswordChanged" @logout="logout" /><component :is="Component" v-else /></RouterView><section v-else class="panel"><h1>当前账号无权访问此页面</h1><button @click="router.push('/profile')">前往个人中心</button></section></section>
