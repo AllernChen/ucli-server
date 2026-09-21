@@ -42,6 +42,7 @@ import { ModelCatalogService } from '../../../packages/gateway-core/src/model-ca
 import { GroupBudgetService } from '../../../packages/quota/src/group-budget.service.js'
 import { ProjectBudgetService } from '../../../packages/quota/src/project-budget.service.js'
 import { ProfileController } from './profile.controller.js'
+import { ProfileUsageService } from './profile-usage.service.js'
 import { LedGroupsController } from './led-groups.controller.js'
 import { LedGroupsService } from './led-groups.service.js'
 import { MeProjectsController } from './me-projects.controller.js'
@@ -51,6 +52,6 @@ import { OrgUnitsService } from './org-units.service.js'
 
 @Module({
   controllers: [AuthController, ChannelsController, ChannelModelsController, ProcurementCostsController, ModelTestingController, AnalyticsController, ClientController, ModelsController, UsageController, SkillsController, ReportsController, GovernanceController, MonitoringController, MetricsController, OrganizationsController, UsersController, DeviceGrantsController, UsageGroupsController, ProjectsController, EmployeeKeysController, ProfileController, LedGroupsController, MeProjectsController, OrgUnitsController],
-  providers: [PrismaService, AuthService, ChannelsService, ChannelModelsService, ProcurementCostsService, ModelBindingService, ModelsService, ModelTestingService, AnalyticsService, UsersService, DeviceGrantLinksService, DeviceGrantsService, AuthGuard, ObjectStorageService, AuditInterceptor, UsageGroupsService, ProjectsService, ModelCatalogService, EmployeeKeysService, GroupBudgetService, ProjectBudgetService, LedGroupsService, MeProjectsService, OrgUnitsService]
+  providers: [PrismaService, AuthService, ChannelsService, ChannelModelsService, ProcurementCostsService, ModelBindingService, ModelsService, ModelTestingService, AnalyticsService, UsersService, DeviceGrantLinksService, DeviceGrantsService, AuthGuard, ObjectStorageService, AuditInterceptor, UsageGroupsService, ProjectsService, ModelCatalogService, EmployeeKeysService, GroupBudgetService, ProjectBudgetService, ProfileUsageService, LedGroupsService, MeProjectsService, OrgUnitsService]
 })
 export class AppModule {}

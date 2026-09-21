@@ -100,10 +100,20 @@ it('keeps group errors distinct from an empty list and previews models only on d
   expect(w.text()).toContain('模型')
 })
 it('reads own usage and preserves date and identity scope in log links', async () => {
-  state.api.mockResolvedValue({ overview: { requests: 2, inputTokens: '12', outputTokens: '8', costCny: '0.1', estimatedCostCny: '0.02', unsettledRequests: 1 }, groups: { items: [{ id: null, name: '历史未分组', requests: 2, totalTokens: '20', costCny: '0.1' }], total: 1, limit: 20, offset: 0 } })
+  state.api.mockResolvedValue({
+    overview: { requests: 2, inputTokens: '12', outputTokens: '8', costCny: '0.1', estimatedCostCny: '0.02', unsettledRequests: 1 },
+    groups: { items: [{ id: null, name: '历史未分组', requests: 2, totalTokens: '20', costCny: '0.1' }], total: 1, limit: 20, offset: 0 },
+    projects: [{ id: 'p1', code: 'P1', name: '省厅项目', category: 'BUSINESS', budgetMode: 'TOTAL', budgetTimezone: 'Asia/Shanghai', region: { id: 'g1', name: '省厅区域' },
+      budget: { limitCny: '100', spentCny: '20', reservedCny: '5', uncertainCny: '0', availableCny: '75', unlimited: false, usagePercent: 25 },
+      usage: { requests: 2, totalTokens: '20', costCny: '0.1' }, shares: { budgetPercent: 0.1, projectUsagePercent: 0.4 } }],
+    keys: [{ id: 'k1', name: 'CLI Key', secretHint: '…abcd', status: 'active', expiresAt: null, lastUsedAt: '2026-09-20T00:00:00Z', group: { id: 'g1', name: '省厅区域' }, project: { id: 'p1', code: 'P1', name: '省厅项目' }, usage: { requests: 2, totalTokens: '20', costCny: '0.1' }, shares: { ownUsagePercent: 100, projectBudgetPercent: 0.1 } }],
+    summary: { projectCount: 1, keyCount: 1, activeKeyCount: 1, unlimitedProjectCount: 0, totalLimitCny: '100', totalSpentCny: '20', totalReservedCny: '5', totalOccupiedCny: '25', totalAvailableCny: '75', totalUsagePercent: 25, ownUsagePercentOfTotalBudget: 0.1, ownUsage: { requests: 2, totalTokens: '20', costCny: '0.1' } }
+  })
   const { w, router } = await render('usage', 'PLATFORM_ADMIN')
   expect(state.api.mock.calls[0][0]).toMatch(/^\/api\/v1\/me\/profile\/usage\?/)
   expect(w.text()).toContain('历史未分组'); expect(w.text()).toContain('待核对')
+  expect(w.text()).toContain('项目总额度'); expect(w.text()).toContain('所在项目用量汇总'); expect(w.text()).toContain('我的 API Key 使用情况')
+  expect(w.get('[data-usage-projects]').text()).toContain('省厅项目'); expect(w.get('[data-usage-keys]').text()).toContain('CLI Key')
   await w.get('[data-usage-logs]').trigger('click'); await flushPromises()
   expect(router.currentRoute.value.path).toBe('/usage')
   expect(router.currentRoute.value.query).toMatchObject({ accountId: 'me', organizationId: 'org', timezone: 'Asia/Shanghai' })

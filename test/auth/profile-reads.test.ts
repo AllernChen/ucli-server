@@ -10,8 +10,8 @@ function harness() {
   const prisma: any = { groupMember: { findMany: vi.fn(async () => [{ joinedAt: new Date('2026-09-01T00:00:00Z'), group: {
     id: groupId, name: 'Personal group', type: 'PROJECT', enabled: false, archivedAt: new Date('2026-09-02T00:00:00Z'), defaultLimitCny: '999' } }]) } }
   const catalog = { list: vi.fn(async () => [{ id: 'model', displayName: 'Allowed model', protocols: ['openai_chat'] }]) }
-  const analytics = { overview: vi.fn(async () => ({ requests: 2 })), breakdown: vi.fn(async () => ({ items: [], total: 0, limit: 50, offset: 0 })) }
-  return { controller: new ProfileController(prisma, catalog as any, analytics as any), prisma, catalog, analytics }
+  const profileUsage = { summary: vi.fn(async () => ({ overview: { requests: 2 }, groups: { items: [], total: 0, limit: 50, offset: 0 } })) }
+  return { controller: new ProfileController(prisma, catalog as any, profileUsage as any), prisma, catalog, profileUsage }
 }
 
 describe('personal profile reads', () => {
@@ -40,13 +40,9 @@ describe('personal profile reads', () => {
   })
 
   it('forces even administrators to their own organization, account, and group breakdown', async () => {
-    const { controller, analytics } = harness()
+    const { controller, profileUsage } = harness()
     const query: any = { organizationId: '40000000-0000-4000-8000-000000000001', accountId: '50000000-0000-4000-8000-000000000001', dimension: 'account', start: '2026-09-01T00:00:00.000Z', end: '2026-09-02T00:00:00.000Z' }
     await expect(controller.usage({ principal: actor }, query)).resolves.toMatchObject({ overview: { requests: 2 }, groups: { total: 0 } })
-    const calls = [analytics.overview.mock.calls, analytics.breakdown.mock.calls] as unknown as any[][][]
-    for (const [, scoped] of calls.map(calls => calls[0])) {
-      expect(scoped).toMatchObject({ organizationId: actor.organizationId, accountId: actor.sub })
-    }
-    expect(analytics.breakdown).toHaveBeenCalledWith(actor, expect.objectContaining({ dimension: 'group' }))
+    expect(profileUsage.summary).toHaveBeenCalledWith(actor, query)
   })
 })

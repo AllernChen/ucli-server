@@ -5,13 +5,17 @@ import { AuthGuard, type AuthPrincipal } from '../../../packages/security/src/au
 import { UuidPipe } from '../../../packages/http/src/uuid.pipe.js'
 import { ModelCatalogService } from '../../../packages/gateway-core/src/model-catalog.service.js'
 import { AnalyticsQueryDto } from './analytics.dto.js'
-import { AnalyticsService } from './analytics.service.js'
+import { ProfileUsageService } from './profile-usage.service.js'
 
 type AuthRequest = { principal: AuthPrincipal }
 
 @ApiTags('profile') @ApiBearerAuth() @UseGuards(AuthGuard) @Controller('api/v1/me/profile')
 export class ProfileController {
-  constructor(private readonly prisma: PrismaService, private readonly catalog: ModelCatalogService, private readonly analytics: AnalyticsService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly catalog: ModelCatalogService,
+    private readonly profileUsage: ProfileUsageService
+  ) {}
 
   @Get('usage-groups') @Header('Cache-Control', 'no-store')
   async groups(@Req() request: AuthRequest) {
@@ -32,12 +36,7 @@ export class ProfileController {
   @Get('usage') @Header('Cache-Control', 'no-store')
   async usage(@Req() request: AuthRequest, @Query() query: AnalyticsQueryDto) {
     const actor = this.webActor(request.principal)
-    const ownQuery: AnalyticsQueryDto = { ...query, organizationId: actor.organizationId, accountId: actor.sub }
-    const [overview, groups] = await Promise.all([
-      this.analytics.overview(actor, ownQuery),
-      this.analytics.breakdown(actor, { ...ownQuery, dimension: 'group' })
-    ])
-    return { overview, groups }
+    return this.profileUsage.summary(actor, query)
   }
 
   private webActor(actor: AuthPrincipal) {

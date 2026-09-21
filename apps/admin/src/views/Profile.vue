@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import Decimal from 'decimal.js'
 import { api } from '../api'
 import { toast } from '../toast'
 import { formatCny } from '../currency'
@@ -30,7 +29,34 @@ type Model = { id: string; displayName: string; protocols: string[] }
 const groups = ref<Group[]>([]), selectedGroup = ref<Group | null>(null), models = ref<Model[]>([])
 const modelsLoading = ref(false), modelsError = ref('')
 type GroupUsage = { id: string | null; name: string; requests: number; totalTokens: string; costCny: string; estimatedCostCny?: string; unsettledRequests?: number }
-const usage = ref<{ overview: AnalyticsOverview; groups: Page<GroupUsage> } | null>(null)
+type ProfileProjectUsage = {
+  id: string; code: string; name: string; category: string; budgetMode: string; budgetTimezone: string
+  region: { id: string; name: string }
+  budget: { limitCny: string; spentCny: string; reservedCny: string; uncertainCny: string; availableCny: string | null; unlimited: boolean; usagePercent: number | null } | null
+  usage: { requests: number; totalTokens: string; costCny: string }
+  shares: { budgetPercent: number | null; projectUsagePercent: number | null }
+}
+type ProfileKeyUsage = {
+  id: string; name: string; secretHint: string; status: 'active' | 'disabled' | 'expired' | 'revoked'
+  expiresAt: string | null; lastUsedAt: string | null
+  group: { id: string; name: string }
+  project: { id: string; code: string; name: string } | null
+  usage: { requests: number; totalTokens: string; costCny: string }
+  shares: { ownUsagePercent: number | null; projectBudgetPercent: number | null }
+}
+type ProfileUsage = {
+  overview: AnalyticsOverview
+  groups: Page<GroupUsage>
+  projects: ProfileProjectUsage[]
+  keys: ProfileKeyUsage[]
+  summary: {
+    projectCount: number; keyCount: number; activeKeyCount: number; unlimitedProjectCount: number
+    totalLimitCny: string; totalSpentCny: string; totalReservedCny: string; totalOccupiedCny: string; totalAvailableCny: string
+    totalUsagePercent: number | null; ownUsagePercentOfTotalBudget: number | null
+    ownUsage: { requests: number; totalTokens: string; costCny: string }
+  }
+}
+const usage = ref<ProfileUsage | null>(null)
 type LedGroup = { id: string; name: string; type: string; description: string; enabled: boolean; archivedAt: string | null; joinedAt: string; budget: GroupBudget | null }
 type LedMetric = { requests: number; successes: number; inputTokens: number; outputTokens: number; costCny: string; avgDurationMs: number; p95DurationMs: number }
 type LedUsage = { range: { start: string; end: string }; overview: LedMetric
@@ -47,8 +73,9 @@ const successRate = (row: LedMetric) => row.requests ? `${Math.round(row.success
 const range = ref(defaultCompanyDateRange()), offset = ref(0)
 const day = (value: string | number) => new Date(new Date(value).getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)
 const startDay = ref(day(range.value.start)), endDay = ref(day(new Date(range.value.end).getTime() - 1))
-const totalTokens = computed(() => usage.value ? new Decimal(usage.value.overview.inputTokens || 0).plus(usage.value.overview.outputTokens || 0).toFixed(0) : '0')
 const date = (value: string) => new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+const percent = (value: number | null | undefined) => value == null ? '—' : `${value}%`
+const keyStatusLabel = (status: ProfileKeyUsage['status']) => ({ active: '可用', disabled: '已停用', expired: '已过期', revoked: '已撤销' }[status])
 
 async function saveName() {
   if (pending.value) return
@@ -219,9 +246,23 @@ onUnmounted(() => { reads.dispose(); mutations.dispose(); modelReads.dispose(); 
   <section v-else class="panel profile-section">
     <h2>我的用量</h2><form class="profile-date-range" @submit.prevent="applyDates"><label>开始日期<input v-model="startDay" aria-label="开始日期" type="date" required></label><label>结束日期<input v-model="endDay" aria-label="结束日期" type="date" required></label><button :disabled="loading">查询</button></form><p class="muted">中国标准时间 · 按个人实际使用归集成本，组预算为共享额度。</p>
     <p v-if="loading" class="state" role="status">正在加载用量…</p><div v-else-if="error" role="alert"><p class="state error">{{ error }}</p><button data-retry @click="load">重试</button></div>
-    <template v-else-if="usage"><div class="profile-metrics"><div><small>请求数</small><strong>{{ usage.overview.requests }}</strong></div><div><small>输入 + 输出 Token</small><strong>{{ totalTokens }}</strong></div><div><small>人民币成本</small><strong>{{ formatCny(usage.overview.costCny) }}</strong></div></div>
-      <p class="muted">其中估算成本 {{ formatCny(usage.overview.estimatedCostCny) }} · 待核对 {{ usage.overview.unsettledRequests }} 次</p><p v-if="usage.overview.tokenUsageIncomplete" class="state">部分请求未提供完整 Token 用量。</p>
+    <template v-else-if="usage">
+      <div class="profile-metrics profile-usage-metrics" data-usage-summary>
+        <div><small>项目总额度</small><strong>{{ formatCny(usage.summary.totalLimitCny) }}</strong><small>{{ usage.summary.projectCount }} 个项目 · 可用 {{ formatCny(usage.summary.totalAvailableCny) }}<template v-if="usage.summary.unlimitedProjectCount"> · 不限额 {{ usage.summary.unlimitedProjectCount }} 个</template></small></div>
+        <div><small>项目已用 / 预占</small><strong>{{ formatCny(usage.summary.totalOccupiedCny) }}</strong><small>已用 {{ formatCny(usage.summary.totalSpentCny) }} · 预占 {{ formatCny(usage.summary.totalReservedCny) }} · {{ percent(usage.summary.totalUsagePercent) }}</small></div>
+        <div><small>我的已用成本</small><strong>{{ formatCny(usage.summary.ownUsage.costCny) }}</strong><small>占项目额度 {{ percent(usage.summary.ownUsagePercentOfTotalBudget) }}</small></div>
+        <div><small>我的请求 / Token</small><strong>{{ usage.summary.ownUsage.requests }} / {{ usage.summary.ownUsage.totalTokens }}</strong><small>有效 Key {{ usage.summary.activeKeyCount }} / {{ usage.summary.keyCount }}</small></div>
+      </div>
+      <p class="muted">中国标准时间 · “我的已用”按当前查询时间范围统计；项目额度和已用 / 预占为项目当前预算周期。估算成本 {{ formatCny(usage.overview.estimatedCostCny) }} · 待核对 {{ usage.overview.unsettledRequests }} 次。</p><p v-if="usage.overview.tokenUsageIncomplete" class="state">部分请求未提供完整 Token 用量。</p>
       <div class="actions"><button data-usage-logs @click="usageLink('/usage')">我的使用日志</button><button @click="usageLink('/analytics')">查看统计分析</button></div>
+
+      <h3>所在项目用量汇总</h3>
+      <table v-if="usage.projects.length" data-usage-projects><thead><tr><th>项目</th><th>总额度</th><th>项目已用 / 预占</th><th>我的用量</th><th>占比</th></tr></thead><tbody><tr v-for="project in usage.projects" :key="project.id"><td>{{ project.name }}<small>{{ project.code }} · {{ project.region.name }}</small></td><td>{{ project.budget?.unlimited ? '不限额' : formatCny(project.budget?.limitCny || '0') }}<small>{{ project.budgetMode === 'TOTAL' ? '项目总额' : '自然月' }}</small></td><td>{{ formatCny(project.budget?.spentCny || '0') }} / {{ formatCny(project.budget?.reservedCny || '0') }}<small>可用 {{ project.budget?.unlimited ? '不限额' : formatCny(project.budget?.availableCny || '0') }}</small><progress v-if="project.budget?.usagePercent != null" :value="project.budget.usagePercent" max="100" aria-label="项目预算使用率"></progress><small v-if="project.budget?.usagePercent != null">{{ project.budget.usagePercent }}%</small></td><td>{{ project.usage.requests }} 次<small>{{ project.usage.totalTokens }} Token · {{ formatCny(project.usage.costCny) }}</small></td><td>额度 {{ percent(project.shares.budgetPercent) }}<small>项目用量 {{ percent(project.shares.projectUsagePercent) }}</small></td></tr></tbody></table><p v-else class="empty">暂无可访问项目。</p>
+
+      <h3>我的 API Key 使用情况</h3>
+      <table v-if="usage.keys.length" data-usage-keys><thead><tr><th>Key / 项目</th><th>状态</th><th>请求数</th><th>Token</th><th>成本</th><th>占比</th><th>最后使用</th></tr></thead><tbody><tr v-for="key in usage.keys" :key="key.id"><td>{{ key.name }}<small class="mono">{{ key.secretHint }}</small><small>{{ key.project?.name || '未关联项目' }}</small></td><td>{{ keyStatusLabel(key.status) }}</td><td>{{ key.usage.requests }}</td><td>{{ key.usage.totalTokens }}</td><td>{{ formatCny(key.usage.costCny) }}</td><td>我的用量 {{ percent(key.shares.ownUsagePercent) }}<small>项目额度 {{ percent(key.shares.projectBudgetPercent) }}</small></td><td>{{ date(key.lastUsedAt) }}</td></tr></tbody></table><p v-else class="empty">暂无 API Key。</p>
+
+      <h3>按组织汇总</h3>
       <table v-if="usage.groups.items.length"><thead><tr><th>组织</th><th>请求数</th><th>Token</th><th>个人成本</th><th>明细</th></tr></thead><tbody><tr v-for="group in usage.groups.items" :key="group.id || 'ungrouped'"><td>{{ group.name || '历史未分组' }}</td><td>{{ group.requests }}</td><td>{{ group.totalTokens }}</td><td>{{ formatCny(group.costCny) }}<small v-if="group.estimatedCostCny">估算 {{ formatCny(group.estimatedCostCny) }}</small><small v-if="group.unsettledRequests">待核对 {{ group.unsettledRequests }} 次</small></td><td><button @click="usageLink('/usage', group)">查看</button></td></tr></tbody></table><p v-else class="empty">所选时间内暂无使用记录。</p>
       <Pagination :total="usage.groups.total" :limit="usage.groups.limit" :offset="usage.groups.offset" @change="changePage" />
     </template>
@@ -229,5 +270,5 @@ onUnmounted(() => { reads.dispose(); mutations.dispose(); modelReads.dispose(); 
 </template>
 
 <style scoped>
-.profile-tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px;border-bottom:1px solid #223046;padding-bottom:12px}.profile-tabs a{padding:10px 16px;border-radius:8px;color:#8293aa;text-decoration:none}.profile-tabs .selected{background:#16283a;color:#72e3c2}.profile-tabs a:focus-visible{outline:2px solid #72e3c2;outline-offset:2px}.profile-section h2{margin-top:0}.profile-form{max-width:480px}.profile-facts{display:grid;gap:14px;margin:8px 0}.profile-facts div{display:grid;grid-template-columns:90px 1fr;gap:12px}.profile-facts dt{color:#8293aa}.profile-facts dd{margin:0;overflow-wrap:anywhere}.profile-logout{margin-top:24px}.profile-date-range{display:flex;align-items:end;flex-wrap:wrap;gap:12px}.profile-date-range label{display:grid;gap:8px}.profile-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:20px 0}.profile-metrics div{padding:16px;border:1px solid #223046;border-radius:10px;display:grid;gap:8px}.profile-metrics strong{font-size:24px;overflow-wrap:anywhere}.model-list{padding-left:20px}.model-list li{padding:12px 0}.model-list small{display:block;color:#8293aa;overflow-wrap:anywhere}.profile-keys>.section-header{margin-bottom:16px}.led-group-card{gap:10px;align-content:start}.led-group-card button{justify-self:start;border:1px solid #2d977f;background:#133b35;color:#76e6c8;border-radius:8px;padding:9px 14px;cursor:pointer}h3{margin-bottom:10px}@media(max-width:600px){.profile-metrics{grid-template-columns:1fr}.profile-tabs a{padding:8px}.profile-date-range label{width:100%}}
+.profile-tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px;border-bottom:1px solid #223046;padding-bottom:12px}.profile-tabs a{padding:10px 16px;border-radius:8px;color:#8293aa;text-decoration:none}.profile-tabs .selected{background:#16283a;color:#72e3c2}.profile-tabs a:focus-visible{outline:2px solid #72e3c2;outline-offset:2px}.profile-section h2{margin-top:0}.profile-form{max-width:480px}.profile-facts{display:grid;gap:14px;margin:8px 0}.profile-facts div{display:grid;grid-template-columns:90px 1fr;gap:12px}.profile-facts dt{color:#8293aa}.profile-facts dd{margin:0;overflow-wrap:anywhere}.profile-logout{margin-top:24px}.profile-date-range{display:flex;align-items:end;flex-wrap:wrap;gap:12px}.profile-date-range label{display:grid;gap:8px}.profile-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:20px 0}.profile-metrics div{padding:16px;border:1px solid #223046;border-radius:10px;display:grid;gap:8px}.profile-metrics strong{font-size:24px;overflow-wrap:anywhere}.profile-usage-metrics{grid-template-columns:repeat(4,minmax(0,1fr))}.model-list{padding-left:20px}.model-list li{padding:12px 0}.model-list small{display:block;color:#8293aa;overflow-wrap:anywhere}.profile-keys>.section-header{margin-bottom:16px}.led-group-card{gap:10px;align-content:start}.led-group-card button{justify-self:start;border:1px solid #2d977f;background:#133b35;color:#76e6c8;border-radius:8px;padding:9px 14px;cursor:pointer}h3{margin-bottom:10px}@media(max-width:1100px){.profile-usage-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){.profile-metrics,.profile-usage-metrics{grid-template-columns:1fr}.profile-tabs a{padding:8px}.profile-date-range label{width:100%}}
 </style>
