@@ -46,6 +46,29 @@ it('own mode only requests own endpoints and offers no create/edit/enable action
   expect(state.api).toHaveBeenCalledWith('/api/v1/me/api-keys/own/revoke', expect.objectContaining({ method: 'POST' }))
 })
 
+it('lets an ordinary employee reveal an own key with the current login password', async () => {
+  const clipboard = vi.fn().mockResolvedValue(undefined)
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: clipboard } })
+  state.api.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/reveal')) return { id: 'own', secret: 'ucli_sk_own_reveal' }
+    return url.endsWith('usage-groups')
+      ? []
+      : { ...page, items: [{ id: 'own', name: '个人 CLI', groupId: 'g', secretHint: '…abcd', revokedAt: null, disabledAt: null, expiresAt: null, lastUsedAt: null, secretRecoverable: true }] }
+  })
+  const w = render(); await flushPromises()
+  await w.get('[data-action="key-details"]').trigger('click')
+  await w.get('[aria-label="当前登录密码"]').setValue('own-password')
+  await w.get('[data-action="reveal-own-key"]').trigger('click'); await flushPromises()
+  expect(state.api).toHaveBeenCalledWith('/api/v1/me/api-keys/own/reveal', expect.objectContaining({
+    method: 'POST',
+    body: JSON.stringify({ password: 'own-password' })
+  }))
+  expect(w.get('[data-own-secret]').text()).toBe('ucli_sk_own_reveal')
+  await w.findAll('button').find(button => button.text() === '复制 Key')!.trigger('click'); await flushPromises()
+  expect(clipboard).toHaveBeenCalledWith('ucli_sk_own_reveal')
+  expect(w.text()).toContain('已复制')
+})
+
 it('filters own keys on the server and offers historical groups beyond the loaded page', async () => {
   state.api.mockImplementation(async (url: string) => url.endsWith('/usage-groups') ? [{ id: 'active', name: '当前组' }] : { ...page, items: [{ id: 'current', name: '当前 Key', groupId: 'active', secretHint: '…now', revokedAt: null, disabledAt: null, expiresAt: null, lastUsedAt: null, group: { id: 'active', name: '当前组' } }], filterGroups: [{ id: 'archived', name: '历史组' }] })
   const w = render(); await flushPromises()

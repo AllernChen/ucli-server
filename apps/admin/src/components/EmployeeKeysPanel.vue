@@ -20,18 +20,22 @@ const projects = ref<Project[]>([])
 const pageFilterGroups = ref<Group[]>([])
 const offset = ref(0), loading = ref(false), pending = ref(false), error = ref(''), formError = ref('')
 const open = ref(false), editing = ref<Key | null>(null), detail = ref<Key | null>(null), secret = ref('')
-const revealPassword = ref(''), revealedOwnSecret = ref(''), revealError = ref(''), revealingOwn = ref(false)
+const revealPassword = ref(''), revealedOwnSecret = ref(''), revealError = ref(''), revealingOwn = ref(false), copyState = ref('')
 const selectedPerson = ref<Person | null>(null)
 const filters = reactive({ q: '', accountId: '', groupId: '', projectId: '', status: '' })
 const form = reactive({ accountId: '', name: '', groupId: '', projectId: '', expiresAt: '' })
 const optionSearch = reactive({ people: '', groups: '', peopleOffset: 0, groupsOffset: 0 })
 const action = ref<{ key: Key; verb: 'revoke' | 'delete' | 'enable' | 'disable' } | null>(null)
 const managed = computed(() => props.managed)
-const adminMode = computed(() => managed.value || Boolean(props.accountId))
-const selfMode = computed(() => !managed.value && Boolean(props.accountId) && props.accountId === props.selfAccountId)
+const selfMode = computed(() => !managed.value && (!props.accountId || props.accountId === props.selfAccountId))
+const adminMode = computed(() => managed.value || (Boolean(props.accountId) && !selfMode.value))
 const filterGroups = computed(() => Array.from(new Map([...groups.value, ...pageFilterGroups.value, ...groupOptions.value.items, ...rows.value.items.flatMap(key => key.group ? [key.group] : [])].map(group => [group.id, group])).values()))
 const formPeople = computed(() => selectedPerson.value && !people.value.items.some(person => person.id === selectedPerson.value?.id) ? [selectedPerson.value, ...people.value.items] : people.value.items)
-const listPath = computed(() => managed.value ? '/api/v1/admin/employee-api-keys' : props.accountId ? `/api/v1/admin/users/${props.accountId}/api-keys` : '/api/v1/me/api-keys')
+const listPath = computed(() => {
+  if (managed.value) return '/api/v1/admin/employee-api-keys'
+  if (selfMode.value || !props.accountId) return '/api/v1/me/api-keys'
+  return `/api/v1/admin/users/${props.accountId}/api-keys`
+})
 const lifecycle = createRequestLifecycle()
 let viewGeneration = 0, groupRequest = 0
 const date = (value: string | null | undefined) => value ? new Date(value).toLocaleString() : '—'
@@ -107,10 +111,12 @@ function applyFilters() { offset.value = 0; detail.value = null; void load() }
 function openDetail(key: Key) {
   detail.value = key
   revealPassword.value = ''; revealedOwnSecret.value = ''; revealError.value = ''
+  copyState.value = ''
 }
 function closeDetail() {
   detail.value = null
   revealPassword.value = ''; revealedOwnSecret.value = ''; revealError.value = ''
+  copyState.value = ''
 }
 async function revealOwn() {
   if (!detail.value || revealingOwn.value || !revealPassword.value) return
@@ -154,7 +160,11 @@ async function confirm() {
   } catch (value: unknown) { if (current === viewGeneration) { error.value = value instanceof Error && value.message ? value.message : '更新 Key 失败'; action.value = null } }
   finally { if (current === viewGeneration) pending.value = false }
 }
-async function copySecret() { try { await navigator.clipboard.writeText(secret.value); toast('Key 已复制，请安全保管') } catch { formError.value = '复制失败，请手动复制' } }
+async function copySecret() {
+  const value = secret.value || revealedOwnSecret.value
+  try { await navigator.clipboard.writeText(value); copyState.value = '已复制'; toast('Key 已复制，请安全保管') }
+  catch { copyState.value = '复制失败'; formError.value = '复制失败，请手动复制' }
+}
 function keyLogs(key: Key) { return `/usage?${new URLSearchParams({ accountId: key.accountId || props.accountId || '', organizationId: key.organizationId || '', apiKeyId: key.id })}` }
 watch(() => [props.managed, props.accountId], () => { resetView(); offset.value = 0; void load() }, { immediate: true })
 watch(() => filters.accountId, () => { if (managed.value) { filters.groupId = ''; applyFilters() } })
@@ -172,7 +182,7 @@ onUnmounted(() => { viewGeneration++; lifecycle.dispose(); secret.value = ''; gr
     <Pagination :total="rows.total" :offset="offset" :limit="20" @change="offset = $event; load()" />
   </section>
   <Drawer :open="open" :title="editing ? '编辑 API Key' : '创建 API Key'" :close-disabled="pending" @close="closeForm"><form id="employee-key-form" class="stack-form" @submit.prevent="save"><template v-if="managed && !editing"><label>搜索员工<input v-model="optionSearch.people" aria-label="创建 Key 搜索员工" @change="optionSearch.peopleOffset = 0; load()"></label><div class="actions"><button type="button" :disabled="optionSearch.peopleOffset === 0" @click="optionSearch.peopleOffset -= 20; load()">上一页</button><button type="button" :disabled="optionSearch.peopleOffset + 20 >= people.total" @click="optionSearch.peopleOffset += 20; load()">下一页</button></div><label>员工<select v-model="form.accountId" aria-label="Key 员工" required @change="selectEmployee"><option value="">请选择员工</option><option v-for="person in formPeople" :key="person.id" :value="person.id">{{ person.displayName }} · {{ person.email }}</option></select></label></template><label>名称<input v-model="form.name" aria-label="Key 名称" maxlength="120" required></label><label>所属组<select v-model="form.groupId" aria-label="Key 所属组织" :disabled="Boolean(editing) || (managed && !form.accountId)" required @change="selectGroup"><option value="">请选择员工所属组织</option><option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option><option v-if="editing && !groups.some(group => group.id === editing?.groupId)" :value="editing.groupId">{{ editing.group?.name || editing.groupId }}</option></select></label><label>项目<select v-model="form.projectId" aria-label="项目" :disabled="Boolean(editing) || !projects.length" required><option value="">请选择项目</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></label><label>到期时间（留空不设到期）<input v-model="form.expiresAt" type="datetime-local"></label><p v-if="formError" class="state error" role="alert">{{ formError }}</p></form><template #footer><button :disabled="pending" @click="closeForm">取消</button><button form="employee-key-form" type="submit" data-action="save-key" :disabled="pending || !form.name.trim() || !form.groupId || !form.projectId || (managed && !form.accountId)">保存</button></template></Drawer>
-  <Drawer :open="Boolean(detail)" title="API Key 详情" @close="closeDetail"><template v-if="detail"><p>名称：{{ detail.name }}</p><p>尾号：<span class="mono">{{ detail.secretHint }}</span></p><p>员工：{{ detail.account?.displayName || detail.accountId || '—' }} {{ detail.account?.email }}</p><p>组织：{{ detail.group?.name || detail.groupId }}</p><p v-if="detail.project">项目：{{ detail.project.name }}</p><p>创建人：{{ detail.createdBy?.displayName || '—' }}</p><p>创建时间：{{ date(detail.createdAt) }}</p><p>到期时间：{{ detail.expiresAt ? date(detail.expiresAt) : '不设到期时间' }}</p><p>最后使用：{{ date(detail.lastUsedAt) }}</p><p>状态：{{ status(detail) }}</p><a data-action="key-logs" :href="keyLogs(detail)">查看该 Key 使用日志</a><template v-if="selfMode || adminMode"><form v-if="!revealedOwnSecret" class="stack-form" @submit.prevent="revealOwn"><label>{{ selfMode ? '当前登录密码' : '管理员密码' }}<input v-model="revealPassword" type="password" :aria-label="selfMode ? '当前登录密码' : '管理员密码'" autocomplete="current-password" required :disabled="revealingOwn || !detail.secretRecoverable"></label><button type="button" :disabled="revealingOwn || !revealPassword || !detail.secretRecoverable" @click="revealOwn">{{ revealingOwn ? '验证中…' : '验证并显示 Key' }}</button><p v-if="!detail.secretRecoverable" class="muted">此 Key 创建于支持明文查看之前，系统未保存可恢复密文；请签发替代 Key。</p></form><p v-if="revealError" class="state error">{{ revealError }}</p><template v-else-if="revealedOwnSecret"><p>完整 Key：<code data-own-secret class="mono">{{ revealedOwnSecret }}</code></p><div class="actions"><button @click="copySecret">复制 Key</button><span v-if="copyState">{{ copyState }}</span></div><p class="muted">关闭详情后明文不会保留。</p></template></template></template></Drawer>
+  <Drawer :open="Boolean(detail)" title="API Key 详情" @close="closeDetail"><template v-if="detail"><p>名称：{{ detail.name }}</p><p>尾号：<span class="mono">{{ detail.secretHint }}</span></p><p>员工：{{ detail.account?.displayName || detail.accountId || '—' }} {{ detail.account?.email }}</p><p>组织：{{ detail.group?.name || detail.groupId }}</p><p v-if="detail.project">项目：{{ detail.project.name }}</p><p>创建人：{{ detail.createdBy?.displayName || '—' }}</p><p>创建时间：{{ date(detail.createdAt) }}</p><p>到期时间：{{ detail.expiresAt ? date(detail.expiresAt) : '不设到期时间' }}</p><p>最后使用：{{ date(detail.lastUsedAt) }}</p><p>状态：{{ status(detail) }}</p><a data-action="key-logs" :href="keyLogs(detail)">查看该 Key 使用日志</a><template v-if="selfMode || adminMode"><form v-if="!revealedOwnSecret" class="stack-form" @submit.prevent="revealOwn"><label>{{ selfMode ? '当前登录密码' : '管理员密码' }}<input v-model="revealPassword" type="password" :aria-label="selfMode ? '当前登录密码' : '管理员密码'" autocomplete="current-password" required :disabled="revealingOwn || !detail.secretRecoverable"></label><button type="button" data-action="reveal-own-key" :disabled="revealingOwn || !revealPassword || !detail.secretRecoverable" @click="revealOwn">{{ revealingOwn ? '验证中…' : '验证并显示 Key' }}</button><p v-if="!detail.secretRecoverable" class="muted">此 Key 创建于支持明文查看之前，系统未保存可恢复密文；请签发替代 Key。</p></form><p v-if="revealError" class="state error">{{ revealError }}</p><template v-else-if="revealedOwnSecret"><p>完整 Key：<code data-own-secret class="mono">{{ revealedOwnSecret }}</code></p><div class="actions"><button @click="copySecret">复制 Key</button><span v-if="copyState">{{ copyState }}</span></div><p class="muted">关闭详情后明文不会保留。</p></template></template></template></Drawer>
   <Drawer :open="Boolean(secret)" title="请立即保存 Key" description="明文仅显示这一次；关闭或离开页面后无法再次查看。" @close="secret = ''; formError = ''"><textarea aria-label="完整 API Key" readonly :value="secret" spellcheck="false" /><p v-if="formError" class="state error">{{ formError }}</p><template #footer><button @click="copySecret">复制 Key</button><button data-action="close-secret" @click="secret = ''; formError = ''">已保存，关闭</button></template></Drawer>
   <ConfirmDialog :open="Boolean(action)" title="确认变更 Key" :message="action?.verb === 'delete' ? '撤销并从列表移除，历史记录保留。确认继续？' : action?.verb === 'revoke' ? '此 Key 将永久失效，历史使用记录保留。确认继续？' : '该操作将改变 Key 的可用状态，确认继续？'" danger :close-disabled="pending" @cancel="action = null" @confirm="confirm" />
 </template>
