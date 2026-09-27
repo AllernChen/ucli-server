@@ -50,7 +50,7 @@ export class OrgUnitsService {
   async list(organizationId: string, query = new OrgUnitPageQueryDto()) {
     const where: Prisma.UsageGroupWhereInput = {
       organizationId,
-      ...(query.kind ? { orgType: query.kind } : {}),
+      ...(query.kind?.length ? { orgType: { in: query.kind } } : {}),
       ...(query.status === 'archived' ? { archivedAt: { not: null } } : query.status === 'all' ? {} :
         { archivedAt: null, enabled: query.status === 'active' }),
       ...(query.q ? { name: { contains: query.q, mode: 'insensitive' } } : {})

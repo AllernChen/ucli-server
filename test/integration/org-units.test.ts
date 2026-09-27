@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { OrgUnitType } from '@prisma/client'
 import { OrgUnitsService } from '../../apps/api/src/org-units.service.js'
 import { UsageGroupsService } from '../../apps/api/src/usage-groups.service.js'
 import { PrismaService } from '../../packages/database/src/prisma.service.js'
@@ -21,7 +22,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('organization units (PostgreSQL)
       expect(await db.project.count({ where: { regionId: research.id, category: 'DEPARTMENT' } })).toBe(1)
       expect(await db.project.count({ where: { regionId: region.id, category: 'DEPARTMENT' } })).toBe(0)
 
-      const functional = await service.list(actor.organizationId, Object.assign(new OrgUnitPageQueryDto(), { kind: 'FUNCTIONAL' }))
+      const functional = await service.list(actor.organizationId, Object.assign(
+        new OrgUnitPageQueryDto(), { kind: ['FUNCTIONAL'] as OrgUnitType[] }))
       expect(functional.items.map(item => item.name)).toEqual(['研发部'])
       const detail = await service.detail(actor.organizationId, executive.id)
       expect(detail.departmentProject?.category).toBe('DEPARTMENT')

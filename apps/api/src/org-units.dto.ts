@@ -4,7 +4,9 @@ import { OrgUnitType } from '@prisma/client'
 import { PageQueryDto } from './catalog.dto.js'
 
 export class OrgUnitPageQueryDto extends PageQueryDto {
-  @IsOptional() @IsEnum(OrgUnitType) kind?: OrgUnitType
+  @IsOptional() @Transform(({ value }) => typeof value === 'string'
+    ? value.split(',').map((item: string) => item.trim()).filter(Boolean) : value)
+  @IsArray() @ArrayUnique() @IsEnum(OrgUnitType, { each: true }) kind?: OrgUnitType[]
   @IsIn(['active', 'disabled', 'archived', 'all']) status: 'active' | 'disabled' | 'archived' | 'all' = 'active'
   @IsOptional() @IsString() @Length(1, 200) q?: string
 }

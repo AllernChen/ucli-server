@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
+import { OrgUnitType } from '@prisma/client'
 import { EmployeeKeysService } from '../../apps/api/src/employee-keys.service.js'
+import { OrgUnitPageQueryDto } from '../../apps/api/src/org-units.dto.js'
 import { OrgUnitsService } from '../../apps/api/src/org-units.service.js'
 import { ProjectsService } from '../../apps/api/src/projects.service.js'
 import { PrismaService } from '../../packages/database/src/prisma.service.js'
@@ -82,6 +84,23 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('organization unit members (Post
       } })
       await expect(organizations.addMember(actor, legacy.id, account.id)).rejects.toMatchObject({ status: 409 })
       await expect(organizations.removeMember(actor, legacy.id, account.id)).rejects.toMatchObject({ status: 409 })
+    })
+  })
+
+  it('accepts comma-separated kinds for project owner pickers', async () => {
+    await withTestDatabase(async db => {
+      const { actor } = await createOrganization(db)
+      const service = new OrgUnitsService(db as PrismaService)
+      await service.create(actor, { name: '公司经营层', kind: 'EXECUTIVE' })
+      await service.create(actor, { name: '研发部', kind: 'FUNCTIONAL' })
+      await service.create(actor, { name: '广东-市局', kind: 'REGION' })
+
+      const combined = await service.list(actor.organizationId, Object.assign(
+        new OrgUnitPageQueryDto(), { kind: ['REGION', 'EXECUTIVE'] as OrgUnitType[] }))
+      expect(combined.items.map(item => item.name).sort()).toEqual(['公司经营层', '广东-市局'])
+      const single = await service.list(actor.organizationId, Object.assign(
+        new OrgUnitPageQueryDto(), { kind: ['REGION'] as OrgUnitType[] }))
+      expect(single.items.map(item => item.name)).toEqual(['广东-市局'])
     })
   })
 })
