@@ -28,7 +28,7 @@ export class ProjectsService {
       SELECT id, name FROM usage_groups
       WHERE id = ${regionId}::uuid
         AND organization_id = ${organizationId}::uuid
-        AND type = 'REGION'
+        AND org_type IN ('REGION', 'EXECUTIVE')
         AND enabled = true
         AND archived_at IS NULL
       FOR UPDATE

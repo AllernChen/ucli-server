@@ -28,7 +28,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
     await withTestDatabase(async db => {
       const { actor } = await createOrganization(db)
       const region = await db.usageGroup.create({ data: {
-        organizationId: actor.organizationId, name: '广东-省厅区域', type: 'REGION'
+        organizationId: actor.organizationId, name: '广东-省厅区域', type: 'REGION', orgType: 'REGION'
       } })
       const service = new ProjectsService(db as PrismaService)
 
@@ -46,6 +46,25 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
       expect(regions.items[0].projects).toEqual([expect.objectContaining({
         id: project.id, regionId: region.id, code: 'GD-PROV-SLT', name: '省厅', status: 'ACTIVE'
       })])
+    })
+  })
+
+  it('allows executive org units to host task-force projects while functional units stay rejected', async () => {
+    await withTestDatabase(async db => {
+      const { actor } = await createOrganization(db)
+      const organizations = new OrgUnitsService(db as PrismaService)
+      const service = new ProjectsService(db as PrismaService)
+      const executive = await organizations.create(actor, { name: '公司经营层', kind: 'EXECUTIVE' })
+      const functional = await organizations.create(actor, { name: '研发部', kind: 'FUNCTIONAL' })
+
+      const project = await service.create(actor, {
+        ownerOrgUnitId: executive.id, category: 'BUSINESS', code: 'TF-2026', name: '跨单元攻坚'
+      })
+      expect(project).toMatchObject({ regionId: executive.id, category: 'BUSINESS' })
+
+      await expect(service.create(actor, {
+        ownerOrgUnitId: functional.id, code: 'TF-FUNC', name: '职能挂靠'
+      })).rejects.toMatchObject({ status: 404 })
     })
   })
 
@@ -84,7 +103,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
       const other = await createOrganization(db)
       const service = new ProjectsService(db as PrismaService)
       const region = await db.usageGroup.create({ data: {
-        organizationId: actor.organizationId, name: '有效区域', type: 'REGION'
+        organizationId: actor.organizationId, name: '有效区域', type: 'REGION', orgType: 'REGION'
       } })
 
       const unavailable = async (data: { enabled?: boolean; archivedAt?: Date; type?: 'PROJECT' }) => {
@@ -98,7 +117,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
       await unavailable({ type: 'PROJECT' })
       await unavailable({ enabled: false })
       await unavailable({ archivedAt: new Date() })
-      const foreign = await db.usageGroup.create({ data: { organizationId: other.actor.organizationId, name: '外组织区域', type: 'REGION' } })
+      const foreign = await db.usageGroup.create({ data: { organizationId: other.actor.organizationId, name: '外组织区域', type: 'REGION', orgType: 'REGION' } })
       await expect(service.create(actor, { regionId: foreign.id, code: 'FOREIGN', name: '外组织项目' }))
         .rejects.toMatchObject({ status: 404 })
 
@@ -114,7 +133,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
     await withTestDatabase(async db => {
       const { actor } = await createOrganization(db)
       const region = await db.usageGroup.create({ data: {
-        organizationId: actor.organizationId, name: '并发区域', type: 'REGION'
+        organizationId: actor.organizationId, name: '并发区域', type: 'REGION', orgType: 'REGION'
       } })
       const transactionScopedClient = {
         usageGroup: db.usageGroup,
@@ -139,7 +158,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
       const { actor, account } = await createOrganization(db)
       const other = await createOrganization(db)
       const service = new ProjectsService(db as PrismaService)
-      const region = await db.usageGroup.create({ data: { organizationId: actor.organizationId, name: '区域', type: 'REGION' } })
+      const region = await db.usageGroup.create({ data: { organizationId: actor.organizationId, name: '区域', type: 'REGION', orgType: 'REGION' } })
       const project = await service.create(actor, { regionId: region.id, code: 'GD-PROV-SLT', name: '省厅' })
 
       const detail = await service.detail(actor, project.id)
@@ -166,8 +185,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
     await withTestDatabase(async db => {
       const { actor, organization } = await createOrganization(db)
       const service = new ProjectsService(db as PrismaService)
-      const region = await db.usageGroup.create({ data: { organizationId: organization.id, name: '广东区域', type: 'REGION' } })
-      const otherRegion = await db.usageGroup.create({ data: { organizationId: organization.id, name: '上海区域', type: 'REGION' } })
+      const region = await db.usageGroup.create({ data: { organizationId: organization.id, name: '广东区域', type: 'REGION', orgType: 'REGION' } })
+      const otherRegion = await db.usageGroup.create({ data: { organizationId: organization.id, name: '上海区域', type: 'REGION', orgType: 'REGION' } })
       const gd = await service.create(actor, { regionId: region.id, code: 'GD-001', name: '广东项目' })
       const sh = await service.create(actor, { regionId: otherRegion.id, code: 'SH-001', name: '上海项目' })
 
@@ -193,7 +212,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
     await withTestDatabase(async db => {
       const { actor, organization, account } = await createOrganization(db)
       const service = new ProjectsService(db as PrismaService)
-      const region = await db.usageGroup.create({ data: { organizationId: organization.id, name: '区域', type: 'REGION' } })
+      const region = await db.usageGroup.create({ data: { organizationId: organization.id, name: '区域', type: 'REGION', orgType: 'REGION' } })
       const project = await service.create(actor, { regionId: region.id, code: 'GD-PROV-SLT', name: '省厅' })
       await db.groupMember.create({ data: { organizationId: organization.id, groupId: region.id, accountId: account.id } })
 
@@ -227,7 +246,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
     await withTestDatabase(async db => {
       const { actor, organization, account } = await createOrganization(db)
       const service = new ProjectsService(db as PrismaService)
-      const region = await db.usageGroup.create({ data: { organizationId: organization.id, name: '区域', type: 'REGION' } })
+      const region = await db.usageGroup.create({ data: { organizationId: organization.id, name: '区域', type: 'REGION', orgType: 'REGION' } })
       const project = await service.create(actor, { regionId: region.id, code: 'GD-ARCHIVED', name: '归档项目' })
       const employee = await db.account.create({ data: { email: `${randomUUID()}@example.invalid`, displayName: '新成员' } })
       await db.membership.create({ data: { organizationId: organization.id, accountId: employee.id, role: 'MEMBER' } })
@@ -250,7 +269,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
     await withTestDatabase(async db => {
       const { actor, organization } = await createOrganization(db)
       const service = new ProjectsService(db as PrismaService)
-      const region = await db.usageGroup.create({ data: { organizationId: organization.id, name: '区域', type: 'REGION' } })
+      const region = await db.usageGroup.create({ data: { organizationId: organization.id, name: '区域', type: 'REGION', orgType: 'REGION' } })
       const project = await service.create(actor, { regionId: region.id, code: 'GD-PROV-SLT', name: '省厅' })
 
       await expect(service.setStatus(actor, project.id, 'SUSPENDED')).resolves.toMatchObject({ id: project.id, status: 'SUSPENDED' })

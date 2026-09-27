@@ -10,7 +10,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project analytics dimensions (P
     await withTestDatabase(async db => {
       const { actor, organization, account } = await createOrganization(db)
       const region = await db.usageGroup.create({ data: {
-        organizationId: organization.id, name: '广东-市局区域', type: 'REGION'
+        organizationId: organization.id, name: '广东-市局区域', type: 'REGION', orgType: 'REGION'
       } })
       const sourceGroupId = randomUUID()
       await db.usageGroup.create({ data: { id: sourceGroupId, organizationId: organization.id, name: '历史项目组', type: 'PROJECT' } })

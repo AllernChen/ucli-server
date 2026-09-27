@@ -12,7 +12,7 @@ import { createOrganization, withTestDatabase } from './database.js'
 async function fixture(db: PrismaClient, limit = '1') {
   const { organization, account, actor } = await createOrganization(db)
   const region = await db.usageGroup.create({ data: {
-    organizationId: organization.id, name: '华南区域', type: 'REGION'
+    organizationId: organization.id, name: '华南区域', type: 'REGION', orgType: 'REGION'
   } })
   await db.groupMember.create({ data: { organizationId: organization.id, groupId: region.id, accountId: account.id } })
   const project = await db.project.create({ data: {
