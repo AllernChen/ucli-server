@@ -106,15 +106,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
         organizationId: actor.organizationId, name: '有效区域', type: 'REGION', orgType: 'REGION'
       } })
 
-      const unavailable = async (data: { enabled?: boolean; archivedAt?: Date; type?: 'PROJECT' }) => {
+      const unavailable = async (data: { enabled?: boolean; archivedAt?: Date; type?: 'PROJECT'; orgType?: 'REGION' | 'LEGACY_PROJECT' }) => {
         const group = await db.usageGroup.create({ data: {
           organizationId: actor.organizationId, name: `区域-${randomUUID()}`, type: data.type ?? 'REGION',
+          orgType: data.orgType ?? 'REGION',
           enabled: data.enabled ?? true, archivedAt: data.archivedAt ?? null
         } })
         await expect(service.create(actor, { regionId: group.id, code: `X-${randomUUID().slice(0, 8)}`, name: `项目-${randomUUID()}` }))
           .rejects.toMatchObject({ status: 404 })
       }
-      await unavailable({ type: 'PROJECT' })
+      await unavailable({ type: 'PROJECT', orgType: 'LEGACY_PROJECT' })
       await unavailable({ enabled: false })
       await unavailable({ archivedAt: new Date() })
       const foreign = await db.usageGroup.create({ data: { organizationId: other.actor.organizationId, name: '外组织区域', type: 'REGION', orgType: 'REGION' } })
