@@ -180,7 +180,7 @@ export class ProjectsService {
       byAccount.set(row.accountId, entry)
     }
     const items = [...byAccount.values()]
-      .sort((a, b) => a.displayName.localeCompare(b.displayName))
+      .sort((a, b) => a.displayName.localeCompare(b.displayName) || (a.accountId < b.accountId ? -1 : a.accountId > b.accountId ? 1 : 0))
       .slice(query.offset, query.offset + query.limit)
     return { items, total: byAccount.size, offset: query.offset, limit: query.limit }
   }
