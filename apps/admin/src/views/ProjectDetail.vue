@@ -35,6 +35,7 @@ const memberForm = reactive({ accountId: '', role: 'CONTRIBUTOR' })
 const budgetForm = reactive({ requestedTotalCny: '', unlimited: false, reason: '' })
 const actionPending = ref(false), actionError = ref('')
 let generation = 0
+let candidateGeneration = 0
 const keyStatus = (key: ProjectKey) => key.revokedAt ? '已撤销' : key.disabledAt ? '已停用' : key.expiresAt && new Date(key.expiresAt) <= new Date() ? '已过期' : '可用'
 const dateTime = (value: string | null | undefined) => value ? new Date(value).toLocaleString() : '—'
 function openKey(key: ProjectKey) {
@@ -62,9 +63,12 @@ async function copySecret() {
   catch { copyState.value = '复制失败，请手动选择复制' }
 }
 async function loadCandidates() {
+  const request = ++candidateGeneration
   const search = memberQuery.value.trim() ? `&q=${encodeURIComponent(memberQuery.value.trim())}` : ''
   try {
-    candidates.value = await api<Page<MemberCandidate>>(`/api/v1/admin/projects/${id.value}/member-candidates?limit=100${search}`) ?? { items: [], total: 0, offset: 0, limit: 100 }
+    const page = await api<Page<MemberCandidate>>(`/api/v1/admin/projects/${id.value}/member-candidates?limit=100${search}`)
+    if (request !== candidateGeneration) return
+    candidates.value = page ?? { items: [], total: 0, offset: 0, limit: 100 }
   } catch { /* 候选加载失败时保留现有列表，不影响项目详情展示 */ }
 }
 async function load() {
@@ -103,7 +107,7 @@ async function submitAndApprove() {
     unlimited: budgetForm.unlimited, reason: budgetForm.reason.trim()
   })) budgetForm.requestedTotalCny = ''; budgetForm.reason = ''
 }
-watch(id, () => void load(), { immediate: true })
+watch(id, () => { memberQuery.value = ''; memberForm.accountId = ''; void load() }, { immediate: true })
 watch(() => route.query.tab, value => { tab.value = String(value || 'overview') })
 onMounted(async () => { try { role.value = (await api<any>('/api/v1/auth/me')).role || '' } catch { role.value = '' } })
 </script>

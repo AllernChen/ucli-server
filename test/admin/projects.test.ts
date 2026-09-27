@@ -124,6 +124,11 @@ it('supports member management and platform administrator submit-and-approve', a
   expect((wrapper.get('[aria-label="选择项目成员"]').element.querySelector('option[value="employee-3"]') as HTMLOptionElement).disabled).toBe(true)
   expect(wrapper.text()).toContain('工程部')
 
+  await wrapper.get('[aria-label="搜索候选人"]').setValue('跨单元')
+  await wrapper.findAll('form').find(form => form.find('[aria-label="搜索候选人"]').exists())!.trigger('submit')
+  await flushPromises()
+  expect(state.api.mock.calls.some(([url]) => url.includes('member-candidates') && url.includes(`q=${encodeURIComponent('跨单元')}`))).toBe(true)
+
   await wrapper.get('[data-tab="budget"]').trigger('click')
   await wrapper.get('[aria-label="申请后项目总额"]').setValue('150')
   await wrapper.get('[aria-label="预算申请原因"]').setValue('平台管理员批复项目预算')
