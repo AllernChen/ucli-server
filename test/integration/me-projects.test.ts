@@ -40,7 +40,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('my projects (PostgreSQL)', () =
 
       const region = await organizations.create(actor, { name: '广东-市局', kind: 'REGION' })
       const business = await projects.create(actor, { ownerOrgUnitId: region.id, category: 'BUSINESS', code: 'ORG-CROSS', name: '跨部门协作' })
-      await projects.addMember(actor, business.id, { accountId: account.id, role: 'CONTRIBUTOR' })
+      // 跨单元借调成员资格须由平台管理员授予（addMember 权限收紧）
+      const platformActor = { organizationId: actor.organizationId, sub: actor.sub,
+        role: 'PLATFORM_ADMIN' as const, tokenVersion: 1 }
+      await projects.addMember(platformActor, business.id, { accountId: account.id, role: 'CONTRIBUTOR' })
 
       const items = await service.list({ sub: account.id, organizationId: organization.id, role: 'MEMBER', tokenVersion: 1 })
       expect(items.map(item => item.id).sort()).toEqual([business.id, department.id].sort())

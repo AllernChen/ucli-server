@@ -88,12 +88,31 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
       })).rejects.toMatchObject({ status: 409 })
 
       await organizations.addMember(actor, engineering.id, account.id)
-      await projects.addMember(actor, project.id, { accountId: account.id, role: 'CONTRIBUTOR' })
+      const platformActor = { organizationId: actor.organizationId, sub: actor.sub,
+        role: 'PLATFORM_ADMIN' as const, tokenVersion: 1 }
+      await expect(projects.addMember(actor, project.id, { accountId: account.id, role: 'CONTRIBUTOR' }))
+        .rejects.toMatchObject({ status: 403 })
+      await projects.addMember(platformActor, project.id, { accountId: account.id, role: 'CONTRIBUTOR' })
       const detail = await projects.detail(actor, project.id)
       expect(detail.members).toHaveLength(1)
       await expect(projects.addMember(actor, (await db.project.findFirstOrThrow({
         where: { regionId: engineering.id, category: 'DEPARTMENT' }
       })).id, { accountId: account.id, role: 'CONTRIBUTOR' })).rejects.toMatchObject({ status: 409 })
+    })
+  })
+
+  it('lets organization administrators add only in-region members to projects', async () => {
+    await withTestDatabase(async db => {
+      const { actor, account } = await createOrganization(db)
+      const organizations = new OrgUnitsService(db as PrismaService)
+      const service = new ProjectsService(db as PrismaService)
+      const region = await organizations.create(actor, { name: '广东-市局', kind: 'REGION' })
+      const project = await service.create(actor, { ownerOrgUnitId: region.id, code: 'IN-REGION', name: '区域内项目' })
+
+      await organizations.addMember(actor, region.id, account.id)
+      await service.addMember(actor, project.id, { accountId: account.id, role: 'CONTRIBUTOR' })
+      const detail = await service.detail(actor, project.id)
+      expect(detail.members.map(member => member.accountId)).toEqual([account.id])
     })
   })
 

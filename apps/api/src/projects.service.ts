@@ -162,6 +162,14 @@ export class ProjectsService {
         membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } }
       } })
       if (!organizationMember) throw new ForbiddenException('Active organization member required')
+      const inRegion = await db.groupMember.findFirst({ where: {
+        organizationId: actor.organizationId, groupId: project.regionId, accountId: input.accountId, removedAt: null,
+        group: { enabled: true, archivedAt: null, organization: { enabled: true } },
+        membership: { status: 'ACTIVE', account: { status: 'ACTIVE' } }
+      } })
+      if (!inRegion && actor.role !== 'PLATFORM_ADMIN') {
+        throw new ForbiddenException('Platform administrator required to add cross-unit members')
+      }
       return db.projectMember.upsert({ where: { projectId_accountId: { projectId: id, accountId: input.accountId } },
         create: { organizationId: actor.organizationId, projectId: id, accountId: input.accountId, role: input.role },
         update: { role: input.role }, include: { membership: { select: {
