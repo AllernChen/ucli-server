@@ -75,3 +75,8 @@ export class ProjectBudgetApplicationDecisionDto {
   @IsOptional() @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString() @Length(0, 2000) note?: string
 }
+
+export class ProjectMemberCandidatesQueryDto extends PageQueryDto {
+  @IsOptional() @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @Length(1, 200) q?: string
+}

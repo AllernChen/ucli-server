@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { Prisma, type Project } from '@prisma/client'
 import { PrismaService } from '../../../packages/database/src/prisma.service.js'
 import type { AuthPrincipal } from '../../../packages/security/src/auth.js'
-import { CreateProjectDto, ProjectPageQueryDto, UpdateProjectDto, type ProjectMemberRole } from './projects.dto.js'
+import { CreateProjectDto, ProjectMemberCandidatesQueryDto, ProjectPageQueryDto, UpdateProjectDto, type ProjectMemberRole } from './projects.dto.js'
 
 const projectSelect = Prisma.validator<Prisma.ProjectSelect>()({
   id: true, organizationId: true, regionId: true, category: true, code: true, name: true, description: true,
@@ -150,6 +150,39 @@ export class ProjectsService {
   async members(actor: AuthPrincipal, id: string) {
     const project = await this.detail(actor, id)
     return { items: project.members, total: project.members.length }
+  }
+
+  async memberCandidates(actor: AuthPrincipal, id: string, query: ProjectMemberCandidatesQueryDto) {
+    this.assertAdmin(actor)
+    const project = await this.prisma.project.findFirst({ where: { id, organizationId: actor.organizationId } })
+    if (!project) throw new NotFoundException('Project not found')
+    const existing = await this.prisma.projectMember.findMany({ where: { projectId: id }, select: { accountId: true } })
+    const excluded = new Set(existing.map(member => member.accountId))
+    const rows = await this.prisma.groupMember.findMany({ where: {
+      organizationId: actor.organizationId, removedAt: null,
+      group: { enabled: true, archivedAt: null, organization: { enabled: true } },
+      membership: { status: 'ACTIVE', account: { status: 'ACTIVE',
+        ...(query.q ? { OR: [
+          { displayName: { contains: query.q, mode: 'insensitive' as const } },
+          { email: { contains: query.q, mode: 'insensitive' as const } }
+        ] } : {}) } } },
+      select: { accountId: true, isPrimary: true,
+        group: { select: { id: true, name: true, orgType: true } },
+        membership: { select: { account: { select: { displayName: true, email: true } } } } } })
+    const byAccount = new Map<string, { accountId: string; displayName: string; email: string;
+      orgUnits: Array<{ id: string; name: string; orgType: string; isPrimary: boolean }>; inRegion: boolean }>()
+    for (const row of rows) {
+      if (excluded.has(row.accountId)) continue
+      const entry = byAccount.get(row.accountId) ?? { accountId: row.accountId,
+        displayName: row.membership.account.displayName, email: row.membership.account.email, orgUnits: [], inRegion: false }
+      entry.orgUnits.push({ id: row.group.id, name: row.group.name, orgType: row.group.orgType, isPrimary: row.isPrimary })
+      if (row.group.id === project.regionId) entry.inRegion = true
+      byAccount.set(row.accountId, entry)
+    }
+    const items = [...byAccount.values()]
+      .sort((a, b) => a.displayName.localeCompare(b.displayName))
+      .slice(query.offset, query.offset + query.limit)
+    return { items, total: byAccount.size, offset: query.offset, limit: query.limit }
   }
 
   addMember(actor: AuthPrincipal, id: string, input: { accountId: string; role: ProjectMemberRole }) {

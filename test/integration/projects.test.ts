@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ProjectsService } from '../../apps/api/src/projects.service.js'
+import { ProjectMemberCandidatesQueryDto } from '../../apps/api/src/projects.dto.js'
 import { UsageGroupsService } from '../../apps/api/src/usage-groups.service.js'
 import { OrgUnitsService } from '../../apps/api/src/org-units.service.js'
 import { UsageGroupPageQueryDto } from '../../apps/api/src/usage-groups.dto.js'
@@ -315,6 +316,38 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
       await expect(service.setStatus(actor, project.id, 'ARCHIVED')).resolves.toMatchObject({ id: project.id, status: 'ARCHIVED' })
       await expect(service.update(actor, project.id, { name: '归档后' })).rejects.toMatchObject({ status: 409 })
       await expect(service.list(actor, {})).resolves.toMatchObject({ total: 0 })
+    })
+  })
+
+  it('lists cross-unit member candidates with affiliation and in-region flags', async () => {
+    await withTestDatabase(async db => {
+      const { actor, account } = await createOrganization(db)
+      const organizations = new OrgUnitsService(db as PrismaService)
+      const service = new ProjectsService(db as PrismaService)
+      const executive = await organizations.create(actor, { name: '公司经营层', kind: 'EXECUTIVE' })
+      const engineering = await organizations.create(actor, { name: '工程部', kind: 'FUNCTIONAL' })
+      const project = await service.create(actor, { ownerOrgUnitId: executive.id, code: 'TF-CAND', name: '攻坚候选' })
+      await organizations.addMember(actor, engineering.id, account.id)
+      await service.addMember({ ...actor, role: 'PLATFORM_ADMIN' }, project.id, { accountId: account.id, role: 'CONTRIBUTOR' })
+
+      const outsider = await db.account.create({ data: { email: `outsider-${randomUUID()}@example.invalid`, displayName: '跨单元工程师' } })
+      await db.membership.create({ data: { organizationId: actor.organizationId, accountId: outsider.id, role: 'MEMBER' } })
+      await organizations.addMember(actor, engineering.id, outsider.id)
+      const insider = await db.account.create({ data: { email: `insider-${randomUUID()}@example.invalid`, displayName: '经营层成员' } })
+      await db.membership.create({ data: { organizationId: actor.organizationId, accountId: insider.id, role: 'MEMBER' } })
+      await organizations.addMember(actor, executive.id, insider.id)
+
+      const result = await service.memberCandidates(actor, project.id, Object.assign(
+        new ProjectMemberCandidatesQueryDto(), { limit: 50, offset: 0 } ))
+      expect(result.total).toBe(2)
+      const outsiderRow = result.items.find(item => item.accountId === outsider.id)
+      expect(outsiderRow).toMatchObject({ displayName: '跨单元工程师', inRegion: false })
+      expect(outsiderRow!.orgUnits).toEqual([expect.objectContaining({ name: '工程部', orgType: 'FUNCTIONAL', isPrimary: true })])
+      expect(result.items.find(item => item.accountId === insider.id)).toMatchObject({ inRegion: true })
+
+      const searched = await service.memberCandidates(actor, project.id, Object.assign(
+        new ProjectMemberCandidatesQueryDto(), { q: '跨单元', limit: 50, offset: 0 } ))
+      expect(searched.items.map(item => item.accountId)).toEqual([outsider.id])
     })
   })
 })
