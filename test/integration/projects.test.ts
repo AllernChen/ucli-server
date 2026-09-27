@@ -92,7 +92,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('project management (PostgreSQL)
       const platformActor = { organizationId: actor.organizationId, sub: actor.sub,
         role: 'PLATFORM_ADMIN' as const, tokenVersion: 1 }
       await expect(projects.addMember(actor, project.id, { accountId: account.id, role: 'CONTRIBUTOR' }))
-        .rejects.toMatchObject({ status: 403 })
+        .rejects.toMatchObject({ status: 403, message: 'Platform administrator required to add cross-unit members' })
       await projects.addMember(platformActor, project.id, { accountId: account.id, role: 'CONTRIBUTOR' })
       const detail = await projects.detail(actor, project.id)
       expect(detail.members).toHaveLength(1)
