@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { createRequestLifecycle, type Page } from '../device-grants'
-import type { Project, ProjectBudget } from '../projects'
+import type { MemberCandidate, Project, ProjectBudget } from '../projects'
 import { formatCny } from '../currency'
 import { operationId } from '../usage-groups'
 import Drawer from '../components/Drawer.vue'
@@ -12,9 +12,10 @@ const route = useRoute(), lifecycle = createRequestLifecycle()
 const project = ref<Project | null>(null), budget = ref<ProjectBudget | null>(null)
 type ProjectKey = { id: string; name: string; secretHint: string; secretRecoverable?: boolean; account?: { displayName: string; email: string }; expiresAt: string | null; disabledAt: string | null; revokedAt: string | null; lastUsedAt: string | null; createdAt?: string; usage?: { requests: number; totalTokens: string; costCny: string }; budget?: { keyCostSharePercent: number | null; projectUsageSharePercent: number | null } }
 const keys = ref<Page<ProjectKey>>({ items: [], total: 0, offset: 0, limit: 50 })
-const candidates = ref<Page<any>>({ items: [], total: 0, offset: 0, limit: 100 })
+const candidates = ref<Page<MemberCandidate>>({ items: [], total: 0, offset: 0, limit: 100 })
 const applications = ref<Page<any>>({ items: [], total: 0, offset: 0, limit: 20 })
 const loading = ref(false), error = ref(''), selectedKey = ref<ProjectKey | null>(null)
+const role = ref(''), memberQuery = ref('')
 const revealPassword = ref(''), revealedSecret = ref(''), revealError = ref(''), revealing = ref(false), copyState = ref('')
 const tab = ref(String(route.query.tab || 'overview'))
 const id = computed(() => String(route.params.id))
@@ -60,20 +61,25 @@ async function copySecret() {
   try { await navigator.clipboard.writeText(revealedSecret.value); copyState.value = '已复制' }
   catch { copyState.value = '复制失败，请手动选择复制' }
 }
+async function loadCandidates() {
+  const search = memberQuery.value.trim() ? `&q=${encodeURIComponent(memberQuery.value.trim())}` : ''
+  try {
+    candidates.value = await api<Page<MemberCandidate>>(`/api/v1/admin/projects/${id.value}/member-candidates?limit=100${search}`) ?? { items: [], total: 0, offset: 0, limit: 100 }
+  } catch { /* 候选加载失败时保留现有列表，不影响项目详情展示 */ }
+}
 async function load() {
   const request = ++generation; loading.value = true; error.value = ''
   try {
     const loadedProject = await api<Project>(`/api/v1/admin/projects/${id.value}`)
-    const [loadedBudget, loadedKeys, loadedApplications, loadedCandidates] = await Promise.all([
+    const [loadedBudget, loadedKeys, loadedApplications] = await Promise.all([
       api<ProjectBudget>(`/api/v1/admin/projects/${id.value}/budget`),
       api<Page<any>>(`/api/v1/admin/employee-api-keys?projectId=${id.value}&limit=200`),
       api<Page<any>>(`/api/v1/admin/projects/${id.value}/budget-applications?limit=20`),
-      api<Page<any>>(`/api/v1/admin/org-units/${loadedProject.regionId}/members?limit=100`)
+      loadCandidates()
     ])
     if (request !== generation) return
     project.value = loadedProject; budget.value = loadedBudget; keys.value = loadedKeys
     applications.value = loadedApplications?.items ? loadedApplications : { items: [], total: 0, offset: 0, limit: 20 }
-    candidates.value = loadedCandidates?.items ? loadedCandidates : { items: [], total: 0, offset: 0, limit: 100 }
   } catch (e: any) { if (request === generation) error.value = e.message }
   finally { if (request === generation) loading.value = false }
 }
@@ -99,6 +105,7 @@ async function submitAndApprove() {
 }
 watch(id, () => void load(), { immediate: true })
 watch(() => route.query.tab, value => { tab.value = String(value || 'overview') })
+onMounted(async () => { try { role.value = (await api<any>('/api/v1/auth/me')).role || '' } catch { role.value = '' } })
 </script>
 
 <template>
@@ -125,7 +132,9 @@ watch(() => route.query.tab, value => { tab.value = String(value || 'overview') 
     </section>
     <section v-if="tab === 'keys'" class="panel"><h2>项目 Key</h2><table v-if="keys.items?.length"><thead><tr><th>名称 / 尾号</th><th>员工</th><th>近 30 天请求 / Token</th><th>累计成本</th><th>预算占比</th><th>状态</th><th>最后使用</th><th>操作</th></tr></thead><tbody><tr v-for="key in keys.items" :key="key.id"><td>{{ key.name }}<small class="mono">{{ key.secretHint }}</small></td><td>{{ key.account?.displayName || '—' }}<small>{{ key.account?.email }}</small></td><td>{{ key.usage?.requests ?? 0 }} / {{ key.usage?.totalTokens ?? 0 }}</td><td>{{ formatCny(key.usage?.costCny || '0') }}</td><td>{{ key.budget?.keyCostSharePercent == null ? '—' : `${key.budget.keyCostSharePercent}%` }}<small v-if="key.budget?.projectUsageSharePercent != null">项目用量 {{ key.budget.projectUsageSharePercent }}%</small></td><td>{{ keyStatus(key) }}</td><td>{{ dateTime(key.lastUsedAt) }}</td><td><button @click="openKey(key)">查看</button></td></tr></tbody></table><p v-else class="empty">暂无项目 Key</p></section>
     <section v-if="tab === 'members'" class="panel"><h2>项目成员</h2>
-      <form class="form-row" @submit.prevent="addMember"><label>添加成员<select v-model="memberForm.accountId" aria-label="选择项目成员" required><option value="">请选择</option><option v-for="candidate in candidates.items" :key="candidate.accountId" :value="candidate.accountId">{{ candidate.membership.account.displayName }} · {{ candidate.membership.account.email }}</option></select></label><label>角色<select v-model="memberForm.role"><option value="CONTRIBUTOR">成员</option><option value="OWNER">项目负责人</option><option value="VIEWER">观察者</option></select></label><button type="button" data-action="add-project-member" :disabled="actionPending || !memberForm.accountId" @click="addMember">添加成员</button></form>
+      <form class="form-row" @submit.prevent="loadCandidates"><label>搜索候选人<input v-model="memberQuery" aria-label="搜索候选人" placeholder="姓名或邮箱"></label><button>搜索</button></form>
+      <form class="form-row" @submit.prevent="addMember"><label>添加成员<select v-model="memberForm.accountId" aria-label="选择项目成员" required><option value="">请选择</option><option v-for="candidate in candidates.items" :key="candidate.accountId" :value="candidate.accountId" :disabled="!candidate.inRegion && role !== 'PLATFORM_ADMIN'">{{ candidate.displayName }} · {{ candidate.email }} · {{ candidate.orgUnits.map(unit => unit.name + (unit.isPrimary ? '（主）' : '')).join('/') }}</option></select></label><label>角色<select v-model="memberForm.role"><option value="CONTRIBUTOR">成员</option><option value="OWNER">项目负责人</option><option value="VIEWER">观察者</option></select></label><button type="button" data-action="add-project-member" :disabled="actionPending || !memberForm.accountId" @click="addMember">添加成员</button></form>
+      <p v-if="role === 'ORG_ADMIN'" class="state">跨单元候选人需平台管理员添加</p>
       <p v-if="actionError" class="state error">{{ actionError }}</p>
       <table v-if="members.length"><thead><tr><th>成员</th><th>邮箱</th><th>职责</th><th>操作</th></tr></thead><tbody><tr v-for="member in members" :key="member.accountId"><td>{{ member.membership?.account.displayName }}</td><td>{{ member.membership?.account.email }}</td><td>{{ roleLabel[member.role] }}</td><td><button :disabled="actionPending" @click="projectAction(`/members/${member.accountId}`, 'DELETE')">移除</button><button v-if="member.role !== 'OWNER'" :disabled="actionPending" @click="projectAction(`/members/${member.accountId}`, 'PATCH', { role: 'OWNER' })">设为负责人</button></td></tr></tbody></table><p v-else class="empty">暂无项目成员</p></section>
   </template>

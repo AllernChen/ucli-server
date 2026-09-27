@@ -22,7 +22,7 @@ function query() {
   return params.toString()
 }
 async function loadOrganizations() {
-  try { organizations.value = (await api<Page<any>>('/api/v1/admin/org-units?kind=REGION&limit=100')).items ?? [] }
+  try { organizations.value = (await api<Page<any>>('/api/v1/admin/org-units?kind=REGION,EXECUTIVE&limit=100')).items ?? [] }
   catch { organizations.value = [] }
 }
 async function create() {
@@ -62,9 +62,9 @@ onUnmounted(() => { alive = false; lifecycle.dispose() })
   <section v-else class="panel table-panel"><table v-if="rows.items.length"><thead><tr><th>项目 / 编码</th><th>所属组织</th><th>类型</th><th>状态</th><th>成员</th><th>说明</th></tr></thead><tbody>
     <tr v-for="project in rows.items" :key="project.id"><td><button class="back-link" @click="router.push(`/projects/${project.id}`)">{{ project.name }}</button><small>{{ project.code }}</small></td><td>{{ project.region.name }}</td><td>{{ project.category === 'DEPARTMENT' ? '部门预算' : '业务项目' }}</td><td>{{ project.status === 'ACTIVE' ? '启用' : project.status === 'SUSPENDED' ? '停用' : '归档' }}</td><td>{{ project.members?.length || 0 }}</td><td>{{ project.description || '—' }}</td></tr>
   </tbody></table><p v-else class="empty">暂无项目</p></section>
-  <Drawer :open="open" title="新建业务项目" description="项目归属区域部门，并使用独立项目预算。" @close="open = false">
+  <Drawer :open="open" title="新建业务项目" description="项目归属区域部门或公司经营层，并使用独立项目预算。" @close="open = false">
     <form id="create-project-form" class="stack-form" @submit.prevent="create">
-      <label>所属组织<select v-model="form.ownerOrgUnitId" required><option value="">请选择区域部门</option><option v-for="org in organizations" :key="org.id" :value="org.id">{{ org.name }}</option></select></label>
+      <label>所属组织<select v-model="form.ownerOrgUnitId" required><option value="">请选择所属组织</option><option v-for="org in organizations" :key="org.id" :value="org.id">{{ org.orgType === 'EXECUTIVE' ? '公司经营层' : '区域' }} · {{ org.name }}</option></select></label>
       <label>项目编码<input v-model="form.code" required maxlength="60"></label>
       <label>项目名称<input v-model="form.name" required maxlength="120"></label>
       <label>说明<textarea v-model="form.description" maxlength="2000"></textarea></label>

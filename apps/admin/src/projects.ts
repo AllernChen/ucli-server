@@ -19,6 +19,14 @@ export interface ProjectMember {
   membership?: { status: string; account: { id: string; displayName: string; email: string; status: string } }
 }
 
+export type MemberCandidate = {
+  accountId: string
+  displayName: string
+  email: string
+  inRegion: boolean
+  orgUnits: Array<{ id: string; name: string; orgType: string; isPrimary: boolean }>
+}
+
 export interface ProjectBudget {
   projectId: string
   periodId: string | null

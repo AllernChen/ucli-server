@@ -24,11 +24,13 @@ afterEach(() => wrappers.splice(0).forEach(wrapper => wrapper.unmount()))
 it('lists projects and filters by name', async () => {
   state.api.mockImplementation(async (url: string) => {
     state.url = url
+    if (url.includes('org-units')) return { ...page, items: [{ id: 'unit-1', name: '广东-市局', orgType: 'REGION' }, { id: 'unit-2', name: '公司经营层', orgType: 'EXECUTIVE' }] }
     return { ...page, items: [{ id: 'project-1', code: 'GD-YX', name: '越秀', status: 'ACTIVE',
       region: { id: 'region-1', name: '广东-市局区域' }, members: [] }] }
   })
   const wrapper = render(Projects)
   await flushPromises()
+  expect(state.url).toMatch(/kind=REGION(%2C|,)EXECUTIVE/)
   wrapper.get('[aria-label="搜索项目"]').setValue('越秀')
   await wrapper.find('form').trigger('submit'); await flushPromises()
   expect(wrapper.text()).toContain('越秀')
@@ -86,6 +88,13 @@ it('shows project keys masked by default and reveals the secret after password v
 it('supports member management and platform administrator submit-and-approve', async () => {
   window.history.replaceState({}, '', '/projects/project-1?tab=members')
   state.api.mockImplementation(async (url: string, init?: any) => {
+    if (url.includes('/auth/me')) return { role: 'ORG_ADMIN' }
+    if (url.includes('member-candidates')) return { items: [
+      { accountId: 'employee-2', displayName: '区域成员', email: 'member@example.invalid', inRegion: true,
+        orgUnits: [{ id: 'region-1', name: '广东-市局', orgType: 'REGION', isPrimary: true }] },
+      { accountId: 'employee-3', displayName: '跨单元工程师', email: 'taskforce@example.invalid', inRegion: false,
+        orgUnits: [{ id: 'unit-eng', name: '工程部', orgType: 'FUNCTIONAL', isPrimary: true }] }
+    ], total: 2, offset: 0, limit: 100 }
     if (url.includes('/budget-applications') && init?.method === 'POST') return { id: 'entry-1' }
     if (url.includes('/members') && init?.method === 'POST') return {}
     if (url.includes('/members')) return { items: [
@@ -112,6 +121,8 @@ it('supports member management and platform administrator submit-and-approve', a
   await flushPromises()
   expect(state.api.mock.calls.find(([url, init]) => url.endsWith('/members') && init?.method === 'POST')?.[1].body)
     .toBe(JSON.stringify({ accountId: 'employee-2', role: 'CONTRIBUTOR' }))
+  expect((wrapper.get('[aria-label="选择项目成员"]').element.querySelector('option[value="employee-3"]') as HTMLOptionElement).disabled).toBe(true)
+  expect(wrapper.text()).toContain('工程部')
 
   await wrapper.get('[data-tab="budget"]').trigger('click')
   await wrapper.get('[aria-label="申请后项目总额"]').setValue('150')
