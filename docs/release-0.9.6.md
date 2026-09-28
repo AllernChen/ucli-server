@@ -1,6 +1,6 @@
 # 0.9.6 — 跨组织单元抽调攻坚项目
 
-状态：2026-09-27 发布准备完成，待部署公司服务器。
+状态：2026-09-28 已部署公司服务器并通过基础设施与 API 健康验收；管理员密码已轮换导致登录 401，浏览器/API 人工验收待有效凭证后补做。
 
 ## 变更范围
 
@@ -19,8 +19,29 @@
 
 ## 发布件
 
-（部署打包后补充。）
+- 离线包：`F:\projects\ucli-server\releases\ucli-server_0.9.6_20260927_4f6f7b4.tar.gz`
+- 离线包大小：`208,654,393` 字节
+- 离线包 SHA-256：`b380f4bbd30a7c374b8edcfe85d1b4148d4cfe23559e5b908189a86ded021ef3`
+- Runtime 镜像：`ucli-server-runtime:0.9.6`
+  `sha256:ef7108bddcb429574cb090fd4dd91a3e2e7124843ae7d8f2fbc2b803b2cd41de`
+- Web 镜像：`ucli-server-web:0.9.6`
+  `sha256:e867fd34678a966f18de47cd9fcc1ea6698e39ebcaedc86d37d0dbb6ed852feb`
+- 包内校验通过；未包含 `.env`、数据库备份、凭据或私钥。
+- 构建门禁：`npm ci` + `npm run verify` 全绿（935 项测试，含 PostgreSQL 集成测试）。
 
 ## 公司部署记录
 
-（部署完成后补充。）
+- 部署时间：2026-09-28。
+- 目标：`http://10.44.100.100`，部署目录 `/data/ucli-server`。
+- 升级前版本：`0.9.5`（源码提交 `77451f7f8caedf0ed1b7ec5714f8f6994bdb0aa9`）。
+- 升级后版本：`0.9.6`（源码提交 `4f6f7b4145040675e9ea910eb010cdbb9c1961eb`）。
+- 数据库迁移：`No pending migrations`（本版零迁移）；升级前备份 `/data/ucli-server/backups/ucli_pre_0.9.6_20260927_215952.dump`，与上一版镜像成对保留。
+- 迁移前数据修复（经授权的一行更新）：`usage_groups` 中"研发部"遗留 `type='REGION'` 与收敛后 `org_type='FUNCTIONAL'` 不一致，已将 `type` 对齐为 `DEPARTMENT`；S9 核对由 1 行归零。该行名下仅 `DEPT-RD` 部门预算项目，无业务项目受影响。
+- `conf/.env` 仅 `VERSION` 行由 `0.9.5` 改为 `0.9.6`，其余行经遮蔽比对逐字节一致；`MASTER_KEY` 等密钥未触碰。
+- 健康验收：4 个应用容器均为 0.9.6 镜像且运行镜像 ID 与 `RELEASE` 逐一吻合；`/healthz` 与 `/gateway/healthz` 均 `status:ok`（postgres/redis 依赖 ok）。
+- 待补验收：管理员密码已轮换，登录 401，浏览器与 API 人工验收待有效凭证后执行（管理端"项目管理"新建项目应出现公司经营层选项、项目详情加成员为跨单元可搜索选择器）。
+
+## 已知事项
+
+- GitHub Actions CI（run `36318597523` 起）因 `quay.io/minio/minio` 仓库拒绝匿名拉取导致 storage 相关测试失败，与本版改动无关（功能代码对应 job 全绿）；测试镜像源切换另行处理。
+- 服务器 `/data/ucli-server/images/` 仍保留 0.7.0–0.9.5 历史镜像 tar，`install.sh update` 每次会全部重载（约 1 分钟，无害）；后续可择期清理。
